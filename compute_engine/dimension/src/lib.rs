@@ -122,9 +122,8 @@ impl Dimension {
         members: RecordBatch,
         targets: &[&Dimension],
     ) -> Result<Self, DimensionError> {
-        if members.num_rows() > u32::MAX as usize {
-            return Err(DimensionError::TooManyMembers(members.num_rows()));
-        }
+        u32::try_from(members.num_rows())
+            .map_err(|_| DimensionError::TooManyMembers(members.num_rows()))?;
         let mut attribute_names = HashSet::new();
         let mut attribute_ulids = HashSet::new();
         for attribute in &definition.attributes {

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
-use arrow_schema::{Field, Schema};
+use arrow_array::{
+    Array, ArrayRef, FixedSizeBinaryArray, LargeStringArray, RecordBatch, StringArray, UInt32Array,
+};
+use arrow_schema::{DataType, Field, Schema};
 use dimension::{
     AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionError,
     DimensionUlid, KeyKind, MemberId, MemberUlid,
@@ -109,6 +111,9 @@ fn member_is_found_by_member_id_ulid_and_key() {
     assert!(dimension.member(MemberId(3)).is_none());
     assert!(dimension.member_by_key("経理部").is_none());
     assert!(dimension.member_by_ulid(MemberUlid(Ulid(9))).is_none());
+    assert_eq!(dimension.name(), "部門");
+    assert_eq!(dimension.len(), 3);
+    assert!(!dimension.is_empty());
 }
 
 #[test]
@@ -333,4 +338,47 @@ fn renaming_an_attribute_keeps_its_column_name() {
     let mut after = before.clone();
     after.attributes[0].name = "本部".into();
     assert_eq!(before.schema(), after.schema());
+}
+
+#[test]
+fn dimension_without_members_is_empty() {
+    let definition = definition(KeyKind::Name, vec![]);
+    let dimension = Dimension::try_new(
+        definition.clone(),
+        batch(&definition, vec![ulids(&[]), strings(&[])]),
+        &[],
+    )
+    .unwrap();
+    assert!(dimension.is_empty());
+}
+
+#[test]
+fn column_with_the_right_name_but_wrong_type_is_rejected() {
+    let definition = definition(KeyKind::Name, vec![]);
+    let fields = vec![
+        Field::new("ulid", DataType::FixedSizeBinary(16), false),
+        Field::new("name", DataType::LargeUtf8, false),
+    ];
+    let columns: Vec<ArrayRef> = vec![
+        ulids(&[Some(1)]),
+        Arc::new(LargeStringArray::from(vec!["営業部"])),
+    ];
+    let wrong_type = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+    let err = Dimension::try_new(definition, wrong_type, &[]).unwrap_err();
+    assert!(matches!(err, DimensionError::SchemaMismatch { .. }));
+}
+
+#[test]
+fn error_message_names_the_rule_and_the_value() {
+    let message = DimensionError::DuplicateKey("営業部".into()).to_string();
+    assert!(message.contains("DuplicateKey"));
+    assert!(message.contains("営業部"));
+}
+
+#[test]
+fn debug_output_names_the_attribute_not_its_values() {
+    let dimension = departments();
+    let printed = format!("{:?}", dimension.attribute("事業部").unwrap());
+    assert!(printed.contains("事業部"));
+    assert!(!printed.contains("UInt32"));
 }
