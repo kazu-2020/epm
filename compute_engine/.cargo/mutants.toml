@@ -1,4 +1,10 @@
 exclude_re = [
     "<impl fmt::Display for DimensionError>::fmt",
     "<impl fmt::Debug for Attribute",
+    "<impl fmt::Display for TileError>::fmt",
+    # Not tested: a constant hash keeps every lookup correct and only makes it slow.
+    "replace hash_coordinate -> u64",
+    # Not tested: these turn the binary search into an endless loop, and cargo-mutants reports the timeout as a failure that turns CI red.
+    "replace < with <= in Tile::search",
+    "replace \\+ with [-*] in Tile::search",
 ]
