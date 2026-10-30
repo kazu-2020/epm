@@ -1,0 +1,10 @@
+[package]
+name = "dimension"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrow-array = "60.1.0"
+arrow-schema = "60.1.0"
+hashbrown = "0.17"
+ulid = "3.0.0"
