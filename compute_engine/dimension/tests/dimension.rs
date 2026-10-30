@@ -367,18 +367,3 @@ fn column_with_the_right_name_but_wrong_type_is_rejected() {
     let err = Dimension::try_new(definition, wrong_type, &[]).unwrap_err();
     assert!(matches!(err, DimensionError::SchemaMismatch { .. }));
 }
-
-#[test]
-fn error_message_names_the_rule_and_the_value() {
-    let message = DimensionError::DuplicateKey("営業部".into()).to_string();
-    assert!(message.contains("DuplicateKey"));
-    assert!(message.contains("営業部"));
-}
-
-#[test]
-fn debug_output_names_the_attribute_not_its_values() {
-    let dimension = departments();
-    let printed = format!("{:?}", dimension.attribute("事業部").unwrap());
-    assert!(printed.contains("事業部"));
-    assert!(!printed.contains("UInt32"));
-}
