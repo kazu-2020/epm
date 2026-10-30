@@ -35,5 +35,4 @@ jobs:
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-mutants@27.1.0
-      # shortcut: mutates the whole workspace instead of --in-diff; switch when this job gets slow.
       - run: cargo mutants --cargo-arg=--locked
