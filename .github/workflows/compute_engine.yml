@@ -20,10 +20,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: compute_engine
+          workspaces: |
+            compute_engine
+            compute_engine/formula/fuzz
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - run: cargo fmt --check --manifest-path formula/fuzz/Cargo.toml
+      - run: cargo check --locked --manifest-path formula/fuzz/Cargo.toml
 
   mutants:
     runs-on: ubuntu-latest
@@ -36,3 +40,21 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
       - run: cargo mutants --cargo-arg=--locked
+
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    defaults:
+      run:
+        working-directory: compute_engine/formula/fuzz
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: compute_engine/formula/fuzz
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-fuzz@0.13.2
+      - run: cargo fuzz run parse --target x86_64-unknown-linux-gnu -- -max_len=20000 -max_total_time=60
