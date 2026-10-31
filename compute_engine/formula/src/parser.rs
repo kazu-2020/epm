@@ -6,7 +6,7 @@ use crate::expression::{Axis, BinaryOperator, Expression, ExpressionKind};
 use crate::lexer::{self, Token, TokenKind};
 use crate::syntax_error::{SyntaxError, SyntaxErrorKind};
 
-const MAXIMUM_DEPTH: usize = 128;
+pub const MAXIMUM_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parsed {
@@ -14,6 +14,7 @@ pub struct Parsed {
     pub errors: Vec<SyntaxError>,
 }
 
+#[must_use]
 pub fn parse(source: &str) -> Parsed {
     let (tokens, errors) = lexer::tokenize(source);
     let mut parser = Parser {

@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use formula::{Axis, Expression, ExpressionKind, SyntaxError, SyntaxErrorKind, parse};
+use formula::{Axis, Expression, ExpressionKind, SyntaxError, SyntaxErrorKind};
 
 fn render(expression: &Expression) -> String {
     match &expression.kind {
@@ -29,14 +29,14 @@ fn render_axis(axis: &Axis) -> String {
 }
 
 fn tree(source: &str) -> String {
-    let parsed = parse(source);
+    let parsed = formula::parse(source);
     assert_eq!(parsed.errors, [], "{source}");
     render(&parsed.expression)
 }
 
 #[track_caller]
 fn assert_outcome(source: &str, tree: &str, errors: &[(SyntaxErrorKind, Range<usize>)]) {
-    let parsed = parse(source);
+    let parsed = formula::parse(source);
     assert_eq!(render(&parsed.expression), tree, "{source}");
     let actual: Vec<_> = parsed
         .errors
@@ -47,7 +47,7 @@ fn assert_outcome(source: &str, tree: &str, errors: &[(SyntaxErrorKind, Range<us
 }
 
 fn errors(source: &str) -> Vec<(SyntaxErrorKind, Range<usize>)> {
-    parse(source)
+    formula::parse(source)
         .errors
         .into_iter()
         .map(|SyntaxError { kind, span }| (kind, span))
@@ -201,7 +201,7 @@ fn a_missing_right_operand_becomes_an_error_node() {
         "(Multiply '単価' ERROR)",
         &[(SyntaxErrorKind::ExpectedExpression, 10..10)],
     );
-    let ExpressionKind::Binary { right, .. } = parse("'単価' *").expression.kind else {
+    let ExpressionKind::Binary { right, .. } = formula::parse("'単価' *").expression.kind else {
         panic!("not a binary expression");
     };
     assert_eq!(right.span, 10..10);
@@ -291,7 +291,7 @@ fn trailing_words_are_unquoted_names_and_trailing_lexer_errors_are_not_repeated(
 
 #[test]
 fn spans_are_byte_ranges_in_the_source() {
-    let binary = parse("1 + 2 * 3").expression;
+    let binary = formula::parse("1 + 2 * 3").expression;
     assert_eq!(binary.span, 0..9);
     let ExpressionKind::Binary { left, right, .. } = binary.kind else {
         panic!("{:?}", binary.kind);
@@ -299,21 +299,21 @@ fn spans_are_byte_ranges_in_the_source() {
     assert_eq!(left.span, 0..1);
     assert_eq!(right.span, 4..9);
 
-    assert_eq!(parse("12.5").expression.span, 0..4);
-    assert_eq!(parse("'単価'").expression.span, 0..8);
-    assert_eq!(parse(" -(1)").expression.span, 1..5);
+    assert_eq!(formula::parse("12.5").expression.span, 0..4);
+    assert_eq!(formula::parse("'単価'").expression.span, 0..8);
+    assert_eq!(formula::parse(" -(1)").expression.span, 1..5);
 }
 
 #[test]
 fn a_parenthesized_expression_spans_its_parentheses() {
-    let parsed = parse("(1 + 2) * 3");
+    let parsed = formula::parse("(1 + 2) * 3");
     let ExpressionKind::Binary { left, .. } = parsed.expression.kind else {
         panic!("{:?}", parsed.expression.kind);
     };
     assert_eq!(left.span, 0..7);
     assert!(matches!(left.kind, ExpressionKind::Binary { .. }));
 
-    assert_eq!(parse("(1 + 2").expression.span, 0..6);
+    assert_eq!(formula::parse("(1 + 2").expression.span, 0..6);
 }
 
 fn balanced(levels: u32) -> String {
@@ -373,7 +373,7 @@ fn long_but_shallow_formulas_are_accepted() {
 
 #[test]
 fn a_hundred_thousand_open_parentheses_return_instead_of_overflowing_the_stack() {
-    let parsed = parse(&"(".repeat(100_000));
+    let parsed = formula::parse(&"(".repeat(100_000));
     assert_eq!(
         parsed.expression,
         Expression {
@@ -409,7 +409,7 @@ fn trees_128_levels_deep_parse_print_clone_compare_and_drop_on_a_two_megabyte_st
         .stack_size(2 * 1024 * 1024)
         .spawn(move || {
             for source in deepest {
-                let parsed = parse(&source);
+                let parsed = formula::parse(&source);
                 assert_eq!(parsed.errors, []);
                 assert!(!format!("{parsed:?}").is_empty());
                 assert_eq!(parsed.clone(), parsed);
@@ -485,7 +485,7 @@ fn whitespace_may_surround_the_point_between_a_dimension_and_its_attribute() {
 
 #[test]
 fn sum_and_axis_spans_are_byte_ranges_in_the_source() {
-    let sum = parse("SUM('a', BY 'b' . 'c', 'd')").expression;
+    let sum = formula::parse("SUM('a', BY 'b' . 'c', 'd')").expression;
     assert_eq!(sum.span, 0..27);
     let ExpressionKind::Sum { value, by } = sum.kind else {
         panic!("{:?}", sum.kind);
@@ -648,11 +648,11 @@ fn an_unclosed_sum_keeps_what_it_read() {
         "(Sum 'a' BY 'b')",
         &[(SyntaxErrorKind::ExpectedClosingParenthesis, 15..15)],
     );
-    assert_eq!(parse("SUM('a', BY 'b'").expression.span, 0..15);
-    assert_eq!(parse("SUM('a', BY").expression.span, 0..11);
-    assert_eq!(parse("SUM('a', 'b'").expression.span, 0..12);
-    assert_eq!(parse("SUM('a', BY 'b' + 1").expression.span, 0..19);
-    assert_eq!(parse("SUM( ").expression.span, 0..5);
+    assert_eq!(formula::parse("SUM('a', BY 'b'").expression.span, 0..15);
+    assert_eq!(formula::parse("SUM('a', BY").expression.span, 0..11);
+    assert_eq!(formula::parse("SUM('a', 'b'").expression.span, 0..12);
+    assert_eq!(formula::parse("SUM('a', BY 'b' + 1").expression.span, 0..19);
+    assert_eq!(formula::parse("SUM( ").expression.span, 0..5);
 }
 
 #[test]
