@@ -337,29 +337,17 @@ fn compaction_folds_deltas_into_a_sorted_base_without_changing_reads() {
 }
 
 #[test]
-fn tile_without_axes_holds_at_most_one_cell() {
+fn tile_without_axes_is_rejected() {
     let definition = definition(SALES, Vec::new());
-    let batch = RecordBatch::try_new(
-        Arc::new(definition.schema()),
-        vec![Arc::new(Float64Array::from(vec![0.1, 0.2])) as ArrayRef],
-    )
-    .unwrap();
-    assert_eq!(
-        Tile::try_new(definition.clone(), batch, &[]).unwrap_err(),
-        TileError::DuplicateCoordinate(1)
-    );
-
     let batch = RecordBatch::try_new(
         Arc::new(definition.schema()),
         vec![Arc::new(Float64Array::from(vec![0.1])) as ArrayRef],
     )
     .unwrap();
-    let tile = Tile::try_new(definition, batch, &[]).unwrap();
-    let mut delta = tile.delta();
-    delta.set(&[], 0.3).unwrap();
-    let tile = tile.apply(delta).unwrap();
-    let tile = tile.compact();
-    assert_eq!(tile.get(&[]).unwrap(), Some(0.3));
+    assert_eq!(
+        Tile::try_new(definition, batch, &[]).unwrap_err(),
+        TileError::NoAxes
+    );
 }
 
 #[test]

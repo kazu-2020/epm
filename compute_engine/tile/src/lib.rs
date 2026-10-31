@@ -57,6 +57,7 @@ struct Axis {
 
 #[derive(Debug, PartialEq)]
 pub enum TileError {
+    NoAxes,
     DuplicateAxis(DimensionUlid),
     MissingDimension(DimensionUlid),
     SchemaMismatch {
@@ -104,6 +105,9 @@ impl Tile {
         base: RecordBatch,
         dimensions: &[&Dimension],
     ) -> Result<Self, TileError> {
+        if definition.axes.is_empty() {
+            return Err(TileError::NoAxes);
+        }
         let mut seen = HashSet::new();
         let mut axes = Vec::with_capacity(definition.axes.len());
         for &axis in &definition.axes {
