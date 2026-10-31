@@ -1,3 +1,4 @@
+profile = "mutants"
 exclude_re = [
     "<impl fmt::Display for DimensionError>::fmt",
     "<impl fmt::Debug for Attribute",
