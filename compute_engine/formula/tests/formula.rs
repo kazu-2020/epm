@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use formula::{Expression, ExpressionKind, SyntaxError, SyntaxErrorKind, parse};
+use formula::{Axis, Expression, ExpressionKind, SyntaxError, SyntaxErrorKind, parse};
 
 fn render(expression: &Expression) -> String {
     match &expression.kind {
@@ -12,7 +12,19 @@ fn render(expression: &Expression) -> String {
             left,
             right,
         } => format!("({operator:?} {} {})", render(left), render(right)),
+        ExpressionKind::Sum { value, by } if by.is_empty() => format!("(Sum {})", render(value)),
+        ExpressionKind::Sum { value, by } => {
+            let axes: Vec<_> = by.iter().map(render_axis).collect();
+            format!("(Sum {} BY {})", render(value), axes.join(" "))
+        }
         ExpressionKind::Error => "ERROR".into(),
+    }
+}
+
+fn render_axis(axis: &Axis) -> String {
+    match &axis.attribute {
+        Some(attribute) => format!("'{}'.'{attribute}'", axis.dimension),
+        None => format!("'{}'", axis.dimension),
     }
 }
 
@@ -425,5 +437,276 @@ fn a_deep_parenthesized_operand_counts_toward_the_depth_of_the_chain_around_it()
     assert_eq!(
         errors(&source),
         [(SyntaxErrorKind::TooDeeplyNested, 512..1023)]
+    );
+}
+
+#[test]
+fn sum_without_by_totals_its_one_value() {
+    assert_eq!(tree("SUM('売上')"), "(Sum '売上')");
+    assert_eq!(
+        tree("SUM('単価' * '数量')"),
+        "(Sum (Multiply '単価' '数量'))"
+    );
+}
+
+#[test]
+fn sum_by_lists_the_dimensions_and_attributes_to_keep() {
+    assert_eq!(
+        tree("SUM('売上', BY '期間', 'バージョン')"),
+        "(Sum '売上' BY '期間' 'バージョン')"
+    );
+    assert_eq!(
+        tree("SUM('売上', BY '期間', '部門'.'事業部')"),
+        "(Sum '売上' BY '期間' '部門'.'事業部')"
+    );
+    assert_eq!(
+        tree("SUM('単価' * '数量', BY '期間')"),
+        "(Sum (Multiply '単価' '数量') BY '期間')"
+    );
+}
+
+#[test]
+fn sum_is_an_operand_like_any_other() {
+    assert_eq!(
+        tree("SUM('a', BY 'b') / SUM('a') * 100"),
+        "(Multiply (Divide (Sum 'a' BY 'b') (Sum 'a')) 100)"
+    );
+    assert_eq!(tree("-SUM('a')"), "(Negate (Sum 'a'))");
+    assert_eq!(tree("SUM(SUM('a', BY 'b'))"), "(Sum (Sum 'a' BY 'b'))");
+}
+
+#[test]
+fn whitespace_may_surround_the_point_between_a_dimension_and_its_attribute() {
+    assert_eq!(
+        tree("SUM('a', BY 'b' . 'c',\n'd'.'e')"),
+        "(Sum 'a' BY 'b'.'c' 'd'.'e')"
+    );
+}
+
+#[test]
+fn sum_and_axis_spans_are_byte_ranges_in_the_source() {
+    let sum = parse("SUM('a', BY 'b' . 'c', 'd')").expression;
+    assert_eq!(sum.span, 0..27);
+    let ExpressionKind::Sum { value, by } = sum.kind else {
+        panic!("{:?}", sum.kind);
+    };
+    assert_eq!(value.span, 4..7);
+    let spans: Vec<_> = by.into_iter().map(|axis| axis.span).collect();
+    assert_eq!(spans, [12..21, 23..26]);
+}
+
+#[test]
+fn sum_takes_only_one_value_and_extra_values_are_one_error() {
+    assert_outcome(
+        "SUM('a', 'b')",
+        "(Sum 'a')",
+        &[(SyntaxErrorKind::MoreThanOneValue, 9..12)],
+    );
+    assert_outcome(
+        "SUM('a', 'b', 'c', BY 'd')",
+        "(Sum 'a' BY 'd')",
+        &[(SyntaxErrorKind::MoreThanOneValue, 9..17)],
+    );
+    assert_outcome(
+        "SUM('a',)",
+        "(Sum 'a')",
+        &[(SyntaxErrorKind::ExpectedExpression, 8..8)],
+    );
+}
+
+#[test]
+fn by_without_axes_is_an_error() {
+    assert_outcome(
+        "SUM('a', BY)",
+        "(Sum 'a')",
+        &[(SyntaxErrorKind::EmptyBy, 9..11)],
+    );
+}
+
+#[test]
+fn by_is_written_once() {
+    assert_outcome(
+        "SUM('a', BY 'b', BY 'c')",
+        "(Sum 'a' BY 'b' 'c')",
+        &[(SyntaxErrorKind::ByNotLast, 17..19)],
+    );
+    assert_outcome(
+        "SUM(BY 'b', 'a')",
+        "(Sum ERROR BY 'b' 'a')",
+        &[(SyntaxErrorKind::ByNotLast, 4..6)],
+    );
+    assert_outcome(
+        "SUM('a', BY BY 'b')",
+        "(Sum 'a' BY 'b')",
+        &[(SyntaxErrorKind::ByNotLast, 12..14)],
+    );
+    assert_outcome(
+        "SUM('a', BY 'b', BY)",
+        "(Sum 'a' BY 'b')",
+        &[
+            (SyntaxErrorKind::ByNotLast, 17..19),
+            (SyntaxErrorKind::ExpectedAxis, 19..19),
+        ],
+    );
+}
+
+#[test]
+fn an_axis_is_only_a_dimension_or_a_dimension_attribute() {
+    for (source, span) in [
+        ("SUM('a', BY 'b' + 1)", 12..19),
+        ("SUM('a', BY ('b'))", 12..17),
+        ("SUM('a', BY ('b', 'c'))", 12..22),
+        ("SUM('a', BY 1)", 12..13),
+        ("SUM('a', BY 'b'.'c' * 2)", 12..23),
+        ("SUM('a', BY SUM('b'))", 12..20),
+        ("SUM('a', BY 'b' 'c')", 12..19),
+    ] {
+        assert_outcome(
+            source,
+            "(Sum 'a')",
+            &[(SyntaxErrorKind::ExpressionInBy, span)],
+        );
+    }
+    assert_outcome(
+        "SUM('a', BY 'b' + 1, 'c')",
+        "(Sum 'a' BY 'c')",
+        &[(SyntaxErrorKind::ExpressionInBy, 12..19)],
+    );
+}
+
+#[test]
+fn an_unquoted_name_in_by_asks_for_quotes() {
+    assert_outcome(
+        "SUM('a', BY 期間)",
+        "(Sum 'a')",
+        &[(SyntaxErrorKind::UnquotedName, 12..18)],
+    );
+    assert_outcome(
+        "SUM('a', BY 期間 + 1)",
+        "(Sum 'a')",
+        &[
+            (SyntaxErrorKind::UnquotedName, 12..18),
+            (SyntaxErrorKind::ExpressionInBy, 12..22),
+        ],
+    );
+    assert_outcome(
+        "SUM('a', BY 'b' c)",
+        "(Sum 'a')",
+        &[
+            (SyntaxErrorKind::ExpressionInBy, 12..17),
+            (SyntaxErrorKind::UnquotedName, 16..17),
+        ],
+    );
+}
+
+#[test]
+fn a_comma_without_an_axis_after_it_is_an_error() {
+    assert_outcome(
+        "SUM('a', BY 'b',)",
+        "(Sum 'a' BY 'b')",
+        &[(SyntaxErrorKind::ExpectedAxis, 16..16)],
+    );
+    assert_outcome(
+        "SUM('a', BY 'b',, 'c')",
+        "(Sum 'a' BY 'b' 'c')",
+        &[(SyntaxErrorKind::ExpectedAxis, 16..16)],
+    );
+}
+
+#[test]
+fn parentheses_in_by_are_skipped_without_nesting() {
+    let source = format!("SUM('a', BY {}", "(".repeat(100_000));
+    assert_outcome(
+        &source,
+        "(Sum 'a')",
+        &[
+            (SyntaxErrorKind::ExpressionInBy, 12..100_012),
+            (
+                SyntaxErrorKind::ExpectedClosingParenthesis,
+                100_012..100_012,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn sum_without_parentheses_is_an_error() {
+    assert_outcome(
+        "SUM 'a'",
+        "ERROR",
+        &[
+            (SyntaxErrorKind::ExpectedOpeningParenthesis, 4..4),
+            (SyntaxErrorKind::UnexpectedToken, 4..7),
+        ],
+    );
+}
+
+#[test]
+fn an_unclosed_sum_keeps_what_it_read() {
+    assert_outcome(
+        "SUM('a', BY 'b'",
+        "(Sum 'a' BY 'b')",
+        &[(SyntaxErrorKind::ExpectedClosingParenthesis, 15..15)],
+    );
+    assert_eq!(parse("SUM('a', BY 'b'").expression.span, 0..15);
+    assert_eq!(parse("SUM('a', BY").expression.span, 0..11);
+    assert_eq!(parse("SUM('a', 'b'").expression.span, 0..12);
+    assert_eq!(parse("SUM('a', BY 'b' + 1").expression.span, 0..19);
+    assert_eq!(parse("SUM( ").expression.span, 0..5);
+}
+
+#[test]
+fn an_empty_name_is_not_kept_as_an_axis() {
+    assert_outcome(
+        "SUM('a', BY '', 'b'.'')",
+        "(Sum 'a')",
+        &[
+            (SyntaxErrorKind::EmptyName, 12..14),
+            (SyntaxErrorKind::EmptyName, 20..22),
+        ],
+    );
+}
+
+#[test]
+fn function_and_keyword_names_are_upper_case() {
+    assert_outcome(
+        "sum('a')",
+        "ERROR",
+        &[
+            (SyntaxErrorKind::UnquotedName, 0..3),
+            (SyntaxErrorKind::UnexpectedToken, 3..8),
+        ],
+    );
+}
+
+#[test]
+fn by_and_attributes_outside_sum_are_unexpected() {
+    assert_outcome(
+        "'a' BY 'b'",
+        "'a'",
+        &[(SyntaxErrorKind::UnexpectedToken, 4..10)],
+    );
+    assert_outcome(
+        "'a'.'b'",
+        "'a'",
+        &[(SyntaxErrorKind::UnexpectedToken, 3..7)],
+    );
+}
+
+#[test]
+fn each_sum_is_one_level_of_the_128_level_limit() {
+    let nested = |levels: usize| format!("{}1{}", "SUM(".repeat(levels), ")".repeat(levels));
+    assert_eq!(errors(&nested(128)), []);
+    assert_eq!(
+        errors(&nested(129)),
+        [(SyntaxErrorKind::TooDeeplyNested, 512..646)]
+    );
+    assert_eq!(
+        errors(&format!("{} + 1", nested(128))),
+        [(SyntaxErrorKind::TooDeeplyNested, 642..645)]
+    );
+    assert_eq!(
+        errors(&format!("SUM(1, {}1{})", "(".repeat(128), ")".repeat(128))),
+        [(SyntaxErrorKind::TooDeeplyNested, 134..265)]
     );
 }
