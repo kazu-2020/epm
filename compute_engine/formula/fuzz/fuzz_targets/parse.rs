@@ -27,6 +27,16 @@ fn check(source: &str, expression: &Expression, outer: &Range<usize>) -> usize {
             let right = check(source, right, &expression.span);
             1 + left.max(right)
         }
+        ExpressionKind::Sum { value, by } => {
+            let height = check(source, value, &expression.span);
+            let mut previous_end = value.span.end;
+            for axis in by {
+                assert_inside(source, &axis.span, &expression.span);
+                assert!(previous_end <= axis.span.start, "axes overlap");
+                previous_end = axis.span.end;
+            }
+            1 + height
+        }
         ExpressionKind::Number(_) | ExpressionKind::Name(_) | ExpressionKind::Error => 0,
     }
 }
