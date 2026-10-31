@@ -1,0 +1,10 @@
+formula = expression ;
+expression = term , { ( "+" | "-" ) , term } ;
+term = factor , { ( "*" | "/" ) , factor } ;
+factor = "-" , factor | primary ;
+primary = number | name | "(" , expression , ")" ;
+number = digit , { digit } , [ "." , digit , { digit } ] ;
+digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+name = "'" , ( name character | "''" ) , { name character | "''" } , "'" ;
+name character = ? any character except "'" ? ;
+whitespace = ? any character with the Unicode White_Space property, allowed between tokens ? ;
