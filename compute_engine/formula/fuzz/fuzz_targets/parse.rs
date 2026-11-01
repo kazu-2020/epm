@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use formula::{Expression, ExpressionKind, parse};
+use formula::{Expression, ExpressionKind};
 use libfuzzer_sys::fuzz_target;
 
 fn assert_inside(source: &str, span: &Range<usize>, outer: &Range<usize>) {
@@ -42,10 +42,13 @@ fn check(source: &str, expression: &Expression, outer: &Range<usize>) -> usize {
 }
 
 fuzz_target!(|source: &str| {
-    let parsed = parse(source);
+    let parsed = formula::parse(source);
     let whole = 0..source.len();
     let height = check(source, &parsed.expression, &whole);
-    assert!(height <= 128, "the tree is {height} levels high");
+    assert!(
+        height <= formula::MAXIMUM_DEPTH,
+        "the tree is {height} levels high"
+    );
     for error in &parsed.errors {
         assert_inside(source, &error.span, &whole);
     }
