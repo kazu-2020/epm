@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use formula::{Axis, Expression, ExpressionKind, SyntaxError, SyntaxErrorKind};
+use formula::{Axis, BinaryOperator, Expression, ExpressionKind, SyntaxError, SyntaxErrorKind};
 
 fn render(expression: &Expression) -> String {
     match &expression.kind {
@@ -60,6 +60,21 @@ fn multiplication_and_division_bind_tighter_than_addition_and_subtraction() {
     assert_eq!(tree("1 * 2 + 3"), "(Add (Multiply 1 2) 3)");
     assert_eq!(tree("1 - 2 / 3"), "(Subtract 1 (Divide 2 3))");
     assert_eq!(tree("1 / 2 - 3"), "(Subtract (Divide 1 2) 3)");
+}
+
+#[test]
+fn each_operator_symbol_parses_back_to_its_operator() {
+    for operator in [
+        BinaryOperator::Add,
+        BinaryOperator::Subtract,
+        BinaryOperator::Multiply,
+        BinaryOperator::Divide,
+    ] {
+        assert_eq!(
+            tree(&format!("1 {} 2", operator.symbol())),
+            format!("({operator:?} 1 2)")
+        );
+    }
 }
 
 #[test]

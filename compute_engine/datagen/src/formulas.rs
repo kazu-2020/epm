@@ -1,4 +1,5 @@
 use dimension::{Dimension, DimensionUlid};
+use formula::BinaryOperator;
 use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::RngExt;
 use rand::seq::IndexedRandom;
@@ -17,23 +18,23 @@ struct Generated {
 #[derive(Clone, Copy)]
 enum Node {
     Negate,
-    Binary(&'static str),
+    Binary(BinaryOperator),
     Sum,
 }
 
 const NODES: [Node; 6] = [
     Node::Negate,
-    Node::Binary("+"),
-    Node::Binary("-"),
-    Node::Binary("*"),
-    Node::Binary("/"),
+    Node::Binary(BinaryOperator::Add),
+    Node::Binary(BinaryOperator::Subtract),
+    Node::Binary(BinaryOperator::Multiply),
+    Node::Binary(BinaryOperator::Divide),
     Node::Sum,
 ];
 
 const EXACT_NODES: [Node; 4] = [
     Node::Negate,
-    Node::Binary("+"),
-    Node::Binary("-"),
+    Node::Binary(BinaryOperator::Add),
+    Node::Binary(BinaryOperator::Subtract),
     Node::Sum,
 ];
 
@@ -84,9 +85,13 @@ impl Formulas<'_, '_, '_> {
             Some(previous) => {
                 let link = self.reference(previous, &axes);
                 let other = self.expression(&axes, depth - 1, false);
-                let operator = *["+", "-", "*"]
-                    .choose(&mut self.generator.random)
-                    .expect("there are operators");
+                let operator = *[
+                    BinaryOperator::Add,
+                    BinaryOperator::Subtract,
+                    BinaryOperator::Multiply,
+                ]
+                .choose(&mut self.generator.random)
+                .expect("there are operators");
                 if self.generator.random.random_bool(0.5) {
                     binary(link, operator, other)
                 } else {
@@ -212,10 +217,12 @@ impl Formulas<'_, '_, '_> {
     }
 }
 
-fn binary(left: Generated, operator: &str, right: Generated) -> Generated {
+fn binary(left: Generated, operator: BinaryOperator, right: Generated) -> Generated {
     Generated {
-        text: format!("({} {operator} {})", left.text, right.text),
-        exact: left.exact && right.exact && (operator == "+" || operator == "-"),
+        text: format!("({} {} {})", left.text, operator.symbol(), right.text),
+        exact: left.exact
+            && right.exact
+            && matches!(operator, BinaryOperator::Add | BinaryOperator::Subtract),
         axes: union(left.axes, right.axes),
     }
 }

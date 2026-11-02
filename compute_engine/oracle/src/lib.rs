@@ -191,12 +191,7 @@ fn binary(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
             .collect::<Vec<_>>()
             .join(" AND ")
     };
-    let symbol = match operator {
-        BinaryOperator::Add => "+",
-        BinaryOperator::Subtract => "-",
-        BinaryOperator::Multiply => "*",
-        BinaryOperator::Divide => "/",
-    };
+    let symbol = operator.symbol();
     let sql = match operator {
         BinaryOperator::Add | BinaryOperator::Subtract => {
             let mut items: Vec<String> = axes
