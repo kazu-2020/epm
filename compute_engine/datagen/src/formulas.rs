@@ -3,16 +3,11 @@ use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::RngExt;
 use rand::seq::IndexedRandom;
 
-use crate::{Generator, dimension};
+use crate::{Formula, Generator, dimension};
 
 const NUMBERS: [&str; 7] = ["0", "1", "2", "3", "10", "0.5", "1.5"];
 
-struct Reference {
-    name: String,
-    axes: Vec<DimensionUlid>,
-    exact: bool,
-}
-
+#[derive(Clone)]
 struct Generated {
     text: String,
     axes: Vec<DimensionUlid>,
@@ -45,7 +40,7 @@ const EXACT_NODES: [Node; 4] = [
 struct Formulas<'g, 'c, 'd> {
     generator: &'g mut Generator<'c>,
     dimensions: &'d [Dimension],
-    references: Vec<Reference>,
+    references: Vec<Generated>,
 }
 
 impl Generator<'_> {
@@ -53,11 +48,11 @@ impl Generator<'_> {
         &mut self,
         dimensions: &[Dimension],
         inputs: &[Measure],
-    ) -> Vec<(MeasureDefinition, String)> {
+    ) -> Vec<Formula> {
         let references = inputs
             .iter()
-            .map(|input| Reference {
-                name: input.definition().name.clone(),
+            .map(|input| Generated {
+                text: quote(&input.definition().name),
                 axes: input.definition().axes.clone(),
                 exact: true,
             })
@@ -74,7 +69,7 @@ impl Generator<'_> {
 }
 
 impl Formulas<'_, '_, '_> {
-    fn formula(&mut self, index: usize) -> (MeasureDefinition, String) {
+    fn formula(&mut self, index: usize) -> Formula {
         let previous = (index > 0).then(|| self.references.len() - 1);
         let mut axes = self.generator.axes(self.dimensions);
         if let Some(previous) = previous
@@ -104,12 +99,15 @@ impl Formulas<'_, '_, '_> {
             name: format!("計算{index}"),
             axes,
         };
-        self.references.push(Reference {
-            name: definition.name.clone(),
+        self.references.push(Generated {
+            text: quote(&definition.name),
             axes: definition.axes.clone(),
             exact: root.exact,
         });
-        (definition, root.text)
+        Formula {
+            result: definition,
+            text: root.text,
+        }
     }
 
     fn expression(&mut self, allowed: &[DimensionUlid], depth: usize, exact: bool) -> Generated {
@@ -165,12 +163,7 @@ impl Formulas<'_, '_, '_> {
     }
 
     fn reference(&mut self, reference: usize, allowed: &[DimensionUlid]) -> Generated {
-        let Reference { name, axes, exact } = &self.references[reference];
-        let generated = Generated {
-            text: quote(name),
-            axes: axes.clone(),
-            exact: *exact,
-        };
+        let generated = self.references[reference].clone();
         if fits(&generated.axes, allowed)
             && (!generated.exact || self.generator.random.random_bool(0.8))
         {

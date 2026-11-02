@@ -1,33 +1,13 @@
-mod cases;
-
-use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, UInt32Type};
+use datagen::cases::{self, CASES, Fixture};
 use dimension::Dimension;
 use evaluator::EvaluateError;
 use formula::{ResolvedExpression, ResolvedExpressionKind};
 use measure::{Measure, MeasureDefinition, MeasureError, MeasureUlid};
 use ulid::Ulid;
 
-use cases::{CASES, Fixture};
-
-fn rows(measure: &Measure) -> Vec<(Vec<u32>, f64)> {
-    let columns = measure.base().columns();
-    let (coordinate_columns, value_column) = columns.split_at(columns.len() - 1);
-    let values = value_column[0].as_primitive::<Float64Type>();
-    (0..values.len())
-        .map(|row| {
-            let coordinate = coordinate_columns
-                .iter()
-                .map(|column| column.as_primitive::<UInt32Type>().value(row))
-                .collect();
-            (coordinate, values.value(row))
-        })
-        .collect()
-}
-
 #[test]
 fn evaluator_matches_every_hand_computed_case() {
-    let fixture = Fixture::new();
+    let fixture = Fixture::default();
     let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
     for case in CASES {
         let mut results: Vec<Measure> = Vec::new();
@@ -44,7 +24,7 @@ fn evaluator_matches_every_hand_computed_case() {
         }
         let last = results.last().expect("every case has a step");
         assert_eq!(
-            cases::exact(&rows(last)),
+            cases::exact(&last.cells()),
             cases::expected(case),
             "{}",
             case.name
@@ -54,7 +34,7 @@ fn evaluator_matches_every_hand_computed_case() {
 
 #[test]
 fn errors_name_what_the_evaluation_could_not_find() {
-    let fixture = Fixture::new();
+    let fixture = Fixture::default();
     let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
     let measures: Vec<&Measure> = fixture.inputs.iter().collect();
     let result = fixture.definition("結果");

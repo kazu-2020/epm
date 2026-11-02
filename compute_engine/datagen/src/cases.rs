@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use arrow_array::{
-    ArrayRef, FixedSizeBinaryArray, Float64Array, RecordBatch, StringArray, UInt32Array,
-};
+use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
     AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionUlid, KeyKind,
+    MemberId,
 };
 use formula::ResolvedExpression;
 use measure::{Measure, MeasureDefinition, MeasureUlid};
@@ -148,6 +147,11 @@ pub const CASES: &[Case] = &[
         expected: &[],
     },
     Case {
+        name: "入力は未反映の差分を反映して読む",
+        steps: &[("結果", "'改定'")],
+        expected: &[(&[0, 0], 5.0), (&[2, 1], 3.0)],
+    },
+    Case {
         name: "計算メジャーを次の数式が参照する",
         steps: &[
             ("中間", "'売上' * 2"),
@@ -164,8 +168,8 @@ pub struct Fixture {
     measure_definitions: Vec<MeasureDefinition>,
 }
 
-impl Fixture {
-    pub fn new() -> Self {
+impl Default for Fixture {
+    fn default() -> Self {
         let periods = dimension(PERIOD, "期間", &["4月", "5月"], vec![], &[], &[]);
         let divisions = dimension(
             DIVISION,
@@ -193,13 +197,14 @@ impl Fixture {
             measure_definition(12, "原価", &[DEPARTMENT, PERIOD]),
             measure_definition(13, "人数", &[DEPARTMENT]),
             measure_definition(14, "空", &[DEPARTMENT, PERIOD]),
+            measure_definition(15, "改定", &[DEPARTMENT, PERIOD]),
             measure_definition(31, "結果", &[DEPARTMENT, PERIOD]),
             measure_definition(32, "部門結果", &[DEPARTMENT]),
             measure_definition(33, "期間結果", &[PERIOD]),
             measure_definition(34, "事業部結果", &[DIVISION, PERIOD]),
             measure_definition(35, "中間", &[DEPARTMENT, PERIOD]),
         ];
-        let cells: [&[(&[u32], f64)]; 4] = [
+        let cells: [&[(&[u32], f64)]; 5] = [
             &[
                 (&[0, 0], 100.0),
                 (&[0, 1], 200.0),
@@ -209,13 +214,20 @@ impl Fixture {
             &[(&[0, 0], 25.0), (&[1, 0], 0.0), (&[1, 1], 20.0)],
             &[(&[0], 2.0), (&[1], 3.0)],
             &[],
+            &[(&[0, 0], 1.0), (&[1, 0], 2.0)],
         ];
         let references: Vec<&Dimension> = dimensions.iter().collect();
-        let inputs = measure_definitions
+        let mut inputs: Vec<Measure> = measure_definitions
             .iter()
             .zip(cells)
             .map(|(definition, cells)| measure(definition.clone(), cells, &references))
             .collect();
+        let revised = inputs.last_mut().expect("the fixture has inputs");
+        let mut delta = revised.delta();
+        delta.set(&[MemberId(0), MemberId(0)], 5.0).unwrap();
+        delta.delete(&[MemberId(1), MemberId(0)]).unwrap();
+        delta.set(&[MemberId(2), MemberId(1)], 3.0).unwrap();
+        *revised = revised.apply(delta).unwrap();
         Fixture {
             dimension_definitions: dimensions
                 .iter()
@@ -226,7 +238,9 @@ impl Fixture {
             measure_definitions,
         }
     }
+}
 
+impl Fixture {
     pub fn definition(&self, name: &str) -> &MeasureDefinition {
         self.measure_definitions
             .iter()
@@ -247,10 +261,14 @@ impl Fixture {
     }
 }
 
-pub fn exact(rows: &[(Vec<u32>, f64)]) -> Vec<(Vec<u32>, String)> {
+pub fn exact(cells: &[(Vec<MemberId>, f64)]) -> Vec<(Vec<u32>, String)> {
     // Not the f64 itself: 0.0 == -0.0, and the cases must tell them apart.
-    rows.iter()
-        .map(|(coordinate, value)| (coordinate.clone(), format!("{value:?}")))
+    cells
+        .iter()
+        .map(|(coordinate, value)| {
+            let members = coordinate.iter().map(|member| member.0).collect();
+            (members, format!("{value:?}"))
+        })
         .collect()
 }
 
@@ -301,16 +319,9 @@ fn measure(
     cells: &[(&[u32], f64)],
     dimensions: &[&Dimension],
 ) -> Measure {
-    let mut columns: Vec<ArrayRef> = (0..definition.axes.len())
-        .map(|axis| {
-            Arc::new(UInt32Array::from_iter_values(
-                cells.iter().map(|(coordinate, _)| coordinate[axis]),
-            )) as ArrayRef
-        })
+    let cells = cells
+        .iter()
+        .map(|&(coordinate, value)| (coordinate.iter().copied().map(MemberId).collect(), value))
         .collect();
-    columns.push(Arc::new(Float64Array::from_iter_values(
-        cells.iter().map(|&(_, value)| value),
-    )));
-    let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
-    Measure::try_new(definition, batch, dimensions).unwrap()
+    Measure::from_cells(definition, cells, dimensions).unwrap()
 }

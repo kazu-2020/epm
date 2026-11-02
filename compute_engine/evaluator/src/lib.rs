@@ -48,7 +48,7 @@ impl<'a> Evaluator<'a> {
                 if measure.definition().axes != *axes {
                     return Err(EvaluateError::MeasureAxesChanged(*ulid));
                 }
-                Ok(Cells::from_measure(axes, measure.compact().base()))
+                Ok(Cells::from_measure(measure))
             }
             ResolvedExpressionKind::Negate(operand) => Ok(self.expression(operand)?.negate()),
             ResolvedExpressionKind::Binary {

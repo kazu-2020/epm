@@ -1,6 +1,4 @@
-use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, UInt32Type};
-use datagen::Configuration;
+use datagen::{Configuration, Formula};
 use dimension::{Dimension, DimensionDefinition, MemberId};
 use measure::{Measure, MeasureDefinition};
 use oracle::Oracle;
@@ -40,21 +38,6 @@ fn configurations() -> impl Strategy<Value = Configuration> {
         )
 }
 
-fn rows(measure: &Measure) -> Vec<(Vec<MemberId>, f64)> {
-    let columns = measure.base().columns();
-    let (coordinate_columns, value_column) = columns.split_at(columns.len() - 1);
-    let values = value_column[0].as_primitive::<Float64Type>();
-    (0..values.len())
-        .map(|row| {
-            let coordinate = coordinate_columns
-                .iter()
-                .map(|column| MemberId(column.as_primitive::<UInt32Type>().value(row)))
-                .collect();
-            (coordinate, values.value(row))
-        })
-        .collect()
-}
-
 fn close(left: f64, right: f64) -> bool {
     (left - right).abs() <= 1e-9 * left.abs().max(right.abs()) + 1e-6
 }
@@ -74,12 +57,12 @@ proptest! {
             .inputs
             .iter()
             .map(|input| input.definition().clone())
-            .chain(workspace.formulas.iter().map(|(result, _)| result.clone()))
+            .chain(workspace.formulas.iter().map(|formula| formula.result.clone()))
             .collect();
-        let oracle = Oracle::new(&dimensions, &workspace.inputs.iter().collect::<Vec<_>>())
+        let mut oracle = Oracle::new(&dimensions, &workspace.inputs.iter().collect::<Vec<_>>())
             .expect("the oracle loads the workspace");
         let mut measures: Vec<Measure> = workspace.inputs.clone();
-        for (result, text) in &workspace.formulas {
+        for Formula { result, text } in &workspace.formulas {
             let parsed = formula::parse(text);
             prop_assert_eq!(&parsed.errors, &[], "{}", text);
             let resolved =
@@ -98,7 +81,7 @@ proptest! {
             let expected = oracle
                 .evaluate(&resolved.expression, result)
                 .expect("the oracle evaluates a checked formula");
-            let actual_rows = rows(&actual);
+            let actual_rows = actual.cells();
             let coordinates = |rows: &[(Vec<MemberId>, f64)]| {
                 rows.iter().map(|(coordinate, _)| coordinate.clone()).collect::<Vec<_>>()
             };

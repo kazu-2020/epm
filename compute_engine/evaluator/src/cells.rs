@@ -1,9 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
-use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, UInt32Type};
-use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
 use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
 use formula::BinaryOperator;
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
@@ -61,12 +57,7 @@ fn normalized(
         .collect()
 }
 
-fn join(
-    left: &Cells,
-    right: &Cells,
-    extra_axes: &[DimensionUlid],
-    apply: fn(f64, f64) -> f64,
-) -> Vec<(Vec<MemberId>, f64)> {
+fn join(left: &Cells, right: &Cells, apply: fn(f64, f64) -> f64) -> Vec<(Vec<MemberId>, f64)> {
     let shared: Vec<(usize, usize)> = left
         .axes
         .iter()
@@ -76,15 +67,8 @@ fn join(
             Some((left_position, right_position))
         })
         .collect();
-    let extra: Vec<usize> = extra_axes
-        .iter()
-        .map(|axis| {
-            right
-                .axes
-                .iter()
-                .position(|own| own == axis)
-                .expect("the extra axes come from the right side")
-        })
+    let extra: Vec<usize> = (0..right.axes.len())
+        .filter(|&position| !left.axes.contains(&right.axes[position]))
         .collect();
     let mut by_shared: HashMap<Vec<MemberId>, Vec<(&Vec<MemberId>, f64)>> = HashMap::new();
     for (coordinate, &value) in &right.values {
@@ -117,24 +101,10 @@ impl Cells {
         }
     }
 
-    pub(crate) fn from_measure(axes: &[DimensionUlid], base: &RecordBatch) -> Cells {
-        let columns = base.columns();
-        let coordinate_columns: Vec<&UInt32Array> = columns[..axes.len()]
-            .iter()
-            .map(|column| column.as_primitive::<UInt32Type>())
-            .collect();
-        let values = columns[axes.len()].as_primitive::<Float64Type>();
+    pub(crate) fn from_measure(measure: &Measure) -> Cells {
         Cells {
-            axes: axes.to_vec(),
-            values: (0..values.len())
-                .map(|row| {
-                    let coordinate = coordinate_columns
-                        .iter()
-                        .map(|column| MemberId(column.value(row)))
-                        .collect();
-                    (coordinate, values.value(row))
-                })
-                .collect(),
+            axes: measure.definition().axes.clone(),
+            values: measure.cells().into_iter().collect(),
         }
     }
 
@@ -170,7 +140,7 @@ impl Cells {
                 }))
             }
             // Not broadcast like Either: only cells present on both sides survive, so spreading a sparse side over every member would build cells the join discards.
-            Presence::Both => normalized(join(&left, &right, &axes[left.axes.len()..], apply)),
+            Presence::Both => normalized(join(&left, &right, apply)),
         };
         Ok(Cells { axes, values })
     }
@@ -246,20 +216,6 @@ impl Cells {
         definition: MeasureDefinition,
         dimensions: &[&Dimension],
     ) -> Result<Measure, MeasureError> {
-        let mut cells: Vec<(Vec<MemberId>, f64)> = self.values.into_iter().collect();
-        cells.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-        let mut columns: Vec<ArrayRef> = (0..self.axes.len())
-            .map(|axis| {
-                Arc::new(UInt32Array::from_iter_values(
-                    cells.iter().map(|(coordinate, _)| coordinate[axis].0),
-                )) as ArrayRef
-            })
-            .collect();
-        columns.push(Arc::new(Float64Array::from_iter_values(
-            cells.iter().map(|&(_, value)| value),
-        )));
-        let base = RecordBatch::try_new(Arc::new(definition.schema()), columns)
-            .expect("the cells were broadcast to the result's axes");
-        Measure::try_new(definition, base, dimensions)
+        Measure::from_cells(definition, self.values.into_iter().collect(), dimensions)
     }
 }

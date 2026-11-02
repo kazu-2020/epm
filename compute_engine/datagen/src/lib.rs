@@ -1,13 +1,13 @@
+pub mod cases;
 mod formulas;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arrow_array::{
-    ArrayRef, FixedSizeBinaryArray, Float64Array, RecordBatch, StringArray, UInt32Array,
-};
+use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
     AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionUlid, KeyKind,
+    MemberId,
 };
 use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::rngs::StdRng;
@@ -33,7 +33,13 @@ pub struct Configuration {
 pub struct Workspace {
     pub dimensions: Vec<Dimension>,
     pub inputs: Vec<Measure>,
-    pub formulas: Vec<(MeasureDefinition, String)>,
+    pub formulas: Vec<Formula>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Formula {
+    pub result: MeasureDefinition,
+    pub text: String,
 }
 
 pub fn generate(configuration: &Configuration) -> Workspace {
@@ -130,31 +136,26 @@ impl Generator<'_> {
             name: format!("入力{index}"),
             axes: self.axes(dimensions),
         };
-        let lens: Vec<u32> = definition
+        let lengths: Vec<u32> = definition
             .axes
             .iter()
             .map(|&axis| dimension(dimensions, axis).len())
             .collect();
         let mut cells = BTreeMap::new();
         for _ in 0..self.configuration.cells_per_input {
-            let coordinate: Vec<u32> = lens.iter().map(|&len| self.skewed(len)).collect();
+            let coordinate: Vec<MemberId> = lengths
+                .iter()
+                .map(|&length| MemberId(self.skewed(length)))
+                .collect();
             let value = self.value();
             cells.insert(coordinate, value);
         }
-        let mut columns: Vec<ArrayRef> = (0..lens.len())
-            .map(|axis| {
-                Arc::new(UInt32Array::from_iter_values(
-                    cells.keys().map(|coordinate| coordinate[axis]),
-                )) as ArrayRef
-            })
-            .collect();
-        columns.push(Arc::new(Float64Array::from_iter_values(
-            cells.values().copied(),
-        )));
-        let base = RecordBatch::try_new(Arc::new(definition.schema()), columns)
-            .expect("the columns follow the measure schema");
-        Measure::try_new(definition, base, &dimensions.iter().collect::<Vec<_>>())
-            .expect("generated cells are sorted, unique and normalized")
+        Measure::from_cells(
+            definition,
+            cells.into_iter().collect(),
+            &dimensions.iter().collect::<Vec<_>>(),
+        )
+        .expect("generated cells are unique and normalized")
     }
 
     fn value(&mut self) -> f64 {

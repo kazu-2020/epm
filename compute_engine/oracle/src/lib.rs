@@ -77,7 +77,7 @@ impl Oracle {
     }
 
     pub fn evaluate(
-        &self,
+        &mut self,
         expression: &ResolvedExpression,
         result: &MeasureDefinition,
     ) -> Result<Vec<(Vec<MemberId>, f64)>, OracleError> {
@@ -101,19 +101,19 @@ impl Oracle {
 }
 
 fn member_table(dimension: DimensionUlid) -> String {
-    format!("d_{}", dimension.0.0)
+    format!("member_{}", dimension.0.0)
 }
 
 fn attribute_table(attribute: AttributeUlid) -> String {
-    format!("a_{}", attribute.0.0)
+    format!("attribute_{}", attribute.0.0)
 }
 
 fn measure_table(measure: MeasureUlid) -> String {
-    format!("m_{}", measure.0.0)
+    format!("measure_{}", measure.0.0)
 }
 
 fn column(dimension: DimensionUlid) -> String {
-    format!("c_{}", dimension.0.0)
+    format!("axis_{}", dimension.0.0)
 }
 
 fn query(expression: &ResolvedExpression) -> Result<Query, OracleError> {
@@ -180,16 +180,14 @@ fn expanded(query: &Query, axes: &[DimensionUlid]) -> String {
 }
 
 fn binary(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
-    let axes: BTreeSet<DimensionUlid> = left.axes.union(&right.axes).copied().collect();
-    let shared: Vec<DimensionUlid> = axes.iter().copied().collect();
-    let left_sql = expanded(left, &shared);
-    let right_sql = expanded(right, &shared);
-    let condition = if shared.is_empty() {
+    let axes: Vec<DimensionUlid> = left.axes.union(&right.axes).copied().collect();
+    let left_sql = expanded(left, &axes);
+    let right_sql = expanded(right, &axes);
+    let condition = if axes.is_empty() {
         "TRUE".to_string()
     } else {
-        shared
-            .iter()
-            .map(|&axis| format!("l.{0} = r.{0}", column(axis)))
+        axes.iter()
+            .map(|&axis| format!("left_side.{0} = right_side.{0}", column(axis)))
             .collect::<Vec<_>>()
             .join(" AND ")
     };
@@ -201,36 +199,46 @@ fn binary(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
     };
     let sql = match operator {
         BinaryOperator::Add | BinaryOperator::Subtract => {
-            let mut items: Vec<String> = shared
+            let mut items: Vec<String> = axes
                 .iter()
-                .map(|&axis| format!("COALESCE(l.{0}, r.{0}) AS {0}", column(axis)))
+                .map(|&axis| {
+                    format!(
+                        "COALESCE(left_side.{0}, right_side.{0}) AS {0}",
+                        column(axis)
+                    )
+                })
                 .collect();
             items.push(format!(
-                "COALESCE(l.value, 0) {symbol} COALESCE(r.value, 0) AS value"
+                "COALESCE(left_side.value, 0) {symbol} COALESCE(right_side.value, 0) AS value"
             ));
             format!(
-                "SELECT {} FROM ({left_sql}) AS l FULL OUTER JOIN ({right_sql}) AS r ON {condition}",
+                "SELECT {} FROM ({left_sql}) AS left_side FULL OUTER JOIN ({right_sql}) AS right_side ON {condition}",
                 items.join(", ")
             )
         }
         BinaryOperator::Multiply | BinaryOperator::Divide => {
-            let mut items: Vec<String> = shared
+            let mut items: Vec<String> = axes
                 .iter()
-                .map(|&axis| format!("l.{}", column(axis)))
+                .map(|&axis| format!("left_side.{}", column(axis)))
                 .collect();
-            items.push(format!("l.value {symbol} r.value AS value"));
+            items.push(format!(
+                "left_side.value {symbol} right_side.value AS value"
+            ));
             let filter = if operator == BinaryOperator::Divide {
-                " WHERE r.value <> 0"
+                " WHERE right_side.value <> 0"
             } else {
                 ""
             };
             format!(
-                "SELECT {} FROM ({left_sql}) AS l JOIN ({right_sql}) AS r ON {condition}{filter}",
+                "SELECT {} FROM ({left_sql}) AS left_side JOIN ({right_sql}) AS right_side ON {condition}{filter}",
                 items.join(", ")
             )
         }
     };
-    Query { sql, axes }
+    Query {
+        sql,
+        axes: axes.into_iter().collect(),
+    }
 }
 
 fn sum(value: &Query, by: &[ResolvedAxis]) -> Result<Query, OracleError> {

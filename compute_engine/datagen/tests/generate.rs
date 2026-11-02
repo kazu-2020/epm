@@ -53,9 +53,14 @@ fn every_formula_parses_resolves_and_passes_the_axis_check() {
             .inputs
             .iter()
             .map(|input| input.definition().clone())
-            .chain(workspace.formulas.iter().map(|(result, _)| result.clone()))
+            .chain(
+                workspace
+                    .formulas
+                    .iter()
+                    .map(|formula| formula.result.clone()),
+            )
             .collect();
-        for (index, (result, text)) in workspace.formulas.iter().enumerate() {
+        for (index, datagen::Formula { result, text }) in workspace.formulas.iter().enumerate() {
             let parsed = formula::parse(text);
             assert_eq!(parsed.errors, [], "seed {seed}: {text}");
             let resolved = formula::resolve(&parsed.expression, &measures, &dimensions);
