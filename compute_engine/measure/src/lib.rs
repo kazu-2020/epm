@@ -179,6 +179,53 @@ impl Measure {
         Ok(measure)
     }
 
+    pub fn from_cells(
+        definition: MeasureDefinition,
+        mut cells: Vec<(Vec<MemberId>, f64)>,
+        dimensions: &[&Dimension],
+    ) -> Result<Self, MeasureError> {
+        let width = definition.axes.len();
+        if let Some((coordinate, _)) = cells
+            .iter()
+            .find(|(coordinate, _)| coordinate.len() != width)
+        {
+            return Err(MeasureError::CoordinateLength {
+                expected: width,
+                found: coordinate.len(),
+            });
+        }
+        cells.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        let mut columns: Vec<ArrayRef> = (0..width)
+            .map(|axis| {
+                Arc::new(UInt32Array::from_iter_values(
+                    cells.iter().map(|(coordinate, _)| coordinate[axis].0),
+                )) as ArrayRef
+            })
+            .collect();
+        columns.push(Arc::new(Float64Array::from_iter_values(
+            cells.iter().map(|&(_, value)| value),
+        )));
+        let base = RecordBatch::try_new(Arc::new(definition.schema()), columns)
+            .expect("every coordinate has one member per axis");
+        Self::try_new(definition, base, dimensions)
+    }
+
+    pub fn cells(&self) -> impl ExactSizeIterator<Item = (Vec<MemberId>, f64)> {
+        let measure = self.compact();
+        (0..measure.values.len()).map(move |row| {
+            let coordinate = measure
+                .coordinate_columns
+                .iter()
+                .map(|column| MemberId(column.value(row)))
+                .collect();
+            (coordinate, measure.values.value(row))
+        })
+    }
+
+    pub fn definition(&self) -> &MeasureDefinition {
+        &self.definition
+    }
+
     pub fn ulid(&self) -> MeasureUlid {
         self.definition.ulid
     }
