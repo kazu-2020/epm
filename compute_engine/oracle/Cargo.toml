@@ -1,0 +1,15 @@
+[package]
+name = "oracle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dimension = { path = "../dimension" }
+duckdb = { version = "1.20000.1", features = ["appender-arrow"] }
+formula = { path = "../formula" }
+measure = { path = "../measure" }
+
+[dev-dependencies]
+datagen = { path = "../datagen" }
+evaluator = { path = "../evaluator" }
+proptest = "1.12.0"
