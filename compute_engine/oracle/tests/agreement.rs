@@ -1,5 +1,6 @@
+use datagen::cases::exact;
 use datagen::{Configuration, Formula};
-use dimension::{Dimension, DimensionDefinition, MemberId};
+use dimension::{Dimension, DimensionDefinition};
 use measure::{Measure, MeasureDefinition};
 use oracle::Oracle;
 use proptest::prelude::*;
@@ -36,10 +37,6 @@ fn configurations() -> impl Strategy<Value = Configuration> {
                 maximum_depth,
             },
         )
-}
-
-fn close(left: f64, right: f64) -> bool {
-    (left - right).abs() <= 1e-9 * left.abs().max(right.abs()) + 1e-6
 }
 
 proptest! {
@@ -81,30 +78,15 @@ proptest! {
             let expected = oracle
                 .evaluate(&resolved.expression, result)
                 .expect("the oracle evaluates a checked formula");
-            let actual_rows: Vec<_> = actual.cells().collect();
-            let coordinates = |rows: &[(Vec<MemberId>, f64)]| {
-                rows.iter().map(|(coordinate, _)| coordinate.clone()).collect::<Vec<_>>()
-            };
+            let actual_cells: Vec<_> = actual.cells().collect();
             prop_assert_eq!(
-                coordinates(&actual_rows),
-                coordinates(&expected),
+                exact(&actual_cells),
+                exact(&expected),
                 "{} = {} with {:?}",
                 result.name,
                 text,
                 configuration
             );
-            for ((coordinate, left), (_, right)) in actual_rows.iter().zip(&expected) {
-                prop_assert!(
-                    close(*left, *right),
-                    "{} = {} at {:?}: evaluator {} oracle {} with {:?}",
-                    result.name,
-                    text,
-                    coordinate,
-                    left,
-                    right,
-                    configuration
-                );
-            }
             measures.push(actual);
         }
     }

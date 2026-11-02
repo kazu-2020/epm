@@ -18,6 +18,9 @@ pub fn evaluate(
     if !check.errors.is_empty() {
         return Err(EvaluateError::Axes(check.errors));
     }
+    for &axis in &result.axes {
+        find_dimension(dimensions, axis)?;
+    }
     let evaluator = Evaluator {
         measures,
         dimensions,

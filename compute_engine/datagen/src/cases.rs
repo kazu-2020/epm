@@ -13,10 +13,12 @@ const PERIOD: DimensionUlid = DimensionUlid(Ulid(1));
 const DEPARTMENT: DimensionUlid = DimensionUlid(Ulid(2));
 const DIVISION: DimensionUlid = DimensionUlid(Ulid(3));
 
+type Cells = [(&'static [u32], f64)];
+
 pub struct Case {
     pub name: &'static str,
     pub steps: &'static [(&'static str, &'static str)],
-    pub expected: &'static [(&'static [u32], f64)],
+    pub expected: &'static Cells,
 }
 
 pub const CASES: &[Case] = &[
@@ -192,35 +194,46 @@ impl Default for Fixture {
             &[&divisions],
         );
         let dimensions = vec![periods, departments, divisions];
-        let measure_definitions = vec![
-            measure_definition(11, "売上", &[DEPARTMENT, PERIOD]),
-            measure_definition(12, "原価", &[DEPARTMENT, PERIOD]),
-            measure_definition(13, "人数", &[DEPARTMENT]),
-            measure_definition(14, "空", &[DEPARTMENT, PERIOD]),
-            measure_definition(15, "改定", &[DEPARTMENT, PERIOD]),
+        let input_cells: [(MeasureDefinition, &Cells); 5] = [
+            (
+                measure_definition(11, "売上", &[DEPARTMENT, PERIOD]),
+                &[
+                    (&[0, 0], 100.0),
+                    (&[0, 1], 200.0),
+                    (&[1, 0], 50.0),
+                    (&[2, 1], 7.0),
+                ],
+            ),
+            (
+                measure_definition(12, "原価", &[DEPARTMENT, PERIOD]),
+                &[(&[0, 0], 25.0), (&[1, 0], 0.0), (&[1, 1], 20.0)],
+            ),
+            (
+                measure_definition(13, "人数", &[DEPARTMENT]),
+                &[(&[0], 2.0), (&[1], 3.0)],
+            ),
+            (measure_definition(14, "空", &[DEPARTMENT, PERIOD]), &[]),
+            (
+                measure_definition(15, "改定", &[DEPARTMENT, PERIOD]),
+                &[(&[0, 0], 1.0), (&[1, 0], 2.0)],
+            ),
+        ];
+        let results = [
             measure_definition(31, "結果", &[DEPARTMENT, PERIOD]),
             measure_definition(32, "部門結果", &[DEPARTMENT]),
             measure_definition(33, "期間結果", &[PERIOD]),
             measure_definition(34, "事業部結果", &[DIVISION, PERIOD]),
             measure_definition(35, "中間", &[DEPARTMENT, PERIOD]),
         ];
-        let cells: [&[(&[u32], f64)]; 5] = [
-            &[
-                (&[0, 0], 100.0),
-                (&[0, 1], 200.0),
-                (&[1, 0], 50.0),
-                (&[2, 1], 7.0),
-            ],
-            &[(&[0, 0], 25.0), (&[1, 0], 0.0), (&[1, 1], 20.0)],
-            &[(&[0], 2.0), (&[1], 3.0)],
-            &[],
-            &[(&[0, 0], 1.0), (&[1, 0], 2.0)],
-        ];
         let references: Vec<&Dimension> = dimensions.iter().collect();
-        let mut inputs: Vec<Measure> = measure_definitions
+        let mut inputs: Vec<Measure> = input_cells
             .iter()
-            .zip(cells)
             .map(|(definition, cells)| measure(definition.clone(), cells, &references))
+            .collect();
+        let measure_definitions = input_cells
+            .into_iter()
+            .map(|(definition, _)| definition)
+            .chain(results)
             .collect();
         let revised = inputs
             .iter_mut()

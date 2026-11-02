@@ -1,7 +1,7 @@
 use datagen::cases::{self, CASES, Fixture};
-use dimension::Dimension;
+use dimension::{AttributeUlid, Dimension};
 use evaluator::EvaluateError;
-use formula::{ResolvedExpression, ResolvedExpressionKind};
+use formula::{ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
 use measure::{Measure, MeasureDefinition, MeasureError, MeasureUlid};
 use ulid::Ulid;
 
@@ -64,9 +64,41 @@ fn errors_name_what_the_evaluation_could_not_find() {
         evaluator::evaluate(&stale, result, &measures, &dimensions).unwrap_err(),
         EvaluateError::MeasureAxesChanged(fixture.definition("売上").ulid)
     );
+    for needs_broadcast in ["'売上'", "'売上' + 1"] {
+        assert_eq!(
+            evaluator::evaluate(&fixture.resolve(needs_broadcast), result, &measures, &[])
+                .unwrap_err(),
+            EvaluateError::MissingDimension(result.axes[0]),
+            "{needs_broadcast}"
+        );
+    }
+    let by_division = fixture.resolve("SUM('売上', BY '部門'.'事業部', '期間')");
+    let division_result = fixture.definition("事業部結果");
+    let [periods, departments, divisions] = &fixture.dimensions[..] else {
+        panic!("the fixture has three dimensions");
+    };
     assert_eq!(
-        evaluator::evaluate(&fixture.resolve("'売上' + 1"), result, &measures, &[]).unwrap_err(),
-        EvaluateError::MissingDimension(result.axes[0])
+        evaluator::evaluate(
+            &by_division,
+            division_result,
+            &measures,
+            &[periods, divisions]
+        )
+        .unwrap_err(),
+        EvaluateError::MissingDimension(departments.ulid())
+    );
+    let mut unknown_attribute = by_division.clone();
+    let ResolvedExpressionKind::Sum { by, .. } = &mut unknown_attribute.kind else {
+        panic!("the formula resolves to a SUM");
+    };
+    let ResolvedAxisKind::Attribute { attribute, .. } = &mut by[0].kind else {
+        panic!("the first BY axis is an attribute");
+    };
+    *attribute = AttributeUlid(Ulid(999));
+    assert_eq!(
+        evaluator::evaluate(&unknown_attribute, division_result, &measures, &dimensions)
+            .unwrap_err(),
+        EvaluateError::MissingAttribute(AttributeUlid(Ulid(999)))
     );
     let without_axes = MeasureDefinition {
         ulid: MeasureUlid(Ulid(99)),
