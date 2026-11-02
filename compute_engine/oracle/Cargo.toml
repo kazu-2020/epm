@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 dimension = { path = "../dimension" }
-duckdb = { version = "1.20000.1", features = ["appender-arrow", "bundled"] }
+duckdb = { version = "1.20000.1", features = ["appender-arrow"] }
 formula = { path = "../formula" }
 measure = { path = "../measure" }
 

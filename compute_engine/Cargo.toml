@@ -6,7 +6,3 @@ members = ["datagen", "dimension", "evaluator", "formula", "measure", "oracle"]
 inherits = "test"
 debug = "none"
 
-# Not the dev defaults: an unoptimized DuckDB makes the oracle's property test take minutes instead of seconds, and its debug info takes gigabytes.
-[profile.dev.package.libduckdb-sys]
-opt-level = 3
-debug = false
