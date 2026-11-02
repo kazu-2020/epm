@@ -15,6 +15,12 @@ struct Generated {
     exact: bool,
 }
 
+impl Generated {
+    fn referable_in(&self, allowed: &[DimensionUlid]) -> bool {
+        self.exact || fits(&self.axes, allowed)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Node {
     Negate,
@@ -74,7 +80,7 @@ impl Formulas<'_, '_, '_> {
         let previous = (index > 0).then(|| self.references.len() - 1);
         let mut axes = self.generator.axes(self.dimensions);
         if let Some(previous) = previous
-            && !self.references[previous].exact
+            && !self.references[previous].referable_in(&axes)
         {
             axes = union(axes, self.references[previous].axes.clone());
         }
@@ -138,7 +144,6 @@ impl Formulas<'_, '_, '_> {
             }
             Node::Sum => {
                 let value_axes = self.generator.axes(self.dimensions);
-                // Not any value under SUM: the evaluator and the oracle add in different orders, so a sum of rounded values can differ in the last bits and flip whether a later division sees 0.
                 let value = self.expression(&value_axes, depth - 1, true);
                 self.sum(value, allowed)
             }
@@ -149,7 +154,7 @@ impl Formulas<'_, '_, '_> {
         let candidates: Vec<usize> = (0..self.references.len())
             .filter(|&index| {
                 let reference = &self.references[index];
-                reference.exact || (!exact && fits(&reference.axes, allowed))
+                (!exact || reference.exact) && reference.referable_in(allowed)
             })
             .collect();
         match candidates.choose(&mut self.generator.random) {
@@ -179,6 +184,8 @@ impl Formulas<'_, '_, '_> {
     }
 
     fn sum(&mut self, value: Generated, allowed: &[DimensionUlid]) -> Generated {
+        // Not any value under SUM: the evaluator and the oracle add in different orders, so a sum of rounded values can differ in the last bits and flip whether a later division sees 0.
+        assert!(value.exact, "only an exact value is summed: {}", value.text);
         let mut outputs: Vec<DimensionUlid> = Vec::new();
         let mut by: Vec<String> = Vec::new();
         for &axis in &value.axes {
