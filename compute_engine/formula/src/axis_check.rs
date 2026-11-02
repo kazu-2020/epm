@@ -36,8 +36,7 @@ pub fn check_axes(expression: &ResolvedExpression, result_axes: &[DimensionUlid]
     let checked = checker
         .errors
         .is_empty()
-        .then(|| CheckedExpression::new(expression, result_axes))
-        .flatten();
+        .then(|| CheckedExpression::new(expression, result_axes));
     AxisCheck {
         checked,
         broadcast: Some(

@@ -43,11 +43,11 @@ impl CheckedExpression {
     pub(crate) fn new(
         expression: &ResolvedExpression,
         result_axes: &[DimensionUlid],
-    ) -> Option<CheckedExpression> {
-        Some(CheckedExpression {
-            root: node(expression)?,
+    ) -> CheckedExpression {
+        CheckedExpression {
+            root: node(expression).expect("the checker reports every unresolved node"),
             result_axes: result_axes.to_vec(),
-        })
+        }
     }
 
     #[must_use]

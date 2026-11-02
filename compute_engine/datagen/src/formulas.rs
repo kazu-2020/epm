@@ -154,7 +154,11 @@ impl Formulas<'_, '_, '_> {
         let candidates: Vec<usize> = (0..self.references.len())
             .filter(|&index| {
                 let reference = &self.references[index];
-                (!exact || reference.exact) && reference.referable_in(allowed)
+                if exact {
+                    reference.exact
+                } else {
+                    reference.referable_in(allowed)
+                }
             })
             .collect();
         match candidates.choose(&mut self.generator.random) {
