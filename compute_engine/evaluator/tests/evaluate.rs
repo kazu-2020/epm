@@ -24,7 +24,7 @@ fn evaluator_matches_every_hand_computed_case() {
         }
         let last = results.last().expect("every case has a step");
         assert_eq!(
-            cases::exact(&last.cells()),
+            cases::exact(&last.cells().collect::<Vec<_>>()),
             cases::expected(case),
             "{}",
             case.name

@@ -222,7 +222,10 @@ impl Default for Fixture {
             .zip(cells)
             .map(|(definition, cells)| measure(definition.clone(), cells, &references))
             .collect();
-        let revised = inputs.last_mut().expect("the fixture has inputs");
+        let revised = inputs
+            .iter_mut()
+            .find(|input| input.definition().name == "改定")
+            .expect("the fixture defines '改定'");
         let mut delta = revised.delta();
         delta.set(&[MemberId(0), MemberId(0)], 5.0).unwrap();
         delta.delete(&[MemberId(1), MemberId(0)]).unwrap();

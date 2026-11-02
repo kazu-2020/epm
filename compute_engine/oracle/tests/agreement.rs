@@ -81,7 +81,7 @@ proptest! {
             let expected = oracle
                 .evaluate(&resolved.expression, result)
                 .expect("the oracle evaluates a checked formula");
-            let actual_rows = actual.cells();
+            let actual_rows: Vec<_> = actual.cells().collect();
             let coordinates = |rows: &[(Vec<MemberId>, f64)]| {
                 rows.iter().map(|(coordinate, _)| coordinate.clone()).collect::<Vec<_>>()
             };

@@ -485,7 +485,7 @@ fn cells_read_through_the_deltas() {
     delta.delete(&coordinate(0, 1)).unwrap();
     let measure = measure.apply(delta).unwrap();
     assert_eq!(
-        measure.cells(),
+        measure.cells().collect::<Vec<_>>(),
         [
             (coordinate(0, 0).to_vec(), 10.0),
             (coordinate(1, 1).to_vec(), 5.0),

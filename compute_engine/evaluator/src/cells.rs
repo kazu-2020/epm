@@ -104,7 +104,7 @@ impl Cells {
     pub(crate) fn from_measure(measure: &Measure) -> Cells {
         Cells {
             axes: measure.definition().axes.clone(),
-            values: measure.cells().into_iter().collect(),
+            values: measure.cells().collect(),
         }
     }
 

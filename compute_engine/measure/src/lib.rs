@@ -210,18 +210,16 @@ impl Measure {
         Self::try_new(definition, base, dimensions)
     }
 
-    pub fn cells(&self) -> Vec<(Vec<MemberId>, f64)> {
+    pub fn cells(&self) -> impl ExactSizeIterator<Item = (Vec<MemberId>, f64)> {
         let measure = self.compact();
-        (0..measure.values.len())
-            .map(|row| {
-                let coordinate = measure
-                    .coordinate_columns
-                    .iter()
-                    .map(|column| MemberId(column.value(row)))
-                    .collect();
-                (coordinate, measure.values.value(row))
-            })
-            .collect()
+        (0..measure.values.len()).map(move |row| {
+            let coordinate = measure
+                .coordinate_columns
+                .iter()
+                .map(|column| MemberId(column.value(row)))
+                .collect();
+            (coordinate, measure.values.value(row))
+        })
     }
 
     pub fn definition(&self) -> &MeasureDefinition {
