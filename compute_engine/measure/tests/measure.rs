@@ -430,3 +430,66 @@ fn folding_deltas_leaves_one_layer_over_the_same_base() {
     assert_eq!(folded.get(&coordinate(1, 1)).unwrap(), None);
     assert_eq!(folded.get(&coordinate(0, 1)).unwrap(), Some(20.0));
 }
+
+#[test]
+fn cells_given_in_any_order_build_a_sorted_measure() {
+    let cells = vec![
+        (coordinate(2, 0).to_vec(), 30.0),
+        (coordinate(0, 1).to_vec(), 20.0),
+        (coordinate(0, 0).to_vec(), 10.0),
+    ];
+    let measure = Measure::from_cells(
+        definition(SALES, vec![PERIOD, DEPARTMENT]),
+        cells,
+        &[&periods(), &departments()],
+    )
+    .unwrap();
+    assert_eq!(rows(&measure), rows(&sales()));
+}
+
+#[test]
+fn cells_must_fit_the_measure() {
+    let dimensions = [&periods(), &departments()];
+    let sales_definition = || definition(SALES, vec![PERIOD, DEPARTMENT]);
+    assert_eq!(
+        Measure::from_cells(
+            sales_definition(),
+            vec![(vec![MemberId(0)], 1.0)],
+            &dimensions
+        )
+        .unwrap_err(),
+        MeasureError::CoordinateLength {
+            expected: 2,
+            found: 1
+        }
+    );
+    assert_eq!(
+        Measure::from_cells(
+            sales_definition(),
+            vec![
+                (coordinate(0, 0).to_vec(), 1.0),
+                (coordinate(0, 0).to_vec(), 2.0)
+            ],
+            &dimensions
+        )
+        .unwrap_err(),
+        MeasureError::DuplicateCoordinate(1)
+    );
+}
+
+#[test]
+fn cells_read_through_the_deltas() {
+    let measure = sales();
+    let mut delta = measure.delta();
+    delta.set(&coordinate(1, 1), 5.0).unwrap();
+    delta.delete(&coordinate(0, 1)).unwrap();
+    let measure = measure.apply(delta).unwrap();
+    assert_eq!(
+        measure.cells(),
+        [
+            (coordinate(0, 0).to_vec(), 10.0),
+            (coordinate(1, 1).to_vec(), 5.0),
+            (coordinate(2, 0).to_vec(), 30.0),
+        ]
+    );
+}
