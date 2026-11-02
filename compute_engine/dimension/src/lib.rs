@@ -242,6 +242,10 @@ impl Dimension {
         })
     }
 
+    pub fn definition(&self) -> &DimensionDefinition {
+        &self.definition
+    }
+
     pub fn ulid(&self) -> DimensionUlid {
         self.definition.ulid
     }

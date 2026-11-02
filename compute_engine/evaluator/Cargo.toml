@@ -1,0 +1,13 @@
+[package]
+name = "evaluator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrow-array = "60.1.0"
+dimension = { path = "../dimension" }
+formula = { path = "../formula" }
+measure = { path = "../measure" }
+
+[dev-dependencies]
+ulid = "3.0.0"

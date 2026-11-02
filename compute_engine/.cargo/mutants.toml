@@ -3,9 +3,12 @@ exclude_re = [
     "<impl fmt::Display for DimensionError>::fmt",
     "<impl fmt::Debug for Attribute",
     "<impl fmt::Display for MeasureError>::fmt",
+    "<impl fmt::Display for EvaluateError>::fmt",
     # Not tested: a constant hash keeps every lookup correct and only makes it slow.
     "replace hash_coordinate -> u64",
     # Not tested: these turn the binary search into an endless loop, and cargo-mutants reports the timeout as a failure that turns CI red.
     "replace < with <= in Measure::search",
     "replace \\+ with [-*] in Measure::search",
 ]
+# Not mutated: datagen and oracle are test tools, not engine code. A datagen mutant mostly changes which data is generated, which no test can tell apart, and every oracle mutant relinks DuckDB and reruns the property test.
+exclude_globs = ["datagen/**", "oracle/**"]

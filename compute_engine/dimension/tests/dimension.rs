@@ -126,6 +126,7 @@ fn code_key_lets_names_repeat() {
     ];
     let dimension =
         Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap();
+    assert_eq!(dimension.definition(), &definition);
     let member = dimension.member_by_key("5110").unwrap();
     assert_eq!(member.id(), MemberId(1));
     assert_eq!(member.name(), "その他");

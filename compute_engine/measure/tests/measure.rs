@@ -101,6 +101,10 @@ fn cell_is_read_by_its_member_ids_and_missing_cells_are_empty() {
 #[test]
 fn measure_without_cells_is_valid() {
     let measure = try_sales(&[]).unwrap();
+    assert_eq!(
+        measure.definition(),
+        &definition(SALES, vec![PERIOD, DEPARTMENT])
+    );
     assert_eq!(measure.get(&coordinate(0, 0)).unwrap(), None);
 }
 
