@@ -9,3 +9,5 @@ exclude_re = [
     "replace < with <= in Measure::search",
     "replace \\+ with [-*] in Measure::search",
 ]
+# Not mutated: datagen is a test tool, not engine code. A datagen mutant mostly changes which data is generated, which no test can tell apart.
+exclude_globs = ["datagen/**"]
