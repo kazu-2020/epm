@@ -1,7 +1,7 @@
 use datagen::cases::{self, CASES, Fixture};
 use dimension::{AttributeUlid, Dimension};
 use evaluator::EvaluateError;
-use formula::{ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
+use formula::{CheckedExpression, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
 use measure::{Measure, MeasureDefinition, MeasureError, MeasureUlid};
 use ulid::Ulid;
 
@@ -14,7 +14,7 @@ fn evaluator_matches_every_hand_computed_case() {
         for &(result, source) in case.steps {
             let measures: Vec<&Measure> = fixture.inputs.iter().chain(&results).collect();
             let measure = evaluator::evaluate(
-                &fixture.resolve(source),
+                &fixture.check(source, result),
                 fixture.definition(result),
                 &measures,
                 &dimensions,
@@ -32,54 +32,63 @@ fn evaluator_matches_every_hand_computed_case() {
     }
 }
 
+fn checked(expression: &ResolvedExpression, result: &MeasureDefinition) -> CheckedExpression {
+    formula::check_axes(expression, &result.axes)
+        .checked
+        .expect("the changed formula still passes the check")
+}
+
 #[test]
 fn errors_name_what_the_evaluation_could_not_find() {
     let fixture = Fixture::default();
     let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
     let measures: Vec<&Measure> = fixture.inputs.iter().collect();
     let result = fixture.definition("結果");
-    let sales = fixture.resolve("'売上'");
-    let unresolved = ResolvedExpression {
-        kind: ResolvedExpressionKind::Error,
-        span: 0..0,
-    };
+    let sales = fixture.check("'売上'", "結果");
     assert_eq!(
-        evaluator::evaluate(&unresolved, result, &measures, &dimensions).unwrap_err(),
-        EvaluateError::Unresolved
+        evaluator::evaluate(
+            &sales,
+            fixture.definition("期間結果"),
+            &measures,
+            &dimensions
+        )
+        .unwrap_err(),
+        EvaluateError::ResultAxesChanged(fixture.definition("期間結果").ulid)
     );
-    assert!(matches!(
-        evaluator::evaluate(&sales, fixture.definition("期間結果"), &measures, &dimensions),
-        Err(EvaluateError::Axes(errors)) if errors.len() == 1
-    ));
     assert_eq!(
         evaluator::evaluate(&sales, result, &[], &dimensions).unwrap_err(),
         EvaluateError::MissingMeasure(fixture.definition("売上").ulid)
     );
-    let mut stale = sales.clone();
+    let mut stale = fixture.resolve("'売上'");
     let ResolvedExpressionKind::Measure { axes, .. } = &mut stale.kind else {
         panic!("'売上' resolves to a measure");
     };
     axes.reverse();
     assert_eq!(
-        evaluator::evaluate(&stale, result, &measures, &dimensions).unwrap_err(),
+        evaluator::evaluate(&checked(&stale, result), result, &measures, &dimensions).unwrap_err(),
         EvaluateError::MeasureAxesChanged(fixture.definition("売上").ulid)
     );
     for needs_broadcast in ["'売上'", "'売上' + 1"] {
         assert_eq!(
-            evaluator::evaluate(&fixture.resolve(needs_broadcast), result, &measures, &[])
-                .unwrap_err(),
+            evaluator::evaluate(
+                &fixture.check(needs_broadcast, "結果"),
+                result,
+                &measures,
+                &[]
+            )
+            .unwrap_err(),
             EvaluateError::MissingDimension(result.axes[0]),
             "{needs_broadcast}"
         );
     }
-    let by_division = fixture.resolve("SUM('売上', BY '部門'.'事業部', '期間')");
+    let by_division_source = "SUM('売上', BY '部門'.'事業部', '期間')";
     let division_result = fixture.definition("事業部結果");
     let [periods, departments, divisions] = &fixture.dimensions[..] else {
         panic!("the fixture has three dimensions");
     };
     assert_eq!(
         evaluator::evaluate(
-            &by_division,
+            &fixture.check(by_division_source, "事業部結果"),
             division_result,
             &measures,
             &[periods, divisions]
@@ -87,7 +96,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
         .unwrap_err(),
         EvaluateError::MissingDimension(departments.ulid())
     );
-    let mut unknown_attribute = by_division.clone();
+    let mut unknown_attribute = fixture.resolve(by_division_source);
     let ResolvedExpressionKind::Sum { by, .. } = &mut unknown_attribute.kind else {
         panic!("the formula resolves to a SUM");
     };
@@ -96,8 +105,13 @@ fn errors_name_what_the_evaluation_could_not_find() {
     };
     *attribute = AttributeUlid(Ulid(999));
     assert_eq!(
-        evaluator::evaluate(&unknown_attribute, division_result, &measures, &dimensions)
-            .unwrap_err(),
+        evaluator::evaluate(
+            &checked(&unknown_attribute, division_result),
+            division_result,
+            &measures,
+            &dimensions
+        )
+        .unwrap_err(),
         EvaluateError::MissingAttribute(AttributeUlid(Ulid(999)))
     );
     let without_axes = MeasureDefinition {
@@ -106,8 +120,13 @@ fn errors_name_what_the_evaluation_could_not_find() {
         axes: Vec::new(),
     };
     assert_eq!(
-        evaluator::evaluate(&fixture.resolve("1"), &without_axes, &measures, &dimensions)
-            .unwrap_err(),
+        evaluator::evaluate(
+            &checked(&fixture.resolve("1"), &without_axes),
+            &without_axes,
+            &measures,
+            &dimensions
+        )
+        .unwrap_err(),
         EvaluateError::InvalidResult(MeasureError::NoAxes)
     );
 }

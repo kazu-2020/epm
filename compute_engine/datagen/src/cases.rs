@@ -5,7 +5,7 @@ use dimension::{
     AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionUlid, KeyKind,
     MemberId,
 };
-use formula::ResolvedExpression;
+use formula::{CheckedExpression, ResolvedExpression};
 use measure::{Measure, MeasureDefinition, MeasureUlid};
 use ulid::Ulid;
 
@@ -274,6 +274,12 @@ impl Fixture {
         );
         assert_eq!(resolved.errors, [], "{source}");
         resolved.expression
+    }
+
+    pub fn check(&self, source: &str, result: &str) -> CheckedExpression {
+        let check = formula::check_axes(&self.resolve(source), &self.definition(result).axes);
+        assert_eq!(check.errors, [], "{source}");
+        check.checked.expect("a formula without errors is checked")
     }
 }
 

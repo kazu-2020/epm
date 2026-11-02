@@ -2,7 +2,8 @@ mod common;
 
 use std::ops::Range;
 
-use formula::{AxisError, AxisErrorKind, ResolveErrorKind};
+use formula::{AxisError, AxisErrorKind, CheckedAxis, CheckedNode, ResolveErrorKind};
+use measure::MeasureDefinition;
 
 use AxisErrorKind::{
     AxisNotInResult, DuplicateAxis, ReducesAxesWithoutAggregation, ValueLacksAxis,
@@ -29,12 +30,24 @@ fn resolve_error_kinds(source: &str) -> Vec<ResolveErrorKind> {
         .collect()
 }
 
-fn check(result: &str, source: &str) -> Outcome {
-    let result = common::measures()
+fn result(name: &str) -> MeasureDefinition {
+    common::measures()
         .into_iter()
-        .find(|measure| measure.name == result)
-        .expect("the result is a fixture measure");
+        .find(|measure| measure.name == name)
+        .expect("the result is a fixture measure")
+}
+
+fn check(result: &str, source: &str) -> Outcome {
+    let result = self::result(result);
     let check = formula::check_axes(&resolved(source).expression, &result.axes);
+    assert_eq!(
+        check.checked.is_some(),
+        check.broadcast.is_some() && check.errors.is_empty(),
+        "{source}"
+    );
+    if let Some(checked) = &check.checked {
+        assert_eq!(checked.result_axes(), result.axes, "{source}");
+    }
     let broadcast = check
         .broadcast
         .map(|axes| axes.into_iter().map(common::dimension_name).collect());
@@ -304,5 +317,50 @@ fn a_by_axis_error_makes_the_sum_axes_unknown_so_an_outer_sum_does_not_repeat_it
     assert_eq!(
         check("売上計画", source),
         unknown(&[(ValueLacksAxis, "部門", inner..inner + "'部門'".len())])
+    );
+}
+
+fn render(node: &CheckedNode) -> String {
+    match node {
+        CheckedNode::Number(value) => value.to_string(),
+        CheckedNode::Measure { axes, .. } => {
+            let axes: Vec<_> = axes.iter().copied().map(common::dimension_name).collect();
+            format!("[{}]", axes.join(" "))
+        }
+        CheckedNode::Negate(operand) => format!("(Negate {})", render(operand)),
+        CheckedNode::Binary {
+            operator,
+            left,
+            right,
+        } => format!("({operator:?} {} {})", render(left), render(right)),
+        CheckedNode::Sum { value, by } => {
+            let axes: Vec<_> = by
+                .iter()
+                .map(|axis| match *axis {
+                    CheckedAxis::Dimension(dimension) => common::dimension_name(dimension),
+                    CheckedAxis::Attribute {
+                        dimension, target, ..
+                    } => format!(
+                        "{}->{}",
+                        common::dimension_name(dimension),
+                        common::dimension_name(target)
+                    ),
+                })
+                .collect();
+            format!("(Sum {} BY {})", render(value), axes.join(" "))
+        }
+    }
+}
+
+#[test]
+fn a_passing_check_keeps_the_resolved_tree_without_spans() {
+    let check = formula::check_axes(
+        &resolved("-SUM('売上' / 2, BY '部門'.'事業部', '期間') - 1").expression,
+        &result("事業部売上").axes,
+    );
+    assert_eq!(check.errors, []);
+    assert_eq!(
+        render(check.checked.expect("the check passes").root()),
+        "(Subtract (Negate (Sum (Divide [部門 期間] 2) BY 部門->事業部 期間)) 1)"
     );
 }

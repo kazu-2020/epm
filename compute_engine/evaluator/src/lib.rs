@@ -2,21 +2,20 @@ mod cells;
 mod evaluate_error;
 
 use dimension::{Dimension, DimensionUlid};
-use formula::{ResolvedAxis, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode};
 use measure::{Measure, MeasureDefinition};
 
 use crate::cells::{ByAxis, Cells, find_dimension};
 pub use crate::evaluate_error::EvaluateError;
 
 pub fn evaluate(
-    expression: &ResolvedExpression,
+    expression: &CheckedExpression,
     result: &MeasureDefinition,
     measures: &[&Measure],
     dimensions: &[&Dimension],
 ) -> Result<Measure, EvaluateError> {
-    let check = formula::check_axes(expression, &result.axes);
-    if !check.errors.is_empty() {
-        return Err(EvaluateError::Axes(check.errors));
+    if expression.result_axes() != result.axes {
+        return Err(EvaluateError::ResultAxesChanged(result.ulid));
     }
     for &axis in &result.axes {
         find_dimension(dimensions, axis)?;
@@ -26,7 +25,7 @@ pub fn evaluate(
         dimensions,
     };
     evaluator
-        .expression(expression)?
+        .node(expression.root())?
         .broadcast(&result.axes, dimensions)?
         .into_measure(result.clone(), dimensions)
         .map_err(EvaluateError::InvalidResult)
@@ -38,10 +37,10 @@ struct Evaluator<'a> {
 }
 
 impl<'a> Evaluator<'a> {
-    fn expression(&self, expression: &ResolvedExpression) -> Result<Cells, EvaluateError> {
-        match &expression.kind {
-            ResolvedExpressionKind::Number(value) => Ok(Cells::number(*value)),
-            ResolvedExpressionKind::Measure { ulid, axes } => {
+    fn node(&self, node: &CheckedNode) -> Result<Cells, EvaluateError> {
+        match node {
+            CheckedNode::Number(value) => Ok(Cells::number(*value)),
+            CheckedNode::Measure { ulid, axes } => {
                 let measure = self
                     .measures
                     .iter()
@@ -53,47 +52,46 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(Cells::from_measure(measure))
             }
-            ResolvedExpressionKind::Negate(operand) => Ok(self.expression(operand)?.negate()),
-            ResolvedExpressionKind::Binary {
+            CheckedNode::Negate(operand) => Ok(self.node(operand)?.negate()),
+            CheckedNode::Binary {
                 operator,
                 left,
                 right,
             } => Cells::combine(
                 *operator,
-                self.expression(left)?,
-                self.expression(right)?,
+                self.node(left)?,
+                self.node(right)?,
                 self.dimensions,
             ),
-            ResolvedExpressionKind::Sum { value, by } => {
-                let value = self.expression(value)?;
+            CheckedNode::Sum { value, by } => {
+                let value = self.node(value)?;
                 let by = by
                     .iter()
                     .map(|axis| self.by_axis(axis, &value.axes))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(value.sum(&by))
             }
-            ResolvedExpressionKind::Error => Err(EvaluateError::Unresolved),
         }
     }
 
     fn by_axis(
         &self,
-        axis: &ResolvedAxis,
+        axis: &CheckedAxis,
         value_axes: &[DimensionUlid],
     ) -> Result<ByAxis<'a>, EvaluateError> {
         let position = |dimension| {
             value_axes
                 .iter()
                 .position(|&axis| axis == dimension)
-                .expect("check_axes rejects a BY axis that the value lacks")
+                .expect("a checked expression has every BY axis on its value")
         };
-        match axis.kind {
-            ResolvedAxisKind::Dimension(dimension) => Ok(ByAxis {
+        match *axis {
+            CheckedAxis::Dimension(dimension) => Ok(ByAxis {
                 output: dimension,
                 source: position(dimension),
                 attribute: None,
             }),
-            ResolvedAxisKind::Attribute {
+            CheckedAxis::Attribute {
                 dimension,
                 attribute,
                 target,
@@ -107,7 +105,6 @@ impl<'a> Evaluator<'a> {
                         .ok_or(EvaluateError::MissingAttribute(attribute))?,
                 ),
             }),
-            ResolvedAxisKind::Unresolved => Err(EvaluateError::Unresolved),
         }
     }
 }

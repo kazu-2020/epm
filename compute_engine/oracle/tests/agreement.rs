@@ -67,16 +67,17 @@ proptest! {
             prop_assert_eq!(&resolved.errors, &[], "{}", text);
             let check = formula::check_axes(&resolved.expression, &result.axes);
             prop_assert_eq!(&check.errors, &[], "{}", text);
+            let checked = check.checked.expect("a formula without errors is checked");
 
             let actual = evaluator::evaluate(
-                &resolved.expression,
+                &checked,
                 result,
                 &measures.iter().collect::<Vec<_>>(),
                 &dimensions,
             )
             .expect("the evaluator evaluates a checked formula");
             let expected = oracle
-                .evaluate(&resolved.expression, result)
+                .evaluate(&checked, result.ulid)
                 .expect("the oracle evaluates a checked formula");
             let actual_cells: Vec<_> = actual.cells().collect();
             prop_assert_eq!(
