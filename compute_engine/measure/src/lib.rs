@@ -179,6 +179,10 @@ impl Measure {
         Ok(measure)
     }
 
+    pub fn definition(&self) -> &MeasureDefinition {
+        &self.definition
+    }
+
     pub fn ulid(&self) -> MeasureUlid {
         self.definition.ulid
     }
