@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use dimension::{AttributeDefinition, AttributeUlid, DimensionDefinition, DimensionUlid, KeyKind};
-use tile::{TileDefinition, TileUlid};
+use measure::{MeasureDefinition, MeasureUlid};
 use ulid::Ulid;
 
 const PERIOD: DimensionUlid = DimensionUlid(Ulid(1));
@@ -32,20 +32,20 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
     ]
 }
 
-pub fn tiles() -> Vec<TileDefinition> {
-    let tile = |ulid, name: &str, axes: &[DimensionUlid]| TileDefinition {
-        ulid: TileUlid(Ulid(ulid)),
+pub fn measures() -> Vec<MeasureDefinition> {
+    let measure = |ulid, name: &str, axes: &[DimensionUlid]| MeasureDefinition {
+        ulid: MeasureUlid(Ulid(ulid)),
         name: name.into(),
         axes: axes.to_vec(),
     };
     vec![
-        tile(11, "売上", &[DEPARTMENT, PERIOD]),
-        tile(12, "売上計画", &[DEPARTMENT, PERIOD]),
-        tile(13, "事業部売上", &[DIVISION, PERIOD]),
-        tile(14, "全社売上", &[PERIOD]),
-        tile(15, "配賦率", &[DIVISION]),
-        tile(16, "内部取引", &[DEPARTMENT, DIVISION, PERIOD]),
-        tile(17, "uriage", &[PERIOD]),
+        measure(11, "売上", &[DEPARTMENT, PERIOD]),
+        measure(12, "売上計画", &[DEPARTMENT, PERIOD]),
+        measure(13, "事業部売上", &[DIVISION, PERIOD]),
+        measure(14, "全社売上", &[PERIOD]),
+        measure(15, "配賦率", &[DIVISION]),
+        measure(16, "内部取引", &[DEPARTMENT, DIVISION, PERIOD]),
+        measure(17, "uriage", &[PERIOD]),
     ]
 }
 

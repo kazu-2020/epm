@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 dimension = { path = "../dimension" }
-tile = { path = "../tile" }
+measure = { path = "../measure" }
 
 [dev-dependencies]
 ulid = "3.0.0"

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use dimension::DimensionDefinition;
-use tile::TileDefinition;
+use measure::MeasureDefinition;
 
 use crate::expression::{Axis, Expression, ExpressionKind};
 use crate::resolve_error::{ResolveError, ResolveErrorKind};
@@ -18,11 +18,11 @@ pub struct Resolved {
 #[must_use]
 pub fn resolve(
     expression: &Expression,
-    tiles: &[TileDefinition],
+    measures: &[MeasureDefinition],
     dimensions: &[DimensionDefinition],
 ) -> Resolved {
     let mut resolver = Resolver {
-        tiles,
+        measures,
         dimensions,
         errors: Vec::new(),
     };
@@ -34,7 +34,7 @@ pub fn resolve(
 }
 
 struct Resolver<'a> {
-    tiles: &'a [TileDefinition],
+    measures: &'a [MeasureDefinition],
     dimensions: &'a [DimensionDefinition],
     errors: Vec<ResolveError>,
 }
@@ -43,7 +43,7 @@ impl<'a> Resolver<'a> {
     fn expression(&mut self, expression: &Expression) -> ResolvedExpression {
         let kind = match &expression.kind {
             ExpressionKind::Number(value) => ResolvedExpressionKind::Number(*value),
-            ExpressionKind::Name(name) => self.tile(name).unwrap_or_else(|kind| {
+            ExpressionKind::Name(name) => self.measure(name).unwrap_or_else(|kind| {
                 self.error(kind, &expression.span);
                 ResolvedExpressionKind::Error
             }),
@@ -71,11 +71,11 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn tile(&self, name: &str) -> Result<ResolvedExpressionKind, ResolveErrorKind> {
-        match (self.find_tile(name), self.find_dimension(name)) {
-            (Some(tile), _) => Ok(ResolvedExpressionKind::Tile {
-                ulid: tile.ulid,
-                axes: tile.axes.clone(),
+    fn measure(&self, name: &str) -> Result<ResolvedExpressionKind, ResolveErrorKind> {
+        match (self.find_measure(name), self.find_dimension(name)) {
+            (Some(measure), _) => Ok(ResolvedExpressionKind::Measure {
+                ulid: measure.ulid,
+                axes: measure.axes.clone(),
             }),
             (None, Some(_)) => Err(ResolveErrorKind::DimensionAsValue),
             (None, None) => Err(ResolveErrorKind::UnknownName),
@@ -96,10 +96,10 @@ impl<'a> Resolver<'a> {
     fn axis_kind(&self, axis: &Axis) -> Result<ResolvedAxisKind, ResolveErrorKind> {
         let dimension = match (
             self.find_dimension(&axis.dimension),
-            self.find_tile(&axis.dimension),
+            self.find_measure(&axis.dimension),
         ) {
             (Some(dimension), _) => dimension,
-            (None, Some(_)) => return Err(ResolveErrorKind::TileAsAxis),
+            (None, Some(_)) => return Err(ResolveErrorKind::MeasureAsAxis),
             (None, None) => return Err(ResolveErrorKind::UnknownName),
         };
         Ok(match &axis.attribute {
@@ -121,8 +121,8 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    fn find_tile(&self, name: &str) -> Option<&'a TileDefinition> {
-        self.tiles.iter().find(|tile| tile.name == name)
+    fn find_measure(&self, name: &str) -> Option<&'a MeasureDefinition> {
+        self.measures.iter().find(|measure| measure.name == name)
     }
 
     fn find_dimension(&self, name: &str) -> Option<&'a DimensionDefinition> {

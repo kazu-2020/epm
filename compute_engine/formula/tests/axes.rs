@@ -16,7 +16,7 @@ type Outcome = (
 fn resolved(source: &str) -> formula::Resolved {
     formula::resolve(
         &formula::parse(source).expression,
-        &common::tiles(),
+        &common::measures(),
         &common::dimensions(),
     )
 }
@@ -30,10 +30,10 @@ fn resolve_error_kinds(source: &str) -> Vec<ResolveErrorKind> {
 }
 
 fn check(result: &str, source: &str) -> Outcome {
-    let result = common::tiles()
+    let result = common::measures()
         .into_iter()
-        .find(|tile| tile.name == result)
-        .expect("the result is a fixture tile");
+        .find(|measure| measure.name == result)
+        .expect("the result is a fixture measure");
     let check = formula::check_axes(&resolved(source).expression, &result.axes);
     let broadcast = check
         .broadcast
@@ -74,12 +74,12 @@ fn unknown(errors: &[(AxisErrorKind, &str, Range<usize>)]) -> Outcome {
 }
 
 #[test]
-fn a_number_has_no_axes_and_broadcasts_in_result_tile_order() {
+fn a_number_has_no_axes_and_broadcasts_in_result_measure_order() {
     assert_eq!(check("売上計画", "1.1"), passes(&["部門", "期間"]));
 }
 
 #[test]
-fn a_tile_has_the_axes_of_its_definition() {
+fn a_measure_has_the_axes_of_its_definition() {
     assert_eq!(check("売上計画", "'売上'"), passes(&[]));
     assert_eq!(check("売上計画", "'全社売上'"), passes(&["部門"]));
 }
@@ -127,7 +127,7 @@ fn an_expression_with_an_axis_the_result_lacks_reduces_axes_without_aggregation(
 }
 
 #[test]
-fn a_division_tile_does_not_lookup_into_a_department_result() {
+fn a_division_measure_does_not_lookup_into_a_department_result() {
     let source = "'売上' * '配賦率'";
     assert_eq!(
         check("売上計画", source),
