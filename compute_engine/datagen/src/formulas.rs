@@ -16,6 +16,7 @@ struct Reference {
 struct Generated {
     text: String,
     axes: Vec<DimensionUlid>,
+    exact: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -74,35 +75,41 @@ impl Generator<'_> {
 
 impl Formulas<'_, '_, '_> {
     fn formula(&mut self, index: usize) -> (MeasureDefinition, String) {
-        let definition = MeasureDefinition {
-            ulid: MeasureUlid(self.generator.ulid()),
-            name: format!("計算{index}"),
-            axes: self.generator.axes(self.dimensions),
-        };
-        let depth = self.generator.configuration.maximum_depth;
         let previous = (index > 0).then(|| self.references.len() - 1);
-        let text = match previous {
-            None => self.expression(&definition.axes, depth, false).text,
-            Some(previous) if depth == 0 => self.reference(previous, &definition.axes).text,
+        let mut axes = self.generator.axes(self.dimensions);
+        if let Some(previous) = previous
+            && !self.references[previous].exact
+        {
+            axes = union(axes, self.references[previous].axes.clone());
+        }
+        let depth = self.generator.configuration.maximum_depth;
+        let root = match previous {
+            None => self.expression(&axes, depth, false),
+            Some(previous) if depth == 0 => self.reference(previous, &axes),
             Some(previous) => {
-                let link = self.reference(previous, &definition.axes).text;
-                let other = self.expression(&definition.axes, depth - 1, false).text;
-                let operator = ["+", "-", "*"]
+                let link = self.reference(previous, &axes);
+                let other = self.expression(&axes, depth - 1, false);
+                let operator = *["+", "-", "*"]
                     .choose(&mut self.generator.random)
                     .expect("there are operators");
                 if self.generator.random.random_bool(0.5) {
-                    format!("({link} {operator} {other})")
+                    binary(link, operator, other)
                 } else {
-                    format!("({other} {operator} {link})")
+                    binary(other, operator, link)
                 }
             }
+        };
+        let definition = MeasureDefinition {
+            ulid: MeasureUlid(self.generator.ulid()),
+            name: format!("計算{index}"),
+            axes,
         };
         self.references.push(Reference {
             name: definition.name.clone(),
             axes: definition.axes.clone(),
-            exact: false,
+            exact: root.exact,
         });
-        (definition, text)
+        (definition, root.text)
     }
 
     fn expression(&mut self, allowed: &[DimensionUlid], depth: usize, exact: bool) -> Generated {
@@ -118,27 +125,18 @@ impl Formulas<'_, '_, '_> {
                 let operand = self.expression(allowed, depth - 1, exact);
                 Generated {
                     text: format!("-{}", operand.text),
-                    axes: operand.axes,
+                    ..operand
                 }
             }
             Node::Binary(operator) => {
                 let left = self.expression(allowed, depth - 1, exact);
-                // shortcut: a denominator is built from input measures with + - and SUM only, so it stays an exact integer and the evaluator and the oracle agree on which cells are 0 whatever order they sum in; lift this once comparisons tolerate a cell that one side divides by a rounding residue and the other drops as division by 0.
-                let right = self.expression(allowed, depth - 1, exact || operator == "/");
-                let mut axes = left.axes;
-                for axis in right.axes {
-                    if !axes.contains(&axis) {
-                        axes.push(axis);
-                    }
-                }
-                Generated {
-                    text: format!("({} {operator} {})", left.text, right.text),
-                    axes,
-                }
+                let right = self.expression(allowed, depth - 1, exact);
+                binary(left, operator, right)
             }
             Node::Sum => {
                 let value_axes = self.generator.axes(self.dimensions);
-                let value = self.expression(&value_axes, depth - 1, exact);
+                // shortcut: a SUM adds only exactly representable values, so any order gives the same sum and the evaluator and the oracle agree bit for bit, including on which cells a later division finds 0; lift this once both engines sum in one defined order or the comparison bounds the rounding of each sum.
+                let value = self.expression(&value_axes, depth - 1, true);
                 self.sum(value, allowed)
             }
         }
@@ -146,7 +144,10 @@ impl Formulas<'_, '_, '_> {
 
     fn leaf(&mut self, allowed: &[DimensionUlid], exact: bool) -> Generated {
         let candidates: Vec<usize> = (0..self.references.len())
-            .filter(|&reference| !exact || self.references[reference].exact)
+            .filter(|&index| {
+                let reference = &self.references[index];
+                reference.exact || (!exact && fits(&reference.axes, allowed))
+            })
             .collect();
         match candidates.choose(&mut self.generator.random) {
             Some(&reference) if self.generator.random.random_bool(0.75) => {
@@ -158,18 +159,21 @@ impl Formulas<'_, '_, '_> {
                     .expect("there are numbers")
                     .to_string(),
                 axes: Vec::new(),
+                exact: true,
             },
         }
     }
 
     fn reference(&mut self, reference: usize, allowed: &[DimensionUlid]) -> Generated {
-        let Reference { name, axes, .. } = &self.references[reference];
+        let Reference { name, axes, exact } = &self.references[reference];
         let generated = Generated {
             text: quote(name),
             axes: axes.clone(),
+            exact: *exact,
         };
-        let fits = generated.axes.iter().all(|axis| allowed.contains(axis));
-        if fits && self.generator.random.random_bool(0.8) {
+        if fits(&generated.axes, allowed)
+            && (!generated.exact || self.generator.random.random_bool(0.8))
+        {
             generated
         } else {
             self.sum(generated, allowed)
@@ -210,8 +214,30 @@ impl Formulas<'_, '_, '_> {
         Generated {
             text,
             axes: outputs,
+            exact: value.exact,
         }
     }
+}
+
+fn binary(left: Generated, operator: &str, right: Generated) -> Generated {
+    Generated {
+        text: format!("({} {operator} {})", left.text, right.text),
+        exact: left.exact && right.exact && (operator == "+" || operator == "-"),
+        axes: union(left.axes, right.axes),
+    }
+}
+
+fn union(mut left: Vec<DimensionUlid>, right: Vec<DimensionUlid>) -> Vec<DimensionUlid> {
+    for axis in right {
+        if !left.contains(&axis) {
+            left.push(axis);
+        }
+    }
+    left
+}
+
+fn fits(axes: &[DimensionUlid], allowed: &[DimensionUlid]) -> bool {
+    axes.iter().all(|axis| allowed.contains(axis))
 }
 
 fn quote(name: &str) -> String {
