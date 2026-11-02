@@ -75,6 +75,15 @@ fn errors_name_what_the_evaluation_could_not_find() {
         evaluator::evaluate(&sales, result, &[], &dimensions).unwrap_err(),
         EvaluateError::MissingMeasure(fixture.definition("売上").ulid)
     );
+    let mut stale = sales.clone();
+    let ResolvedExpressionKind::Measure { axes, .. } = &mut stale.kind else {
+        panic!("'売上' resolves to a measure");
+    };
+    axes.reverse();
+    assert_eq!(
+        evaluator::evaluate(&stale, result, &measures, &dimensions).unwrap_err(),
+        EvaluateError::MeasureAxesChanged(fixture.definition("売上").ulid)
+    );
     assert_eq!(
         evaluator::evaluate(&fixture.resolve("'売上' + 1"), result, &measures, &[]).unwrap_err(),
         EvaluateError::MissingDimension(result.axes[0])

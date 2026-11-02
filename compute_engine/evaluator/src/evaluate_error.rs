@@ -9,6 +9,7 @@ pub enum EvaluateError {
     Unresolved,
     Axes(Vec<AxisError>),
     MissingMeasure(MeasureUlid),
+    MeasureAxesChanged(MeasureUlid),
     MissingDimension(DimensionUlid),
     MissingAttribute(AttributeUlid),
     InvalidResult(MeasureError),

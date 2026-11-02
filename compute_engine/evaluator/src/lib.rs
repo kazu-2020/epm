@@ -44,6 +44,10 @@ impl<'a> Evaluator<'a> {
                     .iter()
                     .find(|measure| measure.ulid() == *ulid)
                     .ok_or(EvaluateError::MissingMeasure(*ulid))?;
+                // Not the resolved axes alone: the columns are laid out by the measure's own axes, which may have changed since the formula was resolved.
+                if measure.definition().axes != *axes {
+                    return Err(EvaluateError::MeasureAxesChanged(*ulid));
+                }
                 Ok(Cells::from_measure(axes, measure.compact().base()))
             }
             ResolvedExpressionKind::Negate(operand) => Ok(self.expression(operand)?.negate()),
