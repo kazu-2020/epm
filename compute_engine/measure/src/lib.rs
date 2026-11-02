@@ -18,16 +18,16 @@ use ulid::Ulid;
 const VALUE_COLUMN: &str = "value";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TileUlid(pub Ulid);
+pub struct MeasureUlid(pub Ulid);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TileDefinition {
-    pub ulid: TileUlid,
+pub struct MeasureDefinition {
+    pub ulid: MeasureUlid,
     pub name: String,
     pub axes: Vec<DimensionUlid>,
 }
 
-impl TileDefinition {
+impl MeasureDefinition {
     pub fn schema(&self) -> Schema {
         let mut fields: Vec<Field> = self
             .axes
@@ -56,7 +56,7 @@ struct Axis {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum TileError {
+pub enum MeasureError {
     NoAxes,
     DuplicateAxis(DimensionUlid),
     MissingDimension(DimensionUlid),
@@ -76,48 +76,48 @@ pub enum TileError {
         expected: usize,
         found: usize,
     },
-    ForeignDelta(TileUlid),
+    ForeignDelta(MeasureUlid),
     DeltaAxesMismatch,
 }
 
-impl fmt::Display for TileError {
+impl fmt::Display for MeasureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
 }
 
-impl std::error::Error for TileError {}
+impl std::error::Error for MeasureError {}
 
 #[derive(Debug, Clone)]
-pub struct Tile {
-    definition: TileDefinition,
+pub struct Measure {
+    definition: MeasureDefinition,
     axes: Vec<Axis>,
     base: RecordBatch,
     coordinate_columns: Vec<UInt32Array>,
     values: Float64Array,
-    // Not Vec<Delta>: every version would copy all earlier deltas of the tile.
+    // Not Vec<Delta>: every version would copy all earlier deltas of the measure.
     deltas: Vec<Arc<Delta>>,
 }
 
-impl Tile {
+impl Measure {
     pub fn try_new(
-        definition: TileDefinition,
+        definition: MeasureDefinition,
         base: RecordBatch,
         dimensions: &[&Dimension],
-    ) -> Result<Self, TileError> {
+    ) -> Result<Self, MeasureError> {
         if definition.axes.is_empty() {
-            return Err(TileError::NoAxes);
+            return Err(MeasureError::NoAxes);
         }
         let mut seen = HashSet::new();
         let mut axes = Vec::with_capacity(definition.axes.len());
         for &axis in &definition.axes {
             if !seen.insert(axis) {
-                return Err(TileError::DuplicateAxis(axis));
+                return Err(MeasureError::DuplicateAxis(axis));
             }
             let dimension = dimensions
                 .iter()
                 .find(|dimension| dimension.ulid() == axis)
-                .ok_or(TileError::MissingDimension(axis))?;
+                .ok_or(MeasureError::MissingDimension(axis))?;
             axes.push(Axis {
                 dimension: axis,
                 len: dimension.len(),
@@ -134,7 +134,7 @@ impl Tile {
                     },
                 );
         if !same_shape {
-            return Err(TileError::SchemaMismatch {
+            return Err(MeasureError::SchemaMismatch {
                 expected: Arc::new(expected),
                 found,
             });
@@ -145,17 +145,17 @@ impl Tile {
             .zip(base.columns())
             .find(|(_, column)| column.null_count() > 0)
         {
-            return Err(TileError::NullInColumn(field.name().clone()));
+            return Err(MeasureError::NullInColumn(field.name().clone()));
         }
 
         let base = RecordBatch::try_new(Arc::new(expected), base.columns().to_vec())
-            .expect("columns without nulls fit the non-nullable tile schema");
-        let tile = Self::from_parts(definition, axes, base);
+            .expect("columns without nulls fit the non-nullable measure schema");
+        let measure = Self::from_parts(definition, axes, base);
         let (axes, coordinate_columns, values) =
-            (&tile.axes, &tile.coordinate_columns, &tile.values);
+            (&measure.axes, &measure.coordinate_columns, &measure.values);
         for (axis, column) in axes.iter().zip(coordinate_columns) {
             if let Some(&member) = column.values().iter().find(|&&member| member >= axis.len) {
-                return Err(TileError::MemberOutOfRange {
+                return Err(MeasureError::MemberOutOfRange {
                     axis: axis.dimension,
                     member: MemberId(member),
                 });
@@ -163,7 +163,7 @@ impl Tile {
         }
         for (row, &value) in values.values().iter().enumerate() {
             if normalize(value).map(f64::to_bits) != Some(value.to_bits()) {
-                return Err(TileError::UnnormalizedValue(row));
+                return Err(MeasureError::UnnormalizedValue(row));
             }
         }
         for row in 1..values.len() {
@@ -172,14 +172,14 @@ impl Tile {
                 .map(|column| column.value(row - 1));
             match previous.cmp(coordinate_columns.iter().map(|column| column.value(row))) {
                 Ordering::Less => {}
-                Ordering::Equal => return Err(TileError::DuplicateCoordinate(row)),
-                Ordering::Greater => return Err(TileError::UnsortedCoordinate(row)),
+                Ordering::Equal => return Err(MeasureError::DuplicateCoordinate(row)),
+                Ordering::Greater => return Err(MeasureError::UnsortedCoordinate(row)),
             }
         }
-        Ok(tile)
+        Ok(measure)
     }
 
-    pub fn ulid(&self) -> TileUlid {
+    pub fn ulid(&self) -> MeasureUlid {
         self.definition.ulid
     }
 
@@ -191,9 +191,9 @@ impl Tile {
         self.deltas.iter().map(|delta| delta.len()).sum()
     }
 
-    pub fn get(&self, coordinate: &[MemberId]) -> Result<Option<f64>, TileError> {
+    pub fn get(&self, coordinate: &[MemberId]) -> Result<Option<f64>, MeasureError> {
         if coordinate.len() != self.axes.len() {
-            return Err(TileError::CoordinateLength {
+            return Err(MeasureError::CoordinateLength {
                 expected: self.axes.len(),
                 found: coordinate.len(),
             });
@@ -212,7 +212,7 @@ impl Tile {
 
     pub fn delta(&self) -> Delta {
         Delta {
-            tile: self.definition.ulid,
+            measure: self.definition.ulid,
             axes: self.axes.clone(),
             coordinates: Vec::new(),
             changes: Vec::new(),
@@ -220,28 +220,28 @@ impl Tile {
         }
     }
 
-    pub fn apply(&self, delta: impl Into<Arc<Delta>>) -> Result<Tile, TileError> {
+    pub fn apply(&self, delta: impl Into<Arc<Delta>>) -> Result<Measure, MeasureError> {
         let delta = delta.into();
-        if delta.tile != self.definition.ulid {
-            return Err(TileError::ForeignDelta(delta.tile));
+        if delta.measure != self.definition.ulid {
+            return Err(MeasureError::ForeignDelta(delta.measure));
         }
         if delta.axes != self.axes {
-            return Err(TileError::DeltaAxesMismatch);
+            return Err(MeasureError::DeltaAxesMismatch);
         }
-        let mut tile = self.clone();
+        let mut measure = self.clone();
         if !delta.is_empty() {
-            tile.deltas.push(delta);
+            measure.deltas.push(delta);
         }
-        Ok(tile)
+        Ok(measure)
     }
 
-    pub fn fold_deltas(&self) -> Tile {
-        let mut tile = self.clone();
-        tile.deltas = vec![Arc::new(self.merged_delta())];
-        tile
+    pub fn fold_deltas(&self) -> Measure {
+        let mut measure = self.clone();
+        measure.deltas = vec![Arc::new(self.merged_delta())];
+        measure
     }
 
-    pub fn compact(&self) -> Tile {
+    pub fn compact(&self) -> Measure {
         if self.deltas.is_empty() {
             return self.clone();
         }
@@ -287,7 +287,7 @@ impl Tile {
             .collect();
         columns.push(Arc::new(Float64Array::from(values)));
         let base = RecordBatch::try_new(Arc::new(self.definition.schema()), columns)
-            .expect("compaction builds columns in the tile schema");
+            .expect("compaction builds columns in the measure schema");
         Self::from_parts(self.definition.clone(), self.axes.clone(), base)
     }
 
@@ -301,14 +301,14 @@ impl Tile {
         merged
     }
 
-    fn from_parts(definition: TileDefinition, axes: Vec<Axis>, base: RecordBatch) -> Tile {
+    fn from_parts(definition: MeasureDefinition, axes: Vec<Axis>, base: RecordBatch) -> Measure {
         let columns = base.columns();
         let coordinate_columns = columns[..axes.len()]
             .iter()
             .map(|column| column.as_primitive::<UInt32Type>().clone())
             .collect();
         let values = columns[axes.len()].as_primitive::<Float64Type>().clone();
-        Tile {
+        Measure {
             definition,
             axes,
             base,
@@ -350,7 +350,7 @@ impl Tile {
 
 #[derive(Debug)]
 pub struct Delta {
-    tile: TileUlid,
+    measure: MeasureUlid,
     axes: Vec<Axis>,
     coordinates: Vec<MemberId>,
     changes: Vec<Option<f64>>,
@@ -359,13 +359,13 @@ pub struct Delta {
 }
 
 impl Delta {
-    pub fn set(&mut self, coordinate: &[MemberId], value: f64) -> Result<(), TileError> {
+    pub fn set(&mut self, coordinate: &[MemberId], value: f64) -> Result<(), MeasureError> {
         self.check(coordinate)?;
         self.write(coordinate, normalize(value));
         Ok(())
     }
 
-    pub fn delete(&mut self, coordinate: &[MemberId]) -> Result<(), TileError> {
+    pub fn delete(&mut self, coordinate: &[MemberId]) -> Result<(), MeasureError> {
         self.check(coordinate)?;
         self.write(coordinate, None);
         Ok(())
@@ -383,9 +383,9 @@ impl Delta {
         (0..self.changes.len()).map(|change| (self.coordinate(change), self.changes[change]))
     }
 
-    fn check(&self, coordinate: &[MemberId]) -> Result<(), TileError> {
+    fn check(&self, coordinate: &[MemberId]) -> Result<(), MeasureError> {
         if coordinate.len() != self.axes.len() {
-            return Err(TileError::CoordinateLength {
+            return Err(MeasureError::CoordinateLength {
                 expected: self.axes.len(),
                 found: coordinate.len(),
             });
@@ -396,7 +396,7 @@ impl Delta {
             .zip(coordinate)
             .find(|(axis, member)| member.0 >= axis.len)
         {
-            return Err(TileError::MemberOutOfRange {
+            return Err(MeasureError::MemberOutOfRange {
                 axis: axis.dimension,
                 member,
             });

@@ -337,7 +337,7 @@ impl Parser {
     }
 
     fn descend(&mut self, depth: usize) -> Result<(), TooDeep> {
-        // Not unbounded: parsing recurses once per parenthesis, negation or operand level and later passes once per tree level, and a formula this deep belongs in separate named tiles.
+        // Not unbounded: parsing recurses once per parenthesis, negation or operand level and later passes once per tree level, and a formula this deep belongs in separate named measures.
         if depth > MAXIMUM_DEPTH {
             return Err(TooDeep {
                 position: self.position(),

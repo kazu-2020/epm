@@ -10,13 +10,13 @@ use formula::{
 fn render(expression: &ResolvedExpression) -> String {
     match &expression.kind {
         ResolvedExpressionKind::Number(value) => value.to_string(),
-        ResolvedExpressionKind::Tile { ulid, axes } => {
-            let tile = common::tiles()
+        ResolvedExpressionKind::Measure { ulid, axes } => {
+            let measure = common::measures()
                 .into_iter()
-                .find(|tile| tile.ulid == *ulid)
-                .expect("resolution points at a fixture tile");
+                .find(|measure| measure.ulid == *ulid)
+                .expect("resolution points at a fixture measure");
             let axes: Vec<_> = axes.iter().copied().map(common::dimension_name).collect();
-            format!("'{}'{{{}}}", tile.name, axes.join(","))
+            format!("'{}'{{{}}}", measure.name, axes.join(","))
         }
         ResolvedExpressionKind::Negate(operand) => format!("(Negate {})", render(operand)),
         ResolvedExpressionKind::Binary {
@@ -60,7 +60,11 @@ fn render_axis(axis: &ResolvedAxis) -> String {
 
 fn resolve(source: &str) -> (String, Vec<(ResolveErrorKind, Range<usize>)>) {
     let parsed = formula::parse(source);
-    let resolved = formula::resolve(&parsed.expression, &common::tiles(), &common::dimensions());
+    let resolved = formula::resolve(
+        &parsed.expression,
+        &common::measures(),
+        &common::dimensions(),
+    );
     let errors = resolved
         .errors
         .into_iter()
@@ -70,7 +74,7 @@ fn resolve(source: &str) -> (String, Vec<(ResolveErrorKind, Range<usize>)>) {
 }
 
 #[test]
-fn a_tile_name_resolves_to_the_tile_and_its_axes() {
+fn a_measure_name_resolves_to_the_measure_and_its_axes() {
     assert_eq!(
         resolve("'売上' * 1.1"),
         ("(Multiply '売上'{部門,期間} 1.1)".into(), vec![])
@@ -149,7 +153,7 @@ fn a_dimension_written_as_a_value_is_its_own_error() {
 }
 
 #[test]
-fn a_name_that_is_neither_a_tile_nor_a_dimension_is_unknown_not_a_dimension_as_value() {
+fn a_name_that_is_neither_a_measure_nor_a_dimension_is_unknown_not_a_dimension_as_value() {
     let source = "'売上' * '売り上げ'";
     assert_eq!(
         resolve(source).1,
@@ -161,7 +165,7 @@ fn a_name_that_is_neither_a_tile_nor_a_dimension_is_unknown_not_a_dimension_as_v
 }
 
 #[test]
-fn a_by_axis_must_name_a_dimension_and_a_tile_there_is_its_own_error() {
+fn a_by_axis_must_name_a_dimension_and_a_measure_there_is_its_own_error() {
     for (source, axis, kind) in [
         (
             "SUM('売上', BY '期間', '部署')",
@@ -171,7 +175,7 @@ fn a_by_axis_must_name_a_dimension_and_a_tile_there_is_its_own_error() {
         (
             "SUM('売上', BY '期間', '売上')",
             "'売上'",
-            ResolveErrorKind::TileAsAxis,
+            ResolveErrorKind::MeasureAsAxis,
         ),
     ] {
         assert_eq!(

@@ -54,7 +54,7 @@ impl Checker {
     ) -> Option<BTreeSet<DimensionUlid>> {
         match &expression.kind {
             ResolvedExpressionKind::Number(_) => Some(BTreeSet::new()),
-            ResolvedExpressionKind::Tile { axes, .. } => Some(axes.iter().copied().collect()),
+            ResolvedExpressionKind::Measure { axes, .. } => Some(axes.iter().copied().collect()),
             ResolvedExpressionKind::Negate(operand) => self.axes(operand, allowed),
             ResolvedExpressionKind::Binary { left, right, .. } => {
                 // Not `self.axes(left, allowed)?`: an unknown left side would skip the right side's checks.

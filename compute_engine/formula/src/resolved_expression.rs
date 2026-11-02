@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use dimension::{AttributeUlid, DimensionUlid};
-use tile::TileUlid;
+use measure::MeasureUlid;
 
 use crate::expression::BinaryOperator;
 
@@ -14,8 +14,8 @@ pub struct ResolvedExpression {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedExpressionKind {
     Number(f64),
-    Tile {
-        ulid: TileUlid,
+    Measure {
+        ulid: MeasureUlid,
         axes: Vec<DimensionUlid>,
     },
     Negate(Box<ResolvedExpression>),

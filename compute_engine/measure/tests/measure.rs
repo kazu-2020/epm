@@ -5,13 +5,13 @@ use arrow_array::{
 };
 use arrow_schema::{Field, Schema};
 use dimension::{Dimension, DimensionDefinition, DimensionUlid, KeyKind, MemberId};
-use tile::{Tile, TileDefinition, TileError, TileUlid, normalize};
+use measure::{Measure, MeasureDefinition, MeasureError, MeasureUlid, normalize};
 use ulid::Ulid;
 
 const PERIOD: DimensionUlid = DimensionUlid(Ulid(100));
 const DEPARTMENT: DimensionUlid = DimensionUlid(Ulid(200));
-const SALES: TileUlid = TileUlid(Ulid(300));
-const COST: TileUlid = TileUlid(Ulid(400));
+const SALES: MeasureUlid = MeasureUlid(Ulid(300));
+const COST: MeasureUlid = MeasureUlid(Ulid(400));
 
 fn dimension(ulid: DimensionUlid, names: &[&str]) -> Dimension {
     let definition = DimensionDefinition {
@@ -37,8 +37,8 @@ fn departments() -> Dimension {
     dimension(DEPARTMENT, &["営業部", "開発部"])
 }
 
-fn definition(ulid: TileUlid, axes: Vec<DimensionUlid>) -> TileDefinition {
-    TileDefinition {
+fn definition(ulid: MeasureUlid, axes: Vec<DimensionUlid>) -> MeasureDefinition {
+    MeasureDefinition {
         ulid,
         name: "売上".into(),
         axes,
@@ -53,13 +53,13 @@ fn columns(rows: &[(u32, u32, f64)]) -> Vec<ArrayRef> {
     ]
 }
 
-fn try_sales(rows: &[(u32, u32, f64)]) -> Result<Tile, TileError> {
+fn try_sales(rows: &[(u32, u32, f64)]) -> Result<Measure, MeasureError> {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(rows)).unwrap();
-    Tile::try_new(definition, batch, &[&periods(), &departments()])
+    Measure::try_new(definition, batch, &[&periods(), &departments()])
 }
 
-fn sales() -> Tile {
+fn sales() -> Measure {
     try_sales(&[(0, 0, 10.0), (0, 1, 20.0), (2, 0, 30.0)]).unwrap()
 }
 
@@ -67,8 +67,8 @@ fn coordinate(period: u32, department: u32) -> [MemberId; 2] {
     [MemberId(period), MemberId(department)]
 }
 
-fn rows(tile: &Tile) -> Vec<(u32, u32, f64)> {
-    let columns = tile.base().columns();
+fn rows(measure: &Measure) -> Vec<(u32, u32, f64)> {
+    let columns = measure.base().columns();
     let periods = columns[0].as_any().downcast_ref::<UInt32Array>().unwrap();
     let departments = columns[1].as_any().downcast_ref::<UInt32Array>().unwrap();
     let values = columns[2].as_any().downcast_ref::<Float64Array>().unwrap();
@@ -85,13 +85,13 @@ fn rows(tile: &Tile) -> Vec<(u32, u32, f64)> {
 
 #[test]
 fn cell_is_read_by_its_member_ids_and_missing_cells_are_empty() {
-    let tile = sales();
-    assert_eq!(tile.get(&coordinate(0, 1)).unwrap(), Some(20.0));
-    assert_eq!(tile.get(&coordinate(2, 0)).unwrap(), Some(30.0));
-    assert_eq!(tile.get(&coordinate(1, 0)).unwrap(), None);
+    let measure = sales();
+    assert_eq!(measure.get(&coordinate(0, 1)).unwrap(), Some(20.0));
+    assert_eq!(measure.get(&coordinate(2, 0)).unwrap(), Some(30.0));
+    assert_eq!(measure.get(&coordinate(1, 0)).unwrap(), None);
     assert_eq!(
-        tile.get(&[MemberId(0)]).unwrap_err(),
-        TileError::CoordinateLength {
+        measure.get(&[MemberId(0)]).unwrap_err(),
+        MeasureError::CoordinateLength {
             expected: 2,
             found: 1
         }
@@ -99,9 +99,9 @@ fn cell_is_read_by_its_member_ids_and_missing_cells_are_empty() {
 }
 
 #[test]
-fn tile_without_cells_is_valid() {
-    let tile = try_sales(&[]).unwrap();
-    assert_eq!(tile.get(&coordinate(0, 0)).unwrap(), None);
+fn measure_without_cells_is_valid() {
+    let measure = try_sales(&[]).unwrap();
+    assert_eq!(measure.get(&coordinate(0, 0)).unwrap(), None);
 }
 
 #[test]
@@ -109,8 +109,8 @@ fn repeated_axis_is_rejected() {
     let definition = definition(SALES, vec![PERIOD, PERIOD]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
     assert_eq!(
-        Tile::try_new(definition, batch, &[&periods()]).unwrap_err(),
-        TileError::DuplicateAxis(PERIOD)
+        Measure::try_new(definition, batch, &[&periods()]).unwrap_err(),
+        MeasureError::DuplicateAxis(PERIOD)
     );
 }
 
@@ -119,8 +119,8 @@ fn axis_without_its_dimension_is_rejected() {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
     assert_eq!(
-        Tile::try_new(definition, batch, &[&periods()]).unwrap_err(),
-        TileError::MissingDimension(DEPARTMENT)
+        Measure::try_new(definition, batch, &[&periods()]).unwrap_err(),
+        MeasureError::MissingDimension(DEPARTMENT)
     );
 }
 
@@ -130,8 +130,8 @@ fn base_not_matching_the_definition_is_rejected() {
     let other = self::definition(SALES, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(other.schema()), columns(&[])).unwrap();
     assert!(matches!(
-        Tile::try_new(definition, batch, &[&periods(), &departments()]),
-        Err(TileError::SchemaMismatch { .. })
+        Measure::try_new(definition, batch, &[&periods(), &departments()]),
+        Err(MeasureError::SchemaMismatch { .. })
     ));
 }
 
@@ -148,8 +148,8 @@ fn null_in_base_is_rejected() {
     columns[2] = Arc::new(Float64Array::from(vec![None]));
     let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
     assert_eq!(
-        Tile::try_new(definition, batch, &[&periods(), &departments()]).unwrap_err(),
-        TileError::NullInColumn("value".into())
+        Measure::try_new(definition, batch, &[&periods(), &departments()]).unwrap_err(),
+        MeasureError::NullInColumn("value".into())
     );
 }
 
@@ -164,15 +164,16 @@ fn base_keeps_the_definition_schema_even_when_given_nullable_columns() {
         .collect();
     let batch =
         RecordBatch::try_new(Arc::new(Schema::new(fields)), columns(&[(0, 0, 1.0)])).unwrap();
-    let tile = Tile::try_new(definition.clone(), batch, &[&periods(), &departments()]).unwrap();
-    assert_eq!(tile.base().schema().as_ref(), &definition.schema());
+    let measure =
+        Measure::try_new(definition.clone(), batch, &[&periods(), &departments()]).unwrap();
+    assert_eq!(measure.base().schema().as_ref(), &definition.schema());
 }
 
 #[test]
 fn member_outside_the_axis_dimension_is_rejected() {
     assert_eq!(
         try_sales(&[(0, 2, 1.0)]).unwrap_err(),
-        TileError::MemberOutOfRange {
+        MeasureError::MemberOutOfRange {
             axis: DEPARTMENT,
             member: MemberId(2)
         }
@@ -183,11 +184,11 @@ fn member_outside_the_axis_dimension_is_rejected() {
 fn base_must_be_sorted_by_coordinate_without_repeats() {
     assert_eq!(
         try_sales(&[(1, 0, 1.0), (0, 1, 2.0)]).unwrap_err(),
-        TileError::UnsortedCoordinate(1)
+        MeasureError::UnsortedCoordinate(1)
     );
     assert_eq!(
         try_sales(&[(0, 1, 1.0), (0, 1, 2.0)]).unwrap_err(),
-        TileError::DuplicateCoordinate(1)
+        MeasureError::DuplicateCoordinate(1)
     );
 }
 
@@ -196,7 +197,7 @@ fn base_holds_only_normalized_values() {
     for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0] {
         assert_eq!(
             try_sales(&[(0, 0, 1.0), (0, 1, value)]).unwrap_err(),
-            TileError::UnnormalizedValue(1)
+            MeasureError::UnnormalizedValue(1)
         );
     }
 }
@@ -211,64 +212,64 @@ fn normalize_turns_non_finite_into_empty_and_negative_zero_into_zero() {
 
 #[test]
 fn delta_overrides_base_and_newer_delta_wins() {
-    let tile = sales();
-    let mut first = tile.delta();
+    let measure = sales();
+    let mut first = measure.delta();
     first.set(&coordinate(0, 0), 11.0).unwrap();
     first.set(&coordinate(1, 1), 5.0).unwrap();
     first.delete(&coordinate(0, 1)).unwrap();
-    let tile = tile.apply(first).unwrap();
-    let mut second = tile.delta();
+    let measure = measure.apply(first).unwrap();
+    let mut second = measure.delta();
     second.set(&coordinate(1, 1), 6.0).unwrap();
-    let tile = tile.apply(second).unwrap();
+    let measure = measure.apply(second).unwrap();
 
-    assert_eq!(tile.get(&coordinate(0, 0)).unwrap(), Some(11.0));
-    assert_eq!(tile.get(&coordinate(0, 1)).unwrap(), None);
-    assert_eq!(tile.get(&coordinate(1, 1)).unwrap(), Some(6.0));
-    assert_eq!(tile.get(&coordinate(2, 0)).unwrap(), Some(30.0));
-    assert_eq!(tile.delta_len(), 4);
+    assert_eq!(measure.get(&coordinate(0, 0)).unwrap(), Some(11.0));
+    assert_eq!(measure.get(&coordinate(0, 1)).unwrap(), None);
+    assert_eq!(measure.get(&coordinate(1, 1)).unwrap(), Some(6.0));
+    assert_eq!(measure.get(&coordinate(2, 0)).unwrap(), Some(30.0));
+    assert_eq!(measure.delta_len(), 4);
 }
 
 #[test]
 fn later_write_in_one_delta_replaces_the_earlier_one() {
-    let tile = sales();
-    let mut delta = tile.delta();
+    let measure = sales();
+    let mut delta = measure.delta();
     delta.set(&coordinate(1, 0), 1.0).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
     assert_eq!(delta.len(), 1);
-    let tile = tile.apply(delta).unwrap();
-    assert_eq!(tile.get(&coordinate(1, 0)).unwrap(), Some(2.0));
+    let measure = measure.apply(delta).unwrap();
+    assert_eq!(measure.get(&coordinate(1, 0)).unwrap(), Some(2.0));
 }
 
 #[test]
 fn writing_non_finite_empties_the_cell_and_zero_is_kept() {
-    let tile = sales();
-    let mut delta = tile.delta();
+    let measure = sales();
+    let mut delta = measure.delta();
     delta.set(&coordinate(0, 0), f64::NAN).unwrap();
     delta.set(&coordinate(0, 1), 0.0).unwrap();
     delta.set(&coordinate(1, 0), -0.0).unwrap();
-    let tile = tile.apply(delta).unwrap();
-    assert_eq!(tile.get(&coordinate(0, 0)).unwrap(), None);
-    assert_eq!(tile.get(&coordinate(0, 1)).unwrap(), Some(0.0));
+    let measure = measure.apply(delta).unwrap();
+    assert_eq!(measure.get(&coordinate(0, 0)).unwrap(), None);
+    assert_eq!(measure.get(&coordinate(0, 1)).unwrap(), Some(0.0));
     assert_eq!(
-        tile.get(&coordinate(1, 0)).unwrap().map(f64::to_bits),
+        measure.get(&coordinate(1, 0)).unwrap().map(f64::to_bits),
         Some(0.0f64.to_bits())
     );
 }
 
 #[test]
-fn delta_rejects_coordinates_that_do_not_fit_the_tile() {
-    let tile = sales();
-    let mut delta = tile.delta();
+fn delta_rejects_coordinates_that_do_not_fit_the_measure() {
+    let measure = sales();
+    let mut delta = measure.delta();
     assert_eq!(
         delta.set(&[MemberId(0)], 1.0).unwrap_err(),
-        TileError::CoordinateLength {
+        MeasureError::CoordinateLength {
             expected: 2,
             found: 1
         }
     );
     assert_eq!(
         delta.delete(&coordinate(3, 0)).unwrap_err(),
-        TileError::MemberOutOfRange {
+        MeasureError::MemberOutOfRange {
             axis: PERIOD,
             member: MemberId(3)
         }
@@ -281,7 +282,7 @@ fn delta_made_against_dimensions_of_another_size_is_rejected() {
     let larger = sales();
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
-    let smaller = Tile::try_new(
+    let smaller = Measure::try_new(
         definition,
         batch,
         &[&dimension(PERIOD, &["1月", "2月"]), &departments()],
@@ -291,53 +292,53 @@ fn delta_made_against_dimensions_of_another_size_is_rejected() {
     delta.set(&coordinate(2, 0), 1.0).unwrap();
     assert_eq!(
         smaller.apply(delta).unwrap_err(),
-        TileError::DeltaAxesMismatch
+        MeasureError::DeltaAxesMismatch
     );
 }
 
 #[test]
-fn delta_of_another_tile_is_rejected() {
-    let tile = sales();
+fn delta_of_another_measure_is_rejected() {
+    let measure = sales();
     let definition = definition(COST, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
-    let cost = Tile::try_new(definition, batch, &[&periods(), &departments()]).unwrap();
+    let cost = Measure::try_new(definition, batch, &[&periods(), &departments()]).unwrap();
     assert_eq!(
-        tile.apply(cost.delta()).unwrap_err(),
-        TileError::ForeignDelta(COST)
+        measure.apply(cost.delta()).unwrap_err(),
+        MeasureError::ForeignDelta(COST)
     );
 }
 
 #[test]
 fn compaction_folds_deltas_into_a_sorted_base_without_changing_reads() {
-    let tile = sales();
-    let mut first = tile.delta();
+    let measure = sales();
+    let mut first = measure.delta();
     first.set(&coordinate(0, 0), 11.0).unwrap();
     first.delete(&coordinate(0, 1)).unwrap();
     first.set(&coordinate(1, 1), 5.0).unwrap();
     first.set(&coordinate(2, 1), 7.0).unwrap();
-    let tile = tile.apply(first).unwrap();
-    let mut second = tile.delta();
+    let measure = measure.apply(first).unwrap();
+    let mut second = measure.delta();
     second.delete(&coordinate(2, 1)).unwrap();
     second.set(&coordinate(1, 0), 0.0).unwrap();
-    let tile = tile.apply(second).unwrap();
+    let measure = measure.apply(second).unwrap();
 
-    let tile = tile.compact();
+    let measure = measure.compact();
 
-    assert_eq!(tile.delta_len(), 0);
+    assert_eq!(measure.delta_len(), 0);
     assert_eq!(
-        rows(&tile),
+        rows(&measure),
         vec![(0, 0, 11.0), (1, 0, 0.0), (1, 1, 5.0), (2, 0, 30.0)]
     );
-    let rebuilt = Tile::try_new(
+    let rebuilt = Measure::try_new(
         definition(SALES, vec![PERIOD, DEPARTMENT]),
-        tile.base().clone(),
+        measure.base().clone(),
         &[&periods(), &departments()],
     );
     assert!(rebuilt.is_ok());
 }
 
 #[test]
-fn tile_without_axes_is_rejected() {
+fn measure_without_axes_is_rejected() {
     let definition = definition(SALES, Vec::new());
     let batch = RecordBatch::try_new(
         Arc::new(definition.schema()),
@@ -345,8 +346,8 @@ fn tile_without_axes_is_rejected() {
     )
     .unwrap();
     assert_eq!(
-        Tile::try_new(definition, batch, &[]).unwrap_err(),
-        TileError::NoAxes
+        Measure::try_new(definition, batch, &[]).unwrap_err(),
+        MeasureError::NoAxes
     );
 }
 
@@ -366,10 +367,10 @@ fn applying_a_delta_leaves_the_earlier_version_unchanged() {
 
 #[test]
 fn committer_replays_the_deltas_it_applied_during_compaction_onto_the_compacted_version() {
-    let tile = sales();
-    let mut first = tile.delta();
+    let measure = sales();
+    let mut first = measure.delta();
     first.set(&coordinate(0, 0), 11.0).unwrap();
-    let started = tile.apply(first).unwrap();
+    let started = measure.apply(first).unwrap();
     let compacted = started.compact();
     let mut later = started.delta();
     later.delete(&coordinate(2, 0)).unwrap();
@@ -386,8 +387,8 @@ fn committer_replays_the_deltas_it_applied_during_compaction_onto_the_compacted_
 
 #[test]
 fn delta_lists_each_coordinate_with_its_latest_change() {
-    let tile = sales();
-    let mut delta = tile.delta();
+    let measure = sales();
+    let mut delta = measure.delta();
     delta.set(&coordinate(1, 0), 1.0).unwrap();
     delta.delete(&coordinate(0, 1)).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
@@ -406,21 +407,21 @@ fn delta_lists_each_coordinate_with_its_latest_change() {
 
 #[test]
 fn folding_deltas_leaves_one_layer_over_the_same_base() {
-    let tile = sales();
-    let mut first = tile.delta();
+    let measure = sales();
+    let mut first = measure.delta();
     first.set(&coordinate(0, 0), 11.0).unwrap();
     first.set(&coordinate(1, 1), 5.0).unwrap();
-    let tile = tile.apply(first).unwrap();
-    let mut second = tile.delta();
+    let measure = measure.apply(first).unwrap();
+    let mut second = measure.delta();
     second.delete(&coordinate(1, 1)).unwrap();
     second.set(&coordinate(0, 0), 12.0).unwrap();
-    let tile = tile.apply(second).unwrap();
+    let measure = measure.apply(second).unwrap();
 
-    let folded = tile.fold_deltas();
+    let folded = measure.fold_deltas();
 
-    assert_eq!(tile.delta_len(), 4);
+    assert_eq!(measure.delta_len(), 4);
     assert_eq!(folded.delta_len(), 2);
-    assert_eq!(rows(&folded), rows(&tile));
+    assert_eq!(rows(&folded), rows(&measure));
     assert_eq!(folded.get(&coordinate(0, 0)).unwrap(), Some(12.0));
     assert_eq!(folded.get(&coordinate(1, 1)).unwrap(), None);
     assert_eq!(folded.get(&coordinate(0, 1)).unwrap(), Some(20.0));
