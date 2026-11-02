@@ -4,14 +4,16 @@ use std::ops::Range;
 use dimension::DimensionUlid;
 
 use crate::axis_error::{AxisError, AxisErrorKind};
+use crate::checked_expression::CheckedExpression;
 use crate::resolved_expression::{
     ResolvedAxis, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AxisCheck {
     pub broadcast: Option<Vec<DimensionUlid>>,
     pub errors: Vec<AxisError>,
+    pub checked: Option<CheckedExpression>,
 }
 
 #[must_use]
@@ -21,6 +23,7 @@ pub fn check_axes(expression: &ResolvedExpression, result_axes: &[DimensionUlid]
         return AxisCheck {
             broadcast: None,
             errors: checker.errors,
+            checked: None,
         };
     };
     for &axis in axes.iter().filter(|axis| !result_axes.contains(axis)) {
@@ -30,7 +33,12 @@ pub fn check_axes(expression: &ResolvedExpression, result_axes: &[DimensionUlid]
             &expression.span,
         );
     }
+    let checked = checker
+        .errors
+        .is_empty()
+        .then(|| CheckedExpression::new(expression, result_axes));
     AxisCheck {
+        checked,
         broadcast: Some(
             result_axes
                 .iter()

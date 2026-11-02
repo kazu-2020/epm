@@ -1,13 +1,11 @@
 use std::fmt;
 
 use dimension::{AttributeUlid, DimensionUlid};
-use formula::AxisError;
 use measure::{MeasureError, MeasureUlid};
 
 #[derive(Debug, PartialEq)]
 pub enum EvaluateError {
-    Unresolved,
-    Axes(Vec<AxisError>),
+    ResultAxesChanged(MeasureUlid),
     MissingMeasure(MeasureUlid),
     MeasureAxesChanged(MeasureUlid),
     MissingDimension(DimensionUlid),

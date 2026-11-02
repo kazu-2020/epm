@@ -14,7 +14,10 @@ fn oracle_matches_every_hand_computed_case() {
         let mut cells = Vec::new();
         for &(result, source) in case.steps {
             cells = oracle
-                .evaluate(&fixture.resolve(source), fixture.definition(result))
+                .evaluate(
+                    &fixture.check(source, result),
+                    fixture.definition(result).ulid,
+                )
                 .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         }
         assert_eq!(cases::exact(&cells), cases::expected(case), "{}", case.name);

@@ -37,3 +37,15 @@ pub enum BinaryOperator {
     Multiply,
     Divide,
 }
+
+impl BinaryOperator {
+    #[must_use]
+    pub fn symbol(self) -> &'static str {
+        match self {
+            BinaryOperator::Add => "+",
+            BinaryOperator::Subtract => "-",
+            BinaryOperator::Multiply => "*",
+            BinaryOperator::Divide => "/",
+        }
+    }
+}

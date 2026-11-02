@@ -1,32 +1,9 @@
 use std::collections::BTreeSet;
-use std::fmt;
 
 use dimension::{AttributeUlid, Dimension, DimensionUlid, MemberId};
 use duckdb::Connection;
-use formula::{
-    BinaryOperator, ResolvedAxis, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind,
-};
-use measure::{Measure, MeasureDefinition, MeasureUlid};
-
-#[derive(Debug)]
-pub enum OracleError {
-    Unresolved,
-    Database(duckdb::Error),
-}
-
-impl fmt::Display for OracleError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
-    }
-}
-
-impl std::error::Error for OracleError {}
-
-impl From<duckdb::Error> for OracleError {
-    fn from(error: duckdb::Error) -> Self {
-        OracleError::Database(error)
-    }
-}
+use formula::{BinaryOperator, CheckedAxis, CheckedExpression, CheckedNode};
+use measure::{Measure, MeasureUlid};
 
 pub struct Oracle {
     connection: Connection,
@@ -38,7 +15,7 @@ struct Query {
 }
 
 impl Oracle {
-    pub fn new(dimensions: &[&Dimension], measures: &[&Measure]) -> Result<Self, OracleError> {
+    pub fn new(dimensions: &[&Dimension], measures: &[&Measure]) -> duckdb::Result<Self> {
         let connection = Connection::open_in_memory()?;
         for dimension in dimensions {
             connection.execute_batch(&format!(
@@ -78,25 +55,25 @@ impl Oracle {
 
     pub fn evaluate(
         &mut self,
-        expression: &ResolvedExpression,
-        result: &MeasureDefinition,
-    ) -> Result<Vec<(Vec<MemberId>, f64)>, OracleError> {
-        let table = measure_table(result.ulid);
+        expression: &CheckedExpression,
+        result: MeasureUlid,
+    ) -> duckdb::Result<Vec<(Vec<MemberId>, f64)>> {
+        let table = measure_table(result);
         self.connection.execute_batch(&format!(
             "CREATE TABLE {table} AS {}",
-            expanded(&query(expression)?, &result.axes)
+            expanded(&query(expression.root()), expression.result_axes())
         ))?;
         let mut statement = self
             .connection
             .prepare(&format!("SELECT * FROM {table} ORDER BY ALL"))?;
-        let width = result.axes.len();
+        let width = expression.result_axes().len();
         let rows = statement.query_map([], |row| {
             let coordinate = (0..width)
                 .map(|axis| row.get(axis).map(MemberId))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((coordinate, row.get(width)?))
         })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        rows.collect()
     }
 }
 
@@ -116,13 +93,13 @@ fn column(dimension: DimensionUlid) -> String {
     format!("axis_{}", dimension.0.0)
 }
 
-fn query(expression: &ResolvedExpression) -> Result<Query, OracleError> {
-    let query = match &expression.kind {
-        ResolvedExpressionKind::Number(value) => Query {
+fn query(node: &CheckedNode) -> Query {
+    let query = match node {
+        CheckedNode::Number(value) => Query {
             sql: format!("SELECT CAST('{value:?}' AS DOUBLE) AS value"),
             axes: BTreeSet::new(),
         },
-        ResolvedExpressionKind::Measure { ulid, axes } => {
+        CheckedNode::Measure { ulid, axes } => {
             let mut items: Vec<String> = axes.iter().map(|&axis| column(axis)).collect();
             items.push("value".into());
             Query {
@@ -130,8 +107,8 @@ fn query(expression: &ResolvedExpression) -> Result<Query, OracleError> {
                 axes: axes.iter().copied().collect(),
             }
         }
-        ResolvedExpressionKind::Negate(operand) => {
-            let operand = query(operand)?;
+        CheckedNode::Negate(operand) => {
+            let operand = query(operand);
             let mut items: Vec<String> = operand.axes.iter().map(|&axis| column(axis)).collect();
             items.push("-value AS value".into());
             Query {
@@ -139,24 +116,23 @@ fn query(expression: &ResolvedExpression) -> Result<Query, OracleError> {
                 axes: operand.axes,
             }
         }
-        ResolvedExpressionKind::Binary {
+        CheckedNode::Binary {
             operator,
             left,
             right,
-        } => binary(*operator, &query(left)?, &query(right)?),
-        ResolvedExpressionKind::Sum { value, by } => sum(&query(value)?, by)?,
-        ResolvedExpressionKind::Error => return Err(OracleError::Unresolved),
+        } => binary(*operator, &query(left), &query(right)),
+        CheckedNode::Sum { value, by } => sum(&query(value), by),
     };
     let mut items: Vec<String> = query.axes.iter().map(|&axis| column(axis)).collect();
     items.push("CASE WHEN node.value = 0 THEN 0::DOUBLE ELSE node.value END AS value".into());
-    Ok(Query {
+    Query {
         sql: format!(
             "SELECT {} FROM ({}) AS node WHERE isfinite(node.value)",
             items.join(", "),
             query.sql
         ),
         axes: query.axes,
-    })
+    }
 }
 
 fn expanded(query: &Query, axes: &[DimensionUlid]) -> String {
@@ -191,12 +167,7 @@ fn binary(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
             .collect::<Vec<_>>()
             .join(" AND ")
     };
-    let symbol = match operator {
-        BinaryOperator::Add => "+",
-        BinaryOperator::Subtract => "-",
-        BinaryOperator::Multiply => "*",
-        BinaryOperator::Divide => "/",
-    };
+    let symbol = operator.symbol();
     let sql = match operator {
         BinaryOperator::Add | BinaryOperator::Subtract => {
             let mut items: Vec<String> = axes
@@ -241,19 +212,19 @@ fn binary(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
     }
 }
 
-fn sum(value: &Query, by: &[ResolvedAxis]) -> Result<Query, OracleError> {
+fn sum(value: &Query, by: &[CheckedAxis]) -> Query {
     let mut axes = BTreeSet::new();
     let mut groups = Vec::new();
     let mut items = Vec::new();
     let mut joins = String::new();
     for (index, axis) in by.iter().enumerate() {
-        match axis.kind {
-            ResolvedAxisKind::Dimension(dimension) => {
+        match *axis {
+            CheckedAxis::Dimension(dimension) => {
                 axes.insert(dimension);
                 groups.push(format!("node.{}", column(dimension)));
                 items.push(format!("node.{0} AS {0}", column(dimension)));
             }
-            ResolvedAxisKind::Attribute {
+            CheckedAxis::Attribute {
                 dimension,
                 attribute,
                 target,
@@ -268,7 +239,6 @@ fn sum(value: &Query, by: &[ResolvedAxis]) -> Result<Query, OracleError> {
                 groups.push(format!("{alias}.target"));
                 items.push(format!("{alias}.target AS {}", column(target)));
             }
-            ResolvedAxisKind::Unresolved => return Err(OracleError::Unresolved),
         }
     }
     items.push("SUM(node.value) AS value".into());
@@ -277,12 +247,12 @@ fn sum(value: &Query, by: &[ResolvedAxis]) -> Result<Query, OracleError> {
     } else {
         format!(" GROUP BY {}", groups.join(", "))
     };
-    Ok(Query {
+    Query {
         sql: format!(
             "SELECT {} FROM ({}) AS node{joins}{group_by} HAVING COUNT(*) > 0",
             items.join(", "),
             value.sql
         ),
         axes,
-    })
+    }
 }
