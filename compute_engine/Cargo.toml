@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["dimension", "evaluator", "formula", "measure"]
+members = ["datagen", "dimension", "evaluator", "formula", "measure"]
 
 [profile.mutants]
 inherits = "test"

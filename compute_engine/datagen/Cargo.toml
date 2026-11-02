@@ -1,0 +1,15 @@
+[package]
+name = "datagen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrow-array = "60.1.0"
+dimension = { path = "../dimension" }
+measure = { path = "../measure" }
+rand = "0.10.3"
+rand_distr = "0.6.0"
+ulid = "3.0.0"
+
+[dev-dependencies]
+formula = { path = "../formula" }
