@@ -61,6 +61,54 @@ fn normalized(
         .collect()
 }
 
+fn join(
+    left: &Cells,
+    right: &Cells,
+    extra_axes: &[DimensionUlid],
+    apply: fn(f64, f64) -> f64,
+) -> Vec<(Vec<MemberId>, f64)> {
+    let shared: Vec<(usize, usize)> = left
+        .axes
+        .iter()
+        .enumerate()
+        .filter_map(|(left_position, axis)| {
+            let right_position = right.axes.iter().position(|own| own == axis)?;
+            Some((left_position, right_position))
+        })
+        .collect();
+    let extra: Vec<usize> = extra_axes
+        .iter()
+        .map(|axis| {
+            right
+                .axes
+                .iter()
+                .position(|own| own == axis)
+                .expect("the extra axes come from the right side")
+        })
+        .collect();
+    let mut by_shared: HashMap<Vec<MemberId>, Vec<(&Vec<MemberId>, f64)>> = HashMap::new();
+    for (coordinate, &value) in &right.values {
+        let key = shared
+            .iter()
+            .map(|&(_, position)| coordinate[position])
+            .collect();
+        by_shared.entry(key).or_default().push((coordinate, value));
+    }
+    let mut joined = Vec::new();
+    for (left_coordinate, &left_value) in &left.values {
+        let key: Vec<MemberId> = shared
+            .iter()
+            .map(|&(position, _)| left_coordinate[position])
+            .collect();
+        for &(right_coordinate, right_value) in by_shared.get(&key).into_iter().flatten() {
+            let mut coordinate = left_coordinate.clone();
+            coordinate.extend(extra.iter().map(|&position| right_coordinate[position]));
+            joined.push((coordinate, apply(left_value, right_value)));
+        }
+    }
+    joined
+}
+
 impl Cells {
     pub(crate) fn number(value: f64) -> Cells {
         Cells {
@@ -109,21 +157,21 @@ impl Cells {
     ) -> Result<Cells, EvaluateError> {
         let mut axes = left.axes.clone();
         axes.extend(right.axes.iter().filter(|axis| !left.axes.contains(axis)));
-        let left = left.broadcast(&axes, dimensions)?;
-        let right = right.broadcast(&axes, dimensions)?;
         let (presence, apply) = rule(operator);
-        let coordinates: HashSet<&Vec<MemberId>> = match presence {
-            Presence::Either => left.values.keys().chain(right.values.keys()).collect(),
-            Presence::Both => left
-                .values
-                .keys()
-                .filter(|coordinate| right.values.contains_key(*coordinate))
-                .collect(),
+        let values = match presence {
+            Presence::Either => {
+                let left = left.broadcast(&axes, dimensions)?;
+                let right = right.broadcast(&axes, dimensions)?;
+                let coordinates: HashSet<&Vec<MemberId>> =
+                    left.values.keys().chain(right.values.keys()).collect();
+                normalized(coordinates.into_iter().map(|coordinate| {
+                    let side = |cells: &Cells| cells.values.get(coordinate).copied().unwrap_or(0.0);
+                    (coordinate.clone(), apply(side(&left), side(&right)))
+                }))
+            }
+            // Not broadcast like Either: only cells present on both sides survive, so spreading a sparse side over every member would build cells the join discards.
+            Presence::Both => normalized(join(&left, &right, &axes[left.axes.len()..], apply)),
         };
-        let values = normalized(coordinates.into_iter().map(|coordinate| {
-            let side = |cells: &Cells| cells.values.get(coordinate).copied().unwrap_or(0.0);
-            (coordinate.clone(), apply(side(&left), side(&right)))
-        }));
         Ok(Cells { axes, values })
     }
 
