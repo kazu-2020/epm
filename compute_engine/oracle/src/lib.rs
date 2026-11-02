@@ -83,7 +83,7 @@ impl Oracle {
     ) -> Result<Vec<(Vec<MemberId>, f64)>, OracleError> {
         let table = measure_table(result.ulid);
         self.connection.execute_batch(&format!(
-            "CREATE OR REPLACE TABLE {table} AS {}",
+            "CREATE TABLE {table} AS {}",
             expanded(&query(expression)?, &result.axes)
         ))?;
         let mut statement = self

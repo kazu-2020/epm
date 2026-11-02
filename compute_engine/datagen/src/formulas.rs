@@ -135,7 +135,7 @@ impl Formulas<'_, '_, '_> {
             }
             Node::Sum => {
                 let value_axes = self.generator.axes(self.dimensions);
-                // shortcut: a SUM adds only exactly representable values, so any order gives the same sum and the evaluator and the oracle agree bit for bit, including on which cells a later division finds 0; lift this once both engines sum in one defined order or the comparison bounds the rounding of each sum.
+                // Not any value under SUM: the evaluator and the oracle add in different orders, so a sum of rounded values can differ in the last bits and flip whether a later division sees 0.
                 let value = self.expression(&value_axes, depth - 1, true);
                 self.sum(value, allowed)
             }
