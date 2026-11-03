@@ -24,9 +24,9 @@ fn batches(workspace: &Workspace) -> Vec<RecordBatch> {
     let dimensions = workspace
         .dimensions
         .iter()
-        .map(|dimension| dimension.batch());
-    let inputs = workspace.inputs.iter().map(|input| input.base());
-    dimensions.chain(inputs).cloned().collect()
+        .map(|dimension| dimension.batch().clone());
+    let inputs = workspace.inputs.iter().map(|input| input.to_record_batch());
+    dimensions.chain(inputs).collect()
 }
 
 #[test]
@@ -102,13 +102,18 @@ fn a_few_members_hold_most_cells() {
         .expect("the axis is a generated dimension")
         .len() as usize;
     let mut cells_per_member: HashMap<u32, usize> = HashMap::new();
-    for member in input.base().column(0).as_primitive::<UInt32Type>().values() {
+    for member in input
+        .to_record_batch()
+        .column(0)
+        .as_primitive::<UInt32Type>()
+        .values()
+    {
         *cells_per_member.entry(*member).or_default() += 1;
     }
     let mut counts: Vec<usize> = cells_per_member.into_values().collect();
     counts.sort_unstable_by(|left, right| right.cmp(left));
     let busiest: usize = counts.iter().take(members / 10).sum();
-    let cells = input.base().num_rows();
+    let cells = input.to_record_batch().num_rows();
     assert!(
         busiest * 10 > cells * 3,
         "the busiest tenth of {members} members holds {busiest} of {cells} cells"

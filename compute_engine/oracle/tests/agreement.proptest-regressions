@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc dd6359dbe8b902fe4c61bd378b537768d58f83cc62b9f29f02fc7368b231da88 # shrinks to configuration = Configuration { seed: 1471440369208614495, dimension_count: 2, members_per_dimension: 4, input_count: 2, cells_per_input: 14, zipf_exponent: 0.0, chain_length: 3, maximum_depth: 1 }
 cc 15c626a02b955ef4e920e45a47df8eddc8531b16e29ea0b377e196397d5139f8 # shrinks to configuration = Configuration { seed: 3744815100832401442, dimension_count: 4, members_per_dimension: 5, input_count: 4, cells_per_input: 12, zipf_exponent: 0.6119365960401669, chain_length: 2, maximum_depth: 3 }
+cc 292a80aa76c71554fee9a9ccaecdc6ce9e2f1c003013ffd701cbe6b1f2592ad2 # shrinks to configuration = Configuration { seed: 4986950097639447050, dimension_count: 4, members_per_dimension: 6, input_count: 3, cells_per_input: 14, zipf_exponent: 1.896091139792078, chain_length: 1, maximum_depth: 2 }

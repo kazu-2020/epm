@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use datagen::representative::{self, Size};
-use dimension::{Dimension, MemberId};
+use dimension::Dimension;
 use formula::CheckedExpression;
 use measure::{MeasureDefinition, MeasureUlid};
 
@@ -47,11 +47,11 @@ fn main() -> std::io::Result<()> {
     let mut all = Vec::new();
     for input in 0..inputs {
         let name = measures[input].definition().name.clone();
-        let rows = measures[input].base().num_rows();
+        let rows = measures[input].len();
         let mut times = Vec::new();
         for edit in 0..edits {
             let row = (edit * 7_919 * 104_729) % rows;
-            let (coordinate, value) = cell(&measures[input], row);
+            let (coordinate, value) = measures[input].cell(row);
             let mut delta = measures[input].delta();
             delta
                 .set(&coordinate, value * 1.01 + 1.0)
@@ -74,20 +74,6 @@ fn main() -> std::io::Result<()> {
     }
     report("all", &mut all);
     Ok(())
-}
-
-fn cell(measure: &measure::Measure, row: usize) -> (Vec<MemberId>, f64) {
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float64Type, UInt32Type};
-    let base = measure.base();
-    let axes = measure.definition().axes.len();
-    let coordinate = (0..axes)
-        .map(|axis| MemberId(base.column(axis).as_primitive::<UInt32Type>().value(row)))
-        .collect();
-    (
-        coordinate,
-        base.column(axes).as_primitive::<Float64Type>().value(row),
-    )
 }
 
 fn report(name: &str, times: &mut [Duration]) {

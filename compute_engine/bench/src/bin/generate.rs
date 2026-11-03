@@ -14,7 +14,7 @@ fn main() -> std::io::Result<()> {
     let workspace = representative::generate(&Size::FULL, bench::SEED);
     eprintln!("generated in {:.1?}", started.elapsed());
     for input in &workspace.inputs {
-        println!("{}\t{}", input.definition().name, input.base().num_rows());
+        println!("{}\t{}", input.definition().name, input.len());
         bench::write_measure(&directory, input)?;
     }
     Ok(())

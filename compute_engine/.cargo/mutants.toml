@@ -13,6 +13,8 @@ exclude_re = [
     "replace \\+ with [-*] in Columns::row_of",
     "replace / with % in Columns::row_of",
     "replace - with \\+ in Columns::row_of",
+    # Not tested: these keep a cursor at 0, so the merge loop never ends and grows its key buffer until the CI runner runs out of memory.
+    "replace \\+= with \\*= in union",
     # Not tested: these only choose a slower path (sort, filter or binary search) that builds the same cells.
     "replace in_order -> bool with false",
     "replace != with == in in_order",
@@ -25,7 +27,10 @@ exclude_re = [
     "replace == with != in apply",
     "replace searched -> bool",
     "replace <= with > in searched",
-    "replace match guard searched\\(members\\) with (true|false) in narrow",
+    "replace match guard searched\\(members\\) with (true|false) in (Columns::)?narrow",
+    # Not tested: the arms are equivalent here. Equal keys take the arm before, and the axes of a key never overlap, so | and ^ give the same key.
+    "replace < with <= in union",
+    "replace \\| with \\^ in KeyLayout::pack",
     "replace Evaluator<'a>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
 ]
 # Not mutated: bench, datagen and oracle are tools, not engine code. No test can tell datagen mutants apart, each oracle mutant relinks DuckDB and reruns the property test, and bench only drives the engines.

@@ -23,10 +23,17 @@ fn main() -> std::io::Result<()> {
         .map(|measure| measure.definition().clone())
         .chain(formulas.iter().map(|formula| formula.result.clone()))
         .collect();
-    let mut cells: usize = measures
-        .iter()
-        .map(|measure| measure.base().num_rows())
-        .sum();
+    let mut cells: usize = measures.iter().map(|measure| measure.len()).sum();
+    for measure in &measures {
+        eprintln!(
+            "{}\t{}\tinput\t{} axes\t{} bytes",
+            measure.definition().name,
+            measure.len(),
+            measure.definition().axes.len(),
+            measure.keys().inner().capacity() + measure.values().inner().capacity()
+        );
+    }
+    eprintln!("after read\t{}", memory());
     let started = Instant::now();
     for formula in &formulas {
         let parsed = formula::parse(&formula.text);
@@ -43,17 +50,69 @@ fn main() -> std::io::Result<()> {
         )
         .expect("the representative formulas evaluate");
         eprintln!(
-            "{}\t{}\t{:.3}s",
+            "{}\t{}\t{:.3}s\t{} axes\t{} bytes\t{}",
             formula.result.name,
-            result.base().num_rows(),
-            step.elapsed().as_secs_f64()
+            result.len(),
+            step.elapsed().as_secs_f64(),
+            result.definition().axes.len(),
+            result.keys().inner().capacity() + result.values().inner().capacity(),
+            memory()
         );
-        cells += result.base().num_rows();
+        cells += result.len();
         measures.push(result);
+    }
+    let mut seen = std::collections::HashMap::new();
+    for measure in &measures {
+        let mut fresh = |buffer: &arrow_buffer::Buffer| {
+            if seen
+                .insert(buffer.data_ptr().as_ptr() as usize, buffer.capacity())
+                .is_none()
+            {
+                buffer.capacity()
+            } else {
+                0
+            }
+        };
+        let keys = fresh(measure.keys().inner());
+        let values = fresh(measure.values().inner());
+        eprintln!(
+            "unique\t{}\t{}\tkeys {keys}\tvalues {values}",
+            measure.definition().name,
+            measure.len()
+        );
     }
     println!(
         "cells {cells}, recalculated in {:.3}s",
         started.elapsed().as_secs_f64()
     );
     Ok(())
+}
+
+fn memory() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with("VmRSS") || line.starts_with("VmHWM"))
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(""))
+        .chain(
+            std::fs::read_to_string("/proc/self/stat")
+                .unwrap_or_default()
+                .rsplit(") ")
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .enumerate()
+                .filter_map(|(index, field)| {
+                    let label = match index {
+                        7 => "minflt",
+                        9 => "majflt",
+                        11 => "utime",
+                        12 => "stime",
+                        _ => return None,
+                    };
+                    Some(format!("{label}:{field}"))
+                }),
+        )
+        .collect::<Vec<_>>()
+        .join(" ")
 }

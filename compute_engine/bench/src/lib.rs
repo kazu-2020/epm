@@ -24,8 +24,7 @@ pub fn write_measure(directory: &Path, measure: &Measure) -> std::io::Result<()>
     let mut writer = FileWriter::try_new(file, &schema).map_err(std::io::Error::other)?;
     let batch = measure
         .compact()
-        .base()
-        .clone()
+        .to_record_batch()
         .with_schema(schema)
         .map_err(std::io::Error::other)?;
     writer.write(&batch).map_err(std::io::Error::other)?;

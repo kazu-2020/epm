@@ -8,7 +8,7 @@ use evaluator::EvaluateError;
 use formula::{BinaryOperator, CheckedAxis, CheckedExpression, CheckedNode};
 use measure::{Delta, Measure, MeasureDefinition, MeasureUlid};
 
-use crate::columns::{ByAxis, Columns, find_dimension};
+use crate::columns::{ByAxis, Columns, find_dimension, layout_of};
 pub use crate::region::Region;
 
 pub fn evaluate(
@@ -96,6 +96,7 @@ pub fn recalculate(
     dimensions: &[&Dimension],
 ) -> Result<Delta, EvaluateError> {
     let definition = result.definition();
+    check_layout(result, dimensions)?;
     let new = evaluate_in(expression, definition, measures, dimensions, region)?;
     let old = Columns::from_measure_in(result, region);
     let positions: Vec<usize> = definition
@@ -207,6 +208,13 @@ fn changed_in(
     })
 }
 
+fn check_layout(measure: &Measure, dimensions: &[&Dimension]) -> Result<(), EvaluateError> {
+    if *measure.layout() != layout_of(dimensions, &measure.definition().axes)? {
+        return Err(EvaluateError::MeasureLayoutChanged(measure.ulid()));
+    }
+    Ok(())
+}
+
 fn find_attribute<'d>(
     dimensions: &[&'d Dimension],
     dimension: dimension::DimensionUlid,
@@ -236,6 +244,7 @@ impl<'a> Evaluator<'a> {
                 if measure.definition().axes != *axes {
                     return Err(EvaluateError::MeasureAxesChanged(*ulid));
                 }
+                check_layout(measure, self.dimensions)?;
                 if axes.iter().any(|&axis| region.members(axis).is_some()) {
                     Ok(Columns::from_measure_in(measure, region))
                 } else {
@@ -275,9 +284,8 @@ impl<'a> Evaluator<'a> {
                     region.clone().without(*dimension)
                 };
                 region.constrain(*dimension, members.iter().map(|member| member.0).collect());
-                Ok(self
-                    .node(value, &region)?
-                    .filter(*dimension, members, *keeps_axis))
+                self.node(value, &region)?
+                    .filter(*dimension, members, *keeps_axis, self.dimensions)
             }
             CheckedNode::Sum { value, by } => {
                 let value = self.node(value, &self.source_region(by, region)?)?;
