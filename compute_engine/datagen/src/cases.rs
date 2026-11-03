@@ -116,7 +116,7 @@ pub const CASES: &[Case] = &[
         ],
     },
     Case {
-        name: "軸の少ない側が左でもセルは全軸のメジャーから",
+        name: "左の項の軸が少なくても、セルは全軸を持つ右の項から作る",
         steps: &[("結果", "'人数' - '売上'")],
         expected: &[
             (&[0, 0], -98.0),
@@ -252,9 +252,9 @@ impl Default for Fixture {
                 &[(&[0, 0], 1.0), (&[1, 0], 2.0)],
             ),
             (
-                measure_definition(16, "桁落ち", &[DEPARTMENT]),
-                // 1 added next to ±1e16 is rounded away, so only coordinate order, which cancels the two large values first, keeps it.
-                &[(&[0], 1e16), (&[1], -1e16), (&[2], 1.0)],
+                measure_definition(16, "桁落ち", &[DEPARTMENT, PERIOD]),
+                // Not stored in coordinate order: the rows are laid out by 部門 first, so adding them as stored rounds 1 away next to 1e16, while 期間 first cancels the two large values before 1.
+                &[(&[0, 0], 1e16), (&[0, 1], 1.0), (&[1, 0], -1e16)],
             ),
         ];
         let results = [
