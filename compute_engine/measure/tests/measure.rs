@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arrow_array::{
     ArrayRef, FixedSizeBinaryArray, Float64Array, RecordBatch, StringArray, UInt32Array,
+    cast::AsArray, types::Float64Type,
 };
 use arrow_schema::{Field, Schema};
 use dimension::{Dimension, DimensionDefinition, DimensionUlid, KeyKind, MemberId};
@@ -68,7 +69,7 @@ fn coordinate(period: u32, department: u32) -> [MemberId; 2] {
 }
 
 fn rows(measure: &Measure) -> Vec<(u32, u32, f64)> {
-    let base = measure.base();
+    let base = measure.to_record_batch();
     let columns = base.columns();
     let periods = columns[0].as_any().downcast_ref::<UInt32Array>().unwrap();
     let departments = columns[1].as_any().downcast_ref::<UInt32Array>().unwrap();
@@ -171,7 +172,10 @@ fn base_keeps_the_definition_schema_even_when_given_nullable_columns() {
         RecordBatch::try_new(Arc::new(Schema::new(fields)), columns(&[(0, 0, 1.0)])).unwrap();
     let measure =
         Measure::try_new(definition.clone(), batch, &[&periods(), &departments()]).unwrap();
-    assert_eq!(measure.base().schema().as_ref(), &definition.schema());
+    assert_eq!(
+        measure.to_record_batch().schema().as_ref(),
+        &definition.schema()
+    );
 }
 
 #[test]
@@ -349,7 +353,7 @@ fn compaction_folds_deltas_into_a_sorted_base_without_changing_reads() {
     );
     let rebuilt = Measure::try_new(
         definition(SALES, vec![PERIOD, DEPARTMENT]),
-        measure.base().clone(),
+        measure.to_record_batch().clone(),
         &[&periods(), &departments()],
     );
     assert!(rebuilt.is_ok());
@@ -533,6 +537,39 @@ fn keys_wider_than_64_bits_are_rejected() {
 }
 
 #[test]
+fn a_one_member_axis_in_front_of_64_bits_packs_without_overflow() {
+    let layout = KeyLayout::new(&[1, u32::MAX, u32::MAX]).unwrap();
+    let key = layout.pack([0, u32::MAX, 9]);
+    assert_eq!(
+        layout.members(key).collect::<Vec<_>>(),
+        vec![0, u32::MAX, 9]
+    );
+    assert!(layout.holds(key));
+}
+
+#[test]
+fn a_reordered_layout_keeps_each_axis_width() {
+    let layout = KeyLayout::new(&[3, 2]).unwrap();
+    assert_eq!(layout.reordered(&[1, 0]), KeyLayout::new(&[2, 3]).unwrap());
+}
+
+#[test]
+fn one_axis_of_a_key_is_a_field_that_a_member_fits_in() {
+    let layout = KeyLayout::new(&[5, 3]).unwrap();
+    assert_eq!(layout.len(), 2);
+    assert!(!layout.is_empty());
+    assert!(KeyLayout::new(&[]).unwrap().is_empty());
+    assert_eq!(layout.field(0), 0b11100);
+    assert_eq!(layout.field(1), 0b00011);
+    assert_eq!(layout.place(0, 4), 0b10000);
+    assert_eq!(layout.place(1, 2), 0b00010);
+    assert!(layout.fits(0, 7));
+    assert!(!layout.fits(0, 8));
+    assert!(layout.fits(1, 3));
+    assert!(!layout.fits(1, 4));
+}
+
+#[test]
 fn keys_from_the_engine_are_checked_like_a_base() {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
     let layout = KeyLayout::new(&[3, 2]).unwrap();
@@ -582,4 +619,27 @@ fn values_read_from_part_of_a_larger_buffer_are_copied_out() {
         measure.cells().collect::<Vec<_>>(),
         vec![(vec![MemberId(0), MemberId(1)], 2.0)]
     );
+}
+
+#[test]
+fn values_that_fill_their_buffer_are_kept_without_a_copy() {
+    let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
+    let columns = columns(&[(0, 0, 1.0), (1, 0, 3.0)]);
+    let given = columns[2].as_primitive::<Float64Type>().values().clone();
+    assert_eq!(given.inner().capacity(), given.inner().len());
+    let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
+    let measure = Measure::try_new(definition, batch, &[&periods(), &departments()]).unwrap();
+    assert!(measure.values().inner().ptr_eq(given.inner()));
+    assert_eq!(measure.values().to_vec(), vec![1.0, 3.0]);
+    assert_eq!(measure.len(), 2);
+    assert!(!measure.is_empty());
+    let batch =
+        RecordBatch::try_new(Arc::new(measure.definition().schema()), crate::columns(&[])).unwrap();
+    let empty = Measure::try_new(
+        measure.definition().clone(),
+        batch,
+        &[&periods(), &departments()],
+    )
+    .unwrap();
+    assert!(empty.is_empty());
 }

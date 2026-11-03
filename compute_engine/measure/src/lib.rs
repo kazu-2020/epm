@@ -53,6 +53,7 @@ pub fn normalize(value: f64) -> Option<f64> {
 pub struct KeyLayout {
     shifts: Vec<u32>,
     masks: Vec<u64>,
+    width: u32,
 }
 
 impl KeyLayout {
@@ -61,18 +62,33 @@ impl KeyLayout {
             .iter()
             .map(|&len| u32::BITS - len.saturating_sub(1).leading_zeros())
             .collect();
-        if widths.iter().sum::<u32>() > u64::BITS {
+        Self::of_widths(&widths)
+    }
+
+    pub fn reordered(&self, positions: &[usize]) -> KeyLayout {
+        let widths: Vec<u32> = positions
+            .iter()
+            .map(|&position| self.masks[position].count_ones())
+            .collect();
+        Self::of_widths(&widths).expect("the same widths fit in a key")
+    }
+
+    fn of_widths(widths: &[u32]) -> Option<KeyLayout> {
+        let width = widths.iter().sum::<u32>();
+        if width > u64::BITS {
             return None;
         }
         let mut shifts = vec![0; widths.len()];
         let mut shift = 0;
-        for (slot, &width) in shifts.iter_mut().zip(&widths).rev() {
-            *slot = shift;
+        for (slot, &width) in shifts.iter_mut().zip(widths).rev() {
+            // Not 64 for a zero-width axis in front of 64 bits: a u64 shifted by 64 overflows.
+            *slot = shift.min(u64::BITS - 1);
             shift += width;
         }
         Some(KeyLayout {
             shifts,
             masks: widths.iter().map(|&width| (1u64 << width) - 1).collect(),
+            width,
         })
     }
 
@@ -85,16 +101,26 @@ impl KeyLayout {
     }
 
     pub fn pack(&self, members: impl IntoIterator<Item = u32>) -> u64 {
-        self.shifts
-            .iter()
-            .zip(members)
-            .fold(0, |key, (&shift, member)| {
+        self.shifts.iter().zip(&self.masks).zip(members).fold(
+            0,
+            |key, ((&shift, &mask), member)| {
+                debug_assert!(u64::from(member) <= mask);
                 key | (u64::from(member) << shift)
-            })
+            },
+        )
     }
 
     pub fn place(&self, axis: usize, member: u32) -> u64 {
-        (u64::from(member) & self.masks[axis]) << self.shifts[axis]
+        debug_assert!(self.fits(axis, member));
+        u64::from(member) << self.shifts[axis]
+    }
+
+    pub fn fits(&self, axis: usize, member: u32) -> bool {
+        u64::from(member) <= self.masks[axis]
+    }
+
+    pub fn field(&self, axis: usize) -> u64 {
+        self.masks[axis] << self.shifts[axis]
     }
 
     pub fn member(&self, key: u64, axis: usize) -> u32 {
@@ -102,12 +128,7 @@ impl KeyLayout {
     }
 
     pub fn holds(&self, key: u64) -> bool {
-        let width = self
-            .shifts
-            .first()
-            .zip(self.masks.first())
-            .map_or(0, |(shift, mask)| shift + mask.count_ones());
-        key.checked_shr(width).unwrap_or(0) == 0
+        key.checked_shr(self.width).unwrap_or(0) == 0
     }
 
     pub fn members(&self, key: u64) -> impl Iterator<Item = u32> + '_ {
@@ -233,9 +254,7 @@ impl Measure {
         dimensions: &[&Dimension],
     ) -> Result<Self, MeasureError> {
         let (axes, layout) = Self::axes(&definition, dimensions)?;
-        if keys.len() != values.len() {
-            return Err(MeasureError::KeyMismatch(keys.len().min(values.len())));
-        }
+        assert_eq!(keys.len(), values.len(), "one value per key");
         if let Some(row) = keys.iter().position(|&key| !layout.holds(key)) {
             return Err(MeasureError::KeyMismatch(row));
         }
@@ -293,7 +312,6 @@ impl Measure {
                 return Err(MeasureError::UnnormalizedValue(row));
             }
         }
-        // Keys order coordinates as the columns do: each axis takes the bits below the axes before it.
         for row in 1..keys.len() {
             match keys[row - 1].cmp(&keys[row]) {
                 Ordering::Less => {}
@@ -382,7 +400,7 @@ impl Measure {
         &self.values
     }
 
-    pub fn base(&self) -> RecordBatch {
+    pub fn to_record_batch(&self) -> RecordBatch {
         let mut columns: Vec<ArrayRef> = (0..self.axes.len())
             .map(|axis| {
                 Arc::new(UInt32Array::from_iter_values(

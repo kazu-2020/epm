@@ -93,7 +93,7 @@ fn memory() -> String {
         .unwrap_or_default()
         .lines()
         .filter(|line| line.starts_with("VmRSS") || line.starts_with("VmHWM"))
-        .map(|line| line.split_whitespace().skip(1).collect::<Vec<_>>().join(""))
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(""))
         .chain(
             std::fs::read_to_string("/proc/self/stat")
                 .unwrap_or_default()
@@ -102,8 +102,16 @@ fn memory() -> String {
                 .unwrap_or_default()
                 .split_whitespace()
                 .enumerate()
-                .filter(|(index, _)| [7, 9, 11, 12].contains(index))
-                .map(|(_, field)| field.to_string()),
+                .filter_map(|(index, field)| {
+                    let label = match index {
+                        7 => "minflt",
+                        9 => "majflt",
+                        11 => "utime",
+                        12 => "stime",
+                        _ => return None,
+                    };
+                    Some(format!("{label}:{field}"))
+                }),
         )
         .collect::<Vec<_>>()
         .join(" ")

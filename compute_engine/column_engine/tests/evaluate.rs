@@ -115,6 +115,22 @@ fn errors_name_what_the_evaluation_could_not_find() {
         .unwrap_err(),
         EvaluateError::MissingAttribute(AttributeUlid(Ulid(999)))
     );
+    let one_period = Dimension::try_new(
+        periods.definition().clone(),
+        periods.batch().slice(0, 1),
+        &[],
+    )
+    .expect("the first period alone is a dimension");
+    assert_eq!(
+        column_engine::evaluate(
+            &sales,
+            result,
+            &measures,
+            &[&one_period, departments, divisions]
+        )
+        .unwrap_err(),
+        EvaluateError::MeasureLayoutChanged(fixture.definition("売上").ulid)
+    );
     let without_axes = MeasureDefinition {
         ulid: MeasureUlid(Ulid(99)),
         name: "軸なし".into(),

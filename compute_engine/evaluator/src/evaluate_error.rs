@@ -8,6 +8,7 @@ pub enum EvaluateError {
     ResultAxesChanged(MeasureUlid),
     MissingMeasure(MeasureUlid),
     MeasureAxesChanged(MeasureUlid),
+    MeasureLayoutChanged(MeasureUlid),
     MissingDimension(DimensionUlid),
     MissingAttribute(AttributeUlid),
     InvalidResult(MeasureError),

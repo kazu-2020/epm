@@ -51,7 +51,7 @@ fn lengths(dimensions: &[&Dimension], axes: &[DimensionUlid]) -> Result<Vec<u32>
         .collect()
 }
 
-fn layout_of(
+pub(crate) fn layout_of(
     dimensions: &[&Dimension],
     axes: &[DimensionUlid],
 ) -> Result<KeyLayout, EvaluateError> {
@@ -80,6 +80,21 @@ fn stable_order(keys: &[u64]) -> Vec<usize> {
         rows.sort_by_key(|&row| keys[row]);
     }
     rows
+}
+
+fn reorder(layout: &KeyLayout, keys: &[u64], positions: &[usize]) -> (KeyLayout, Vec<u64>) {
+    let reordered = layout.reordered(positions);
+    let keys = keys
+        .iter()
+        .map(|&key| {
+            reordered.pack(
+                positions
+                    .iter()
+                    .map(|&position| layout.member(key, position)),
+            )
+        })
+        .collect();
+    (reordered, keys)
 }
 
 fn runs<'r>(keys: &[u64], rows: &'r [usize]) -> Vec<&'r [usize]> {
@@ -166,14 +181,7 @@ impl Columns {
         keys: Vec<u64>,
         values: Vec<f64>,
     ) -> Columns {
-        let rows: Vec<usize> = stable_order(&keys)
-            .into_iter()
-            .filter(|&row| normalize(values[row]).is_some())
-            .collect();
-        if rows.len() == keys.len()
-            && rows.iter().enumerate().all(|(at, &row)| at == row)
-            && values.iter().all(|&value| is_normalized(value))
-        {
+        if keys.is_sorted() && values.iter().all(|&value| is_normalized(value)) {
             return Columns {
                 axes,
                 layout,
@@ -181,6 +189,10 @@ impl Columns {
                 values: values.into(),
             };
         }
+        let rows: Vec<usize> = stable_order(&keys)
+            .into_iter()
+            .filter(|&row| normalize(values[row]).is_some())
+            .collect();
         Columns {
             axes,
             layout,
@@ -207,15 +219,12 @@ impl Columns {
             axes: self.axes.clone(),
             layout: self.layout.clone(),
             keys: rows.iter().map(|&row| self.keys[row]).collect(),
-            values: rows
-                .iter()
-                .map(|&row| normalize(self.values[row]).unwrap_or(0.0))
-                .collect(),
+            values: rows.iter().map(|&row| self.values[row]).collect(),
         }
     }
 
     fn len(&self) -> usize {
-        self.values.len()
+        self.keys.len()
     }
 
     pub(crate) fn number(value: f64) -> Columns {
@@ -348,8 +357,11 @@ impl Columns {
             let Some(members) = *constraint else {
                 continue;
             };
-            if let [member] = members.iter().copied().collect::<Vec<_>>()[..] {
-                mask |= self.layout.place(axis, u32::MAX);
+            if members.len() == 1
+                && let Some(&member) = members.first()
+                && self.layout.fits(axis, member)
+            {
+                mask |= self.layout.field(axis);
                 pattern |= self.layout.place(axis, member);
                 continue;
             }
@@ -446,22 +458,7 @@ impl Columns {
         }
         let mut order: Vec<usize> = (0..axes.len()).collect();
         order.sort_by_key(|&position| axes[position]);
-        let lengths: Vec<u32> = order
-            .iter()
-            .map(|&position| measure.layout().member(u64::MAX, position) + 1)
-            .collect();
-        let layout = KeyLayout::new(&lengths).expect("the measure's key fits the same widths");
-        let keys = measure
-            .keys()
-            .iter()
-            .map(|&key| {
-                layout.pack(
-                    order
-                        .iter()
-                        .map(|&position| measure.layout().member(key, position)),
-                )
-            })
-            .collect();
+        let (layout, keys) = reorder(measure.layout(), measure.keys(), &order);
         Columns::from_keys(
             order.iter().map(|&position| axes[position]).collect(),
             layout,
@@ -699,10 +696,11 @@ impl Columns {
         } else {
             spread.iter().collect()
         };
-        let coordinates = creators[1..]
+        let first = creators[0];
+        let keys = creators[1..]
             .iter()
-            .fold(creators[0].coordinates(), |union, creator| {
-                union.union(creator)
+            .fold(first.keys.clone(), |keys, creator| {
+                union(keys, &creator.keys)
             });
         let mut sources = terms
             .iter()
@@ -712,102 +710,51 @@ impl Columns {
                 } else {
                     Source::Indexed(
                         Index::new(term, dimensions)?,
-                        term.axes
-                            .iter()
-                            .map(|&axis| coordinates.position(axis))
-                            .collect(),
+                        term.axes.iter().map(|&axis| first.position(axis)).collect(),
                     )
                 };
                 Ok((*sign, term, source))
             })
             .collect::<Result<Vec<_>, EvaluateError>>()?;
         let mut key = Vec::new();
-        let values: Vec<f64> = coordinates
-            .keys
-            .iter()
-            .map(|&coordinate| {
-                let mut total = 0.0;
-                for (sign, term, source) in &mut sources {
-                    let value =
-                        match source {
-                            Source::Cursor(next) => {
-                                if *next < term.len() && term.keys[*next] == coordinate {
-                                    *next += 1;
-                                    term.values[*next - 1]
-                                } else {
-                                    0.0
+        let values: Vec<f64> =
+            keys.iter()
+                .map(|&coordinate| {
+                    let mut total = 0.0;
+                    for (sign, term, source) in &mut sources {
+                        let value =
+                            match source {
+                                Source::Cursor(next) => {
+                                    if *next < term.len() && term.keys[*next] == coordinate {
+                                        *next += 1;
+                                        term.values[*next - 1]
+                                    } else {
+                                        0.0
+                                    }
                                 }
-                            }
-                            Source::Indexed(index, positions) => {
-                                key.clear();
-                                key.extend(positions.iter().map(|&position| {
-                                    coordinates.layout.member(coordinate, position)
-                                }));
-                                index.find(&key).map_or(0.0, |found| term.values[found])
-                            }
-                        };
-                    match sign {
-                        Sign::Plus => total += value,
-                        Sign::Minus => total -= value,
+                                Source::Indexed(index, positions) => {
+                                    key.clear();
+                                    key.extend(positions.iter().map(|&position| {
+                                        first.layout.member(coordinate, position)
+                                    }));
+                                    index.find(&key).map_or(0.0, |found| term.values[found])
+                                }
+                            };
+                        match sign {
+                            Sign::Plus => total += value,
+                            Sign::Minus => total -= value,
+                        }
                     }
-                }
-                total
-            })
-            .collect();
-        drop(sources);
+                    total
+                })
+                .collect();
         Ok(Columns {
+            axes: first.axes.clone(),
+            layout: first.layout.clone(),
+            keys,
             values: values.into(),
-            ..coordinates
         }
         .normalized())
-    }
-
-    fn coordinates(&self) -> Columns {
-        Columns {
-            axes: self.axes.clone(),
-            layout: self.layout.clone(),
-            keys: self.keys.clone(),
-            // Not an empty buffer: len() counts the values, and these columns have one row per key.
-            values: vec![0.0; self.keys.len()].into(),
-        }
-    }
-
-    fn union(self, other: &Columns) -> Columns {
-        if self.axes == other.axes && self.keys.ptr_eq(&other.keys) {
-            return self;
-        }
-        let (mine, theirs) = (&self.keys, &other.keys);
-        let mut keys = Vec::with_capacity(mine.len().max(theirs.len()));
-        let (mut own, mut their) = (0, 0);
-        while own < mine.len() || their < theirs.len() {
-            let next = match (mine.get(own), theirs.get(their)) {
-                (Some(&left), Some(&right)) if left == right => {
-                    own += 1;
-                    their += 1;
-                    left
-                }
-                (Some(&left), Some(&right)) if left < right => {
-                    own += 1;
-                    left
-                }
-                (Some(&left), None) => {
-                    own += 1;
-                    left
-                }
-                (_, Some(&right)) => {
-                    their += 1;
-                    right
-                }
-                (None, None) => unreachable!("the loop stops when both are done"),
-            };
-            keys.push(next);
-        }
-        Columns {
-            values: vec![0.0; keys.len()].into(),
-            keys: keys.into(),
-            axes: self.axes,
-            layout: self.layout,
-        }
     }
 
     pub(crate) fn sum(
@@ -928,24 +875,7 @@ impl Columns {
         if positions.is_sorted() {
             return Measure::try_from_keys(definition, self.keys, self.values, dimensions);
         }
-        let layout = KeyLayout::new(
-            &positions
-                .iter()
-                .map(|&position| self.layout.member(u64::MAX, position) + 1)
-                .collect::<Vec<_>>(),
-        )
-        .expect("the same widths fit in a key");
-        let keys: Vec<u64> = self
-            .keys
-            .iter()
-            .map(|&key| {
-                layout.pack(
-                    positions
-                        .iter()
-                        .map(|&position| self.layout.member(key, position)),
-                )
-            })
-            .collect();
+        let (_, keys) = reorder(&self.layout, &self.keys, &positions);
         let rows = stable_order(&keys);
         Measure::try_from_keys(
             definition,
@@ -954,6 +884,38 @@ impl Columns {
             dimensions,
         )
     }
+}
+
+fn union(mine: ScalarBuffer<u64>, theirs: &ScalarBuffer<u64>) -> ScalarBuffer<u64> {
+    if mine.ptr_eq(theirs) {
+        return mine;
+    }
+    let mut keys = Vec::with_capacity(mine.len().max(theirs.len()));
+    let (mut own, mut their) = (0, 0);
+    while own < mine.len() || their < theirs.len() {
+        let next = match (mine.get(own), theirs.get(their)) {
+            (Some(&left), Some(&right)) if left == right => {
+                own += 1;
+                their += 1;
+                left
+            }
+            (Some(&left), Some(&right)) if left < right => {
+                own += 1;
+                left
+            }
+            (Some(&left), None) => {
+                own += 1;
+                left
+            }
+            (_, Some(&right)) => {
+                their += 1;
+                right
+            }
+            (None, None) => unreachable!("the loop stops when both are done"),
+        };
+        keys.push(next);
+    }
+    keys.into()
 }
 
 #[cfg(test)]
@@ -971,8 +933,10 @@ mod tests {
             vec![3.0, 4.0, 5.0],
         );
         let cost = Columns {
+            axes: sales.axes.clone(),
+            layout: sales.layout.clone(),
+            keys: sales.keys.clone(),
             values: vec![1.0, 1.0, 1.0].into(),
-            ..sales.coordinates()
         };
         let keys = sales.keys.clone();
 
