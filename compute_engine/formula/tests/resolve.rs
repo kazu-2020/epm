@@ -28,6 +28,19 @@ fn render(expression: &ResolvedExpression) -> String {
             let axes: Vec<_> = by.iter().map(render_axis).collect();
             format!("(Sum {} BY [{}])", render(value), axes.join(" "))
         }
+        ResolvedExpressionKind::Filter {
+            value,
+            dimension,
+            members,
+        } => {
+            let members: Vec<_> = members.iter().map(|member| member.0.to_string()).collect();
+            format!(
+                "(Filter {} '{}' [{}])",
+                render(value),
+                common::dimension_name(*dimension),
+                members.join(" ")
+            )
+        }
         ResolvedExpressionKind::Error => "ERROR".into(),
     }
 }
@@ -60,10 +73,11 @@ fn render_axis(axis: &ResolvedAxis) -> String {
 
 fn resolve(source: &str) -> (String, Vec<(ResolveErrorKind, Range<usize>)>) {
     let parsed = formula::parse(source);
+    let dimensions = common::dimensions_with_members();
     let resolved = formula::resolve(
         &parsed.expression,
         &common::measures(),
-        &common::dimensions(),
+        &dimensions.iter().collect::<Vec<_>>(),
     );
     let errors = resolved
         .errors
@@ -245,4 +259,39 @@ fn a_syntax_error_node_resolves_to_an_error_node_without_a_new_error() {
         resolve("'売上' +"),
         ("(Add '売上'{部門,期間} ERROR)".into(), vec![])
     );
+}
+
+#[test]
+fn a_filter_resolves_its_dimension_and_member_keys_to_sorted_unique_ids() {
+    assert_eq!(
+        resolve("'売上'['期間': '2月', '1月', '2月']"),
+        ("(Filter '売上'{部門,期間} '期間' [0 1])".into(), vec![])
+    );
+}
+
+#[test]
+fn a_filter_with_an_unknown_dimension_or_member_is_an_error_at_that_name() {
+    for (source, kind, part) in [
+        (
+            "'売上'['期間': '3月', '1月']",
+            ResolveErrorKind::UnknownMember,
+            "'3月'",
+        ),
+        (
+            "'売上'['期間間': '1月']",
+            ResolveErrorKind::UnknownName,
+            "'期間間'",
+        ),
+        (
+            "'売上'['売上計画': '1月']",
+            ResolveErrorKind::MeasureAsAxis,
+            "'売上計画'",
+        ),
+    ] {
+        assert_eq!(
+            resolve(source),
+            ("ERROR".into(), vec![(kind, common::span(source, part))]),
+            "{source}"
+        );
+    }
 }

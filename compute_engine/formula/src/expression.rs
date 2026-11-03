@@ -20,7 +20,18 @@ pub enum ExpressionKind {
         value: Box<Expression>,
         by: Vec<Axis>,
     },
+    Filter {
+        value: Box<Expression>,
+        dimension: QuotedName,
+        members: Vec<QuotedName>,
+    },
     Error,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuotedName {
+    pub name: String,
+    pub span: Range<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

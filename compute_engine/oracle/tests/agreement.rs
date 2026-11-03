@@ -1,6 +1,6 @@
 use datagen::cases::exact;
 use datagen::{Configuration, Formula};
-use dimension::{Dimension, DimensionDefinition};
+use dimension::Dimension;
 use measure::{Measure, MeasureDefinition};
 use oracle::Oracle;
 use proptest::prelude::*;
@@ -46,10 +46,6 @@ proptest! {
     fn evaluator_and_column_engine_agree_with_the_oracle(configuration in configurations()) {
         let workspace = datagen::generate(&configuration);
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
-        let dimension_definitions: Vec<DimensionDefinition> = dimensions
-            .iter()
-            .map(|dimension| dimension.definition().clone())
-            .collect();
         let measure_definitions: Vec<MeasureDefinition> = workspace
             .inputs
             .iter()
@@ -63,7 +59,7 @@ proptest! {
             let parsed = formula::parse(text);
             prop_assert_eq!(&parsed.errors, &[], "{}", text);
             let resolved =
-                formula::resolve(&parsed.expression, &measure_definitions, &dimension_definitions);
+                formula::resolve(&parsed.expression, &measure_definitions, &dimensions);
             prop_assert_eq!(&resolved.errors, &[], "{}", text);
             let check = formula::check_axes(&resolved.expression, &result.axes);
             prop_assert_eq!(&check.errors, &[], "{}", text);

@@ -122,6 +122,32 @@ impl Columns {
             .expect("the columns have every axis asked for")
     }
 
+    pub(crate) fn filter(
+        self,
+        dimension: DimensionUlid,
+        members: &[MemberId],
+        keeps_axis: bool,
+    ) -> Columns {
+        let position = self.position(dimension);
+        let kept: Vec<usize> = (0..self.len())
+            .filter(|&row| members.contains(&MemberId(self.members[position][row])))
+            .collect();
+        let mut axes = self.axes;
+        let mut columns = self.members;
+        if !keeps_axis {
+            axes.remove(position);
+            columns.remove(position);
+        }
+        Columns {
+            axes,
+            members: columns
+                .iter()
+                .map(|column| kept.iter().map(|&row| column[row]).collect())
+                .collect(),
+            values: kept.iter().map(|&row| self.values[row]).collect(),
+        }
+    }
+
     pub(crate) fn negate(self) -> Columns {
         let values = self.values.iter().map(|value| -value).collect();
         Columns::new(self.axes, self.members, values)

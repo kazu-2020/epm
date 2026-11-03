@@ -2,7 +2,7 @@ use std::iter::Peekable;
 use std::ops::Range;
 use std::vec;
 
-use crate::expression::{Axis, BinaryOperator, Expression, ExpressionKind};
+use crate::expression::{Axis, BinaryOperator, Expression, ExpressionKind, QuotedName};
 use crate::lexer::{self, Token, TokenKind};
 use crate::syntax_error::{SyntaxError, SyntaxErrorKind};
 
@@ -158,7 +158,14 @@ impl Parser {
                     }
                     _ => unreachable!("peeked a number, a name or a word"),
                 };
-                Ok(Subtree::leaf(kind, token.span))
+                let mut subtree = Subtree::leaf(kind, token.span);
+                while matches!(
+                    self.tokens.peek().map(|token| &token.kind),
+                    Some(TokenKind::LeftBracket)
+                ) {
+                    subtree = self.filter(depth, subtree)?;
+                }
+                Ok(subtree)
             }
             _ => {
                 let position = self.position();
@@ -223,6 +230,77 @@ impl Parser {
                 span: keyword.span.start..end,
             },
         })
+    }
+
+    fn filter(&mut self, depth: usize, value: Subtree) -> Parsing {
+        let Subtree {
+            expression: value,
+            height,
+        } = value;
+        self.descend(depth + 1 + height)?;
+        let opening = self.next_token();
+        let parts = self.filter_parts();
+        if parts.is_none() {
+            while self
+                .next_if(|kind| {
+                    !matches!(kind, TokenKind::RightBracket | TokenKind::RightParenthesis)
+                })
+                .is_some()
+            {}
+        }
+        let end = match self.next_if(|kind| matches!(kind, TokenKind::RightBracket)) {
+            Some(closing) => closing.span.end,
+            None => {
+                let position = self.position();
+                self.error(SyntaxErrorKind::ExpectedClosingBracket, position..position);
+                self.previous_end.max(opening.span.end)
+            }
+        };
+        let span = value.span.start..end;
+        let kind = match parts {
+            Some((dimension, members)) => ExpressionKind::Filter {
+                value: Box::new(value),
+                dimension,
+                members,
+            },
+            None => ExpressionKind::Error,
+        };
+        Ok(Subtree {
+            height: 1 + height,
+            expression: Expression { kind, span },
+        })
+    }
+
+    fn filter_parts(&mut self) -> Option<(QuotedName, Vec<QuotedName>)> {
+        let dimension = self.filter_name()?;
+        if self
+            .next_if(|kind| matches!(kind, TokenKind::Colon))
+            .is_none()
+        {
+            let position = self.position();
+            self.error(SyntaxErrorKind::ExpectedFilter, position..position);
+            return None;
+        }
+        let mut members = vec![self.filter_name()?];
+        while self
+            .next_if(|kind| matches!(kind, TokenKind::Comma))
+            .is_some()
+        {
+            members.push(self.filter_name()?);
+        }
+        Some((dimension, members))
+    }
+
+    fn filter_name(&mut self) -> Option<QuotedName> {
+        match self.name() {
+            Some((name, span)) if !name.is_empty() => Some(QuotedName { name, span }),
+            Some(_) => None,
+            None => {
+                let position = self.position();
+                self.error(SyntaxErrorKind::ExpectedFilter, position..position);
+                None
+            }
+        }
     }
 
     fn by(&mut self, keyword: Range<usize>) -> Vec<Axis> {

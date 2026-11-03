@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use dimension::{AttributeUlid, DimensionUlid};
+use dimension::{AttributeUlid, DimensionUlid, MemberId};
 use measure::MeasureUlid;
 
 use crate::expression::BinaryOperator;
@@ -27,6 +27,11 @@ pub enum ResolvedExpressionKind {
     Sum {
         value: Box<ResolvedExpression>,
         by: Vec<ResolvedAxis>,
+    },
+    Filter {
+        value: Box<ResolvedExpression>,
+        dimension: DimensionUlid,
+        members: Vec<MemberId>,
     },
     Error,
 }

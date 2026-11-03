@@ -17,6 +17,22 @@ fn render(expression: &Expression) -> String {
             let axes: Vec<_> = by.iter().map(render_axis).collect();
             format!("(Sum {} BY {})", render(value), axes.join(" "))
         }
+        ExpressionKind::Filter {
+            value,
+            dimension,
+            members,
+        } => {
+            let members: Vec<_> = members
+                .iter()
+                .map(|member| format!("'{}'", member.name))
+                .collect();
+            format!(
+                "(Filter {} '{}': {})",
+                render(value),
+                dimension.name,
+                members.join(" ")
+            )
+        }
         ExpressionKind::Error => "ERROR".into(),
     }
 }
@@ -723,5 +739,64 @@ fn each_sum_is_one_level_of_the_128_level_limit() {
     assert_eq!(
         errors(&format!("SUM(1, {}1{})", "(".repeat(128), ")".repeat(128))),
         [(SyntaxErrorKind::TooDeeplyNested, 134..265)]
+    );
+}
+
+#[test]
+fn a_filter_follows_a_name_and_may_be_chained() {
+    assert_eq!(
+        tree("'粗利'['バージョン': '実績']"),
+        "(Filter '粗利' 'バージョン': '実績')"
+    );
+    assert_eq!(
+        tree("'X'['D': 'a', 'b']['E': 'c'] * 2"),
+        "(Multiply (Filter (Filter 'X' 'D': 'a' 'b') 'E': 'c') 2)"
+    );
+    let source = "1 + 'X'['D': 'a']";
+    let ExpressionKind::Binary { right, .. } = formula::parse(source).expression.kind else {
+        panic!("{source} parses to an addition");
+    };
+    assert_eq!(right.span, 4..source.len());
+}
+
+#[test]
+fn a_malformed_filter_is_an_error_node_up_to_its_closing_bracket() {
+    assert_outcome(
+        "'X'['D' 'a']",
+        "ERROR",
+        &[(SyntaxErrorKind::ExpectedFilter, 8..8)],
+    );
+    assert_outcome(
+        "'X'['D': ] + 1",
+        "(Add ERROR 1)",
+        &[(SyntaxErrorKind::ExpectedFilter, 9..9)],
+    );
+    assert_outcome(
+        "'X'['D': 'a'",
+        "(Filter 'X' 'D': 'a')",
+        &[(SyntaxErrorKind::ExpectedClosingBracket, 12..12)],
+    );
+}
+
+#[test]
+fn each_filter_counts_as_one_level_toward_the_nesting_limit() {
+    let filter = "['D': 'a']";
+    assert_eq!(errors(&format!("'X'{}", filter.repeat(128))), []);
+    assert_eq!(
+        errors(&format!("'X'{}", filter.repeat(129))),
+        [(SyntaxErrorKind::TooDeeplyNested, 1283..1293)]
+    );
+    assert_eq!(
+        errors(&format!("-'X'{}", filter.repeat(128))),
+        [(SyntaxErrorKind::TooDeeplyNested, 1274..1284)]
+    );
+}
+
+#[test]
+fn an_empty_name_in_a_filter_is_reported_once_by_the_lexer() {
+    assert_outcome(
+        "'X'['': 'a']",
+        "ERROR",
+        &[(SyntaxErrorKind::EmptyName, 4..6)],
     );
 }

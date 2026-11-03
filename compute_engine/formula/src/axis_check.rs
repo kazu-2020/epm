@@ -78,6 +78,21 @@ impl Checker {
                 let axes = self.sum(value.as_ref(), by, allowed);
                 value.and(axes)
             }
+            ResolvedExpressionKind::Filter {
+                value,
+                dimension,
+                members,
+            } => {
+                let mut axes = self.axes(value, allowed)?;
+                if !axes.contains(dimension) {
+                    self.error(AxisErrorKind::ValueLacksAxis, *dimension, &expression.span);
+                    return None;
+                }
+                if members.len() == 1 {
+                    axes.remove(dimension);
+                }
+                Some(axes)
+            }
             ResolvedExpressionKind::Error => None,
         }
     }

@@ -23,4 +23,6 @@ pub enum SyntaxErrorKind {
     ByNotLast,
     ExpressionInBy,
     ExpectedAxis,
+    ExpectedFilter,
+    ExpectedClosingBracket,
 }

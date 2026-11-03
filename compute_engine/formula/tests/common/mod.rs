@@ -1,6 +1,10 @@
 use std::ops::Range;
+use std::sync::Arc;
 
-use dimension::{AttributeDefinition, AttributeUlid, DimensionDefinition, DimensionUlid, KeyKind};
+use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
+use dimension::{
+    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionUlid, KeyKind,
+};
 use measure::{MeasureDefinition, MeasureUlid};
 use ulid::Ulid;
 
@@ -18,6 +22,7 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
     };
     vec![
         dimension(PERIOD, "期間", vec![]),
+        dimension(DIVISION, "事業部", vec![]),
         dimension(
             DEPARTMENT,
             "部門",
@@ -27,9 +32,34 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
                 target: DIVISION,
             }],
         ),
-        dimension(DIVISION, "事業部", vec![]),
         dimension(VERSION, "バージョン", vec![]),
     ]
+}
+
+pub fn dimensions_with_members() -> Vec<Dimension> {
+    let mut loaded: Vec<Dimension> = Vec::new();
+    for definition in dimensions() {
+        let (names, divisions): (&[&str], &[u32]) = match definition.name.as_str() {
+            "期間" => (&["1月", "2月"], &[]),
+            "部門" => (&["営業", "開発"], &[0, 0]),
+            "事業部" => (&["第一"], &[]),
+            _ => (&["実績", "予算", "見込"], &[]),
+        };
+        let ulids = FixedSizeBinaryArray::try_from_iter(
+            (0..names.len()).map(|row| Ulid(definition.ulid.0.0 * 100 + row as u128).to_bytes()),
+        )
+        .unwrap();
+        let mut columns: Vec<ArrayRef> =
+            vec![Arc::new(ulids), Arc::new(StringArray::from(names.to_vec()))];
+        if !definition.attributes.is_empty() {
+            columns.push(Arc::new(UInt32Array::from(divisions.to_vec())));
+        }
+        let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
+        let targets: Vec<&Dimension> = loaded.iter().collect();
+        let dimension = Dimension::try_new(definition, batch, &targets).unwrap();
+        loaded.push(dimension);
+    }
+    loaded
 }
 
 pub fn measures() -> Vec<MeasureDefinition> {

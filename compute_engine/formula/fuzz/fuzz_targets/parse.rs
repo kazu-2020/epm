@@ -37,6 +37,20 @@ fn check(source: &str, expression: &Expression, outer: &Range<usize>) -> usize {
             }
             1 + height
         }
+        ExpressionKind::Filter {
+            value,
+            dimension,
+            members,
+        } => {
+            let height = check(source, value, &expression.span);
+            let mut previous_end = value.span.end;
+            for name in std::iter::once(dimension).chain(members) {
+                assert_inside(source, &name.span, &expression.span);
+                assert!(previous_end <= name.span.start, "filter names overlap");
+                previous_end = name.span.end;
+            }
+            1 + height
+        }
         ExpressionKind::Number(_) | ExpressionKind::Name(_) | ExpressionKind::Error => 0,
     }
 }

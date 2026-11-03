@@ -15,10 +15,11 @@ type Outcome = (
 );
 
 fn resolved(source: &str) -> formula::Resolved {
+    let dimensions = common::dimensions_with_members();
     formula::resolve(
         &formula::parse(source).expression,
         &common::measures(),
-        &common::dimensions(),
+        &dimensions.iter().collect::<Vec<_>>(),
     )
 }
 
@@ -349,6 +350,16 @@ fn render(node: &CheckedNode) -> String {
                 .collect();
             format!("(Sum {} BY {})", render(value), axes.join(" "))
         }
+        CheckedNode::Filter {
+            value,
+            dimension,
+            members,
+            keeps_axis,
+        } => format!(
+            "(Filter {} {}: {members:?} keeps_axis={keeps_axis})",
+            render(value),
+            common::dimension_name(*dimension)
+        ),
     }
 }
 
@@ -388,5 +399,37 @@ fn a_chain_of_additions_and_subtractions_splits_into_signed_terms_through_parent
             (Sign::Minus, "[部門 期間]".to_string()),
             (Sign::Plus, "(Multiply 1 3)".to_string()),
         ]
+    );
+}
+
+#[test]
+fn a_one_member_filter_removes_its_axis_and_a_filter_of_more_keeps_it() {
+    assert_eq!(check("全社売上", "'売上'['部門': '営業']"), passes(&[]));
+    let source = "'売上'['部門': '営業', '開発']";
+    assert_eq!(
+        check("全社売上", source),
+        outcome(
+            Some(&[]),
+            &[(ReducesAxesWithoutAggregation, "部門", 0..source.len())]
+        )
+    );
+    assert_eq!(check("売上計画", source), passes(&[]));
+    let check = formula::check_axes(
+        &resolved("'売上'['部門': '開発'] + '売上'['部門': '営業', '開発']['期間': '1月']")
+            .expression,
+        &result("売上計画").axes,
+    );
+    assert_eq!(
+        render(check.checked.expect("the check passes").root()),
+        "(Add (Filter [部門 期間] 部門: [MemberId(1)] keeps_axis=false) (Filter (Filter [部門 期間] 部門: [MemberId(0), MemberId(1)] keeps_axis=true) 期間: [MemberId(0)] keeps_axis=false))"
+    );
+}
+
+#[test]
+fn a_filter_needs_its_dimension_on_the_value() {
+    let source = "'全社売上'['部門': '営業']";
+    assert_eq!(
+        check("全社売上", source),
+        unknown(&[(ValueLacksAxis, "部門", 0..source.len())])
     );
 }

@@ -8,4 +8,5 @@ dimension = { path = "../dimension" }
 measure = { path = "../measure" }
 
 [dev-dependencies]
+arrow-array = "60.1.0"
 ulid = "3.0.0"

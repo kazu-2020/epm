@@ -19,6 +19,9 @@ pub(crate) enum TokenKind {
     RightParenthesis,
     Comma,
     Point,
+    LeftBracket,
+    RightBracket,
+    Colon,
 }
 
 #[derive(Debug)]
@@ -164,6 +167,9 @@ fn punctuation(character: char) -> Option<TokenKind> {
         '(' => Some(TokenKind::LeftParenthesis),
         ')' => Some(TokenKind::RightParenthesis),
         ',' => Some(TokenKind::Comma),
+        '[' => Some(TokenKind::LeftBracket),
+        ']' => Some(TokenKind::RightBracket),
+        ':' => Some(TokenKind::Colon),
         _ => None,
     }
 }

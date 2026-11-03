@@ -70,6 +70,12 @@ impl<'a> Evaluator<'a> {
                 &self.node(left)?,
                 &self.node(right)?,
             )),
+            CheckedNode::Filter {
+                value,
+                dimension,
+                members,
+                keeps_axis,
+            } => Ok(self.node(value)?.filter(*dimension, members, *keeps_axis)),
             CheckedNode::Sum { value, by } => {
                 let value = self.node(value)?;
                 let by = by
