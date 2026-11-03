@@ -5,7 +5,7 @@ use arrow_array::{
 };
 use arrow_schema::{Field, Schema};
 use dimension::{Dimension, DimensionDefinition, DimensionUlid, KeyKind, MemberId};
-use measure::{Measure, MeasureDefinition, MeasureError, MeasureUlid, normalize};
+use measure::{KeyLayout, Measure, MeasureDefinition, MeasureError, MeasureUlid, normalize};
 use ulid::Ulid;
 
 const PERIOD: DimensionUlid = DimensionUlid(Ulid(100));
@@ -504,5 +504,57 @@ fn cells_read_through_the_deltas() {
             (coordinate(1, 1).to_vec(), 5.0),
             (coordinate(2, 0).to_vec(), 30.0),
         ]
+    );
+}
+
+#[test]
+fn keys_order_coordinates_as_the_member_columns_do() {
+    let layout = KeyLayout::new(&[3, 2]).unwrap();
+    let keys: Vec<u64> = [(0, 1), (1, 0), (2, 1)]
+        .iter()
+        .map(|&(period, department)| layout.pack([period, department]))
+        .collect();
+    assert!(keys.is_sorted());
+    assert_eq!(layout.members(keys[2]).collect::<Vec<_>>(), vec![2, 1]);
+    assert_eq!(
+        try_sales(&[(0, 1, 1.0), (2, 0, 2.0)])
+            .unwrap()
+            .keys()
+            .to_vec(),
+        vec![layout.pack([0, 1]), layout.pack([2, 0])]
+    );
+}
+
+#[test]
+fn keys_wider_than_64_bits_are_rejected() {
+    assert!(KeyLayout::new(&[u32::MAX, u32::MAX]).is_some());
+    assert!(KeyLayout::new(&[u32::MAX, u32::MAX, 2]).is_none());
+}
+
+#[test]
+fn given_keys_must_match_the_member_columns() {
+    let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
+    let batch =
+        RecordBatch::try_new(Arc::new(definition.schema()), columns(&[(0, 1, 1.0)])).unwrap();
+    let layout = KeyLayout::new(&[3, 2]).unwrap();
+    let dimensions = [&periods(), &departments()];
+    assert_eq!(
+        Measure::try_new_with_keys(
+            definition.clone(),
+            batch.clone(),
+            Some(vec![layout.pack([1, 0])].into()),
+            &dimensions
+        )
+        .unwrap_err(),
+        MeasureError::KeyMismatch(0)
+    );
+    assert!(
+        Measure::try_new_with_keys(
+            definition,
+            batch,
+            Some(vec![layout.pack([0, 1])].into()),
+            &dimensions
+        )
+        .is_ok()
     );
 }

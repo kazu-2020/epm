@@ -275,9 +275,8 @@ impl<'a> Evaluator<'a> {
                     region.clone().without(*dimension)
                 };
                 region.constrain(*dimension, members.iter().map(|member| member.0).collect());
-                Ok(self
-                    .node(value, &region)?
-                    .filter(*dimension, members, *keeps_axis))
+                self.node(value, &region)?
+                    .filter(*dimension, members, *keeps_axis, self.dimensions)
             }
             CheckedNode::Sum { value, by } => {
                 let value = self.node(value, &self.source_region(by, region)?)?;

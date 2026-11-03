@@ -8,6 +8,7 @@ use std::sync::{Arc, LazyLock};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, UInt32Type};
 use arrow_array::{Array, ArrayRef, Float64Array, RecordBatch, UInt32Array};
+use arrow_buffer::ScalarBuffer;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use dimension::{Dimension, DimensionUlid, MemberId};
 use foldhash::fast::RandomState;
@@ -49,6 +50,59 @@ pub fn normalize(value: f64) -> Option<f64> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyLayout {
+    shifts: Vec<u32>,
+    masks: Vec<u64>,
+}
+
+impl KeyLayout {
+    pub fn new(lengths: &[u32]) -> Option<KeyLayout> {
+        let widths: Vec<u32> = lengths
+            .iter()
+            .map(|&len| u32::BITS - len.saturating_sub(1).leading_zeros())
+            .collect();
+        if widths.iter().sum::<u32>() > u64::BITS {
+            return None;
+        }
+        let mut shifts = vec![0; widths.len()];
+        let mut shift = 0;
+        for (slot, &width) in shifts.iter_mut().zip(&widths).rev() {
+            *slot = shift;
+            shift += width;
+        }
+        Some(KeyLayout {
+            shifts,
+            masks: widths.iter().map(|&width| (1u64 << width) - 1).collect(),
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.shifts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.shifts.is_empty()
+    }
+
+    pub fn pack(&self, members: impl IntoIterator<Item = u32>) -> u64 {
+        self.shifts
+            .iter()
+            .zip(members)
+            .fold(0, |key, (&shift, member)| {
+                key | (u64::from(member) << shift)
+            })
+    }
+
+    pub fn member(&self, key: u64, axis: usize) -> u32 {
+        ((key >> self.shifts[axis]) & self.masks[axis]) as u32
+    }
+
+    pub fn members(&self, key: u64) -> impl Iterator<Item = u32> + '_ {
+        (0..self.len()).map(move |axis| self.member(key, axis))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Axis {
     dimension: DimensionUlid,
@@ -69,6 +123,8 @@ pub enum MeasureError {
         axis: DimensionUlid,
         member: MemberId,
     },
+    KeyTooWide,
+    KeyMismatch(usize),
     UnnormalizedValue(usize),
     UnsortedCoordinate(usize),
     DuplicateCoordinate(usize),
@@ -94,6 +150,8 @@ pub struct Measure {
     axes: Vec<Axis>,
     base: RecordBatch,
     coordinate_columns: Vec<UInt32Array>,
+    layout: KeyLayout,
+    keys: ScalarBuffer<u64>,
     values: Float64Array,
     // Not Vec<Delta>: every version would copy all earlier deltas of the measure.
     deltas: Vec<Arc<Delta>>,
@@ -103,6 +161,15 @@ impl Measure {
     pub fn try_new(
         definition: MeasureDefinition,
         base: RecordBatch,
+        dimensions: &[&Dimension],
+    ) -> Result<Self, MeasureError> {
+        Self::try_new_with_keys(definition, base, None, dimensions)
+    }
+
+    pub fn try_new_with_keys(
+        definition: MeasureDefinition,
+        base: RecordBatch,
+        keys: Option<ScalarBuffer<u64>>,
         dimensions: &[&Dimension],
     ) -> Result<Self, MeasureError> {
         if definition.axes.is_empty() {
@@ -150,7 +217,10 @@ impl Measure {
 
         let base = RecordBatch::try_new(Arc::new(expected), base.columns().to_vec())
             .expect("columns without nulls fit the non-nullable measure schema");
-        let measure = Self::from_parts(definition, axes, base);
+        let layout = KeyLayout::new(&axes.iter().map(|axis| axis.len).collect::<Vec<_>>())
+            .ok_or(MeasureError::KeyTooWide)?;
+        let given = keys.is_some();
+        let measure = Self::from_parts(definition, axes, layout, base, keys);
         let (axes, coordinate_columns, values) =
             (&measure.axes, &measure.coordinate_columns, &measure.values);
         for (axis, column) in axes.iter().zip(coordinate_columns) {
@@ -166,11 +236,22 @@ impl Measure {
                 return Err(MeasureError::UnnormalizedValue(row));
             }
         }
+        if measure.keys.len() != values.len() {
+            return Err(MeasureError::KeyMismatch(measure.keys.len()));
+        }
+        if given
+            && let Some(row) = (0..values.len()).find(|&row| {
+                measure.keys[row]
+                    != measure
+                        .layout
+                        .pack(coordinate_columns.iter().map(|column| column.value(row)))
+            })
+        {
+            return Err(MeasureError::KeyMismatch(row));
+        }
+        // Keys order coordinates as the columns do: each axis takes the bits below the axes before it.
         for row in 1..values.len() {
-            let previous = coordinate_columns
-                .iter()
-                .map(|column| column.value(row - 1));
-            match previous.cmp(coordinate_columns.iter().map(|column| column.value(row))) {
+            match measure.keys[row - 1].cmp(&measure.keys[row]) {
                 Ordering::Less => {}
                 Ordering::Equal => return Err(MeasureError::DuplicateCoordinate(row)),
                 Ordering::Greater => return Err(MeasureError::UnsortedCoordinate(row)),
@@ -339,7 +420,13 @@ impl Measure {
         columns.push(Arc::new(Float64Array::from(values)));
         let base = RecordBatch::try_new(Arc::new(self.definition.schema()), columns)
             .expect("compaction builds columns in the measure schema");
-        Self::from_parts(self.definition.clone(), self.axes.clone(), base)
+        Self::from_parts(
+            self.definition.clone(),
+            self.axes.clone(),
+            self.layout.clone(),
+            base,
+            None,
+        )
     }
 
     fn merged_delta(&self) -> Delta {
@@ -352,21 +439,42 @@ impl Measure {
         merged
     }
 
-    fn from_parts(definition: MeasureDefinition, axes: Vec<Axis>, base: RecordBatch) -> Measure {
+    fn from_parts(
+        definition: MeasureDefinition,
+        axes: Vec<Axis>,
+        layout: KeyLayout,
+        base: RecordBatch,
+        keys: Option<ScalarBuffer<u64>>,
+    ) -> Measure {
         let columns = base.columns();
-        let coordinate_columns = columns[..axes.len()]
+        let coordinate_columns: Vec<UInt32Array> = columns[..axes.len()]
             .iter()
             .map(|column| column.as_primitive::<UInt32Type>().clone())
             .collect();
         let values = columns[axes.len()].as_primitive::<Float64Type>().clone();
+        let keys = keys.unwrap_or_else(|| {
+            (0..values.len())
+                .map(|row| layout.pack(coordinate_columns.iter().map(|column| column.value(row))))
+                .collect()
+        });
         Measure {
             definition,
             axes,
             base,
             coordinate_columns,
+            layout,
+            keys,
             values,
             deltas: Vec::new(),
         }
+    }
+
+    pub fn layout(&self) -> &KeyLayout {
+        &self.layout
+    }
+
+    pub fn keys(&self) -> &ScalarBuffer<u64> {
+        &self.keys
     }
 
     fn copy_rows(
