@@ -67,6 +67,7 @@ impl CheckedNode {
                 };
                 right.push_terms(right_sign, terms);
             }
+            CheckedNode::Negate(operand) => operand.push_terms(sign.flipped(), terms),
             _ => terms.push((sign, self)),
         }
     }

@@ -366,7 +366,8 @@ fn a_passing_check_keeps_the_resolved_tree_without_spans() {
 }
 
 #[test]
-fn a_chain_of_additions_and_subtractions_splits_into_signed_terms_whatever_its_parentheses() {
+fn a_chain_of_additions_and_subtractions_splits_into_signed_terms_through_parentheses_and_negation()
+{
     let check = formula::check_axes(
         &resolved("'売上' - (2 - -'売上') + 1 * 3").expression,
         &result("売上").axes,
@@ -384,7 +385,7 @@ fn a_chain_of_additions_and_subtractions_splits_into_signed_terms_whatever_its_p
         [
             (Sign::Plus, "[部門 期間]".to_string()),
             (Sign::Minus, "2".to_string()),
-            (Sign::Plus, "(Negate [部門 期間])".to_string()),
+            (Sign::Minus, "[部門 期間]".to_string()),
             (Sign::Plus, "(Multiply 1 3)".to_string()),
         ]
     );
