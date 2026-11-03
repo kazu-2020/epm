@@ -63,7 +63,13 @@ impl Generator<'_> {
 impl Formulas<'_, '_, '_> {
     fn formula(&mut self, index: usize) -> Formula {
         let previous = (index > 0).then(|| self.references.len() - 1);
-        let axes = self.generator.axes(self.dimensions);
+        let mut axes = self.generator.axes(self.dimensions);
+        if let Some(previous) = previous
+            && !fits(&self.references[previous].axes, &axes)
+            && self.generator.random.random_bool(0.5)
+        {
+            axes = union(axes, self.references[previous].axes.clone());
+        }
         let depth = self.generator.configuration.maximum_depth;
         let root = match previous {
             None => self.expression(&axes, depth),

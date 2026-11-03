@@ -144,6 +144,11 @@ pub const CASES: &[Case] = &[
         expected: &[(&[0], 357.0), (&[1], 357.0)],
     },
     Case {
+        name: "SUM は座標の小さい順に足す",
+        steps: &[("期間結果", "SUM('桁落ち')")],
+        expected: &[(&[0], 1.0), (&[1], 1.0)],
+    },
+    Case {
         name: "空のメジャーの SUM は空",
         steps: &[("期間結果", "SUM('空')")],
         expected: &[],
@@ -194,7 +199,7 @@ impl Default for Fixture {
             &[&divisions],
         );
         let dimensions = vec![periods, departments, divisions];
-        let input_cells: [(MeasureDefinition, &Cells); 5] = [
+        let input_cells: [(MeasureDefinition, &Cells); 6] = [
             (
                 measure_definition(11, "売上", &[DEPARTMENT, PERIOD]),
                 &[
@@ -216,6 +221,11 @@ impl Default for Fixture {
             (
                 measure_definition(15, "改定", &[DEPARTMENT, PERIOD]),
                 &[(&[0, 0], 1.0), (&[1, 0], 2.0)],
+            ),
+            (
+                measure_definition(16, "桁落ち", &[DEPARTMENT]),
+                // 1 added next to ±1e16 is rounded away, so only coordinate order, which cancels the two large values first, keeps it.
+                &[(&[0], 1e16), (&[1], -1e16), (&[2], 1.0)],
             ),
         ];
         let results = [
