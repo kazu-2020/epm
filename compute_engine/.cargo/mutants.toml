@@ -9,6 +9,9 @@ exclude_re = [
     # Not tested: these turn the binary search into an endless loop, and cargo-mutants reports the timeout as a failure that turns CI red.
     "replace < with <= in Measure::search",
     "replace \\+ with [-*] in Measure::search",
+    "replace < with <= in Columns::value_at",
+    "replace \\+ with [-*] in Columns::value_at",
+    "replace / with % in Columns::value_at",
 ]
 # Not mutated: datagen and oracle are test tools, not engine code. A datagen mutant mostly changes which data is generated, which no test can tell apart, and every oracle mutant relinks DuckDB and reruns the property test.
 exclude_globs = ["datagen/**", "oracle/**"]

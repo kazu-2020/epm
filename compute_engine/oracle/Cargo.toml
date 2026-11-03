@@ -10,6 +10,7 @@ formula = { path = "../formula" }
 measure = { path = "../measure" }
 
 [dev-dependencies]
+column_engine = { path = "../column_engine" }
 datagen = { path = "../datagen" }
 evaluator = { path = "../evaluator" }
 proptest = "1.12.0"

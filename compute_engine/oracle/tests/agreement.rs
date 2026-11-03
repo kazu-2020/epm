@@ -43,7 +43,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
     #[test]
-    fn evaluator_agrees_with_the_oracle(configuration in configurations()) {
+    fn evaluator_and_column_engine_agree_with_the_oracle(configuration in configurations()) {
         let workspace = datagen::generate(&configuration);
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let dimension_definitions: Vec<DimensionDefinition> = dimensions
@@ -76,6 +76,13 @@ proptest! {
                 &dimensions,
             )
             .expect("the evaluator evaluates a checked formula");
+            let column = column_engine::evaluate(
+                &checked,
+                result,
+                &measures.iter().collect::<Vec<_>>(),
+                &dimensions,
+            )
+            .expect("the column engine evaluates a checked formula");
             let expected = oracle
                 .evaluate(&checked, result.ulid)
                 .expect("the oracle evaluates a checked formula");
@@ -84,6 +91,15 @@ proptest! {
                 exact(&actual_cells),
                 exact(&expected),
                 "{} = {} with {:?}",
+                result.name,
+                text,
+                configuration
+            );
+            let column_cells: Vec<_> = column.cells().collect();
+            prop_assert_eq!(
+                exact(&column_cells),
+                exact(&expected),
+                "column engine: {} = {} with {:?}",
                 result.name,
                 text,
                 configuration
