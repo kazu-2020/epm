@@ -688,6 +688,15 @@ impl Columns {
     }
 
     fn union(self, other: &Columns) -> Columns {
+        if self.axes == other.axes
+            && self
+                .members
+                .iter()
+                .zip(&other.members)
+                .all(|(mine, theirs)| mine.ptr_eq(theirs))
+        {
+            return self;
+        }
         let (mine, theirs) = (self.columns(), other.columns());
         let mut rows = Vec::new();
         let (mut own, mut their) = ((0..self.len()).peekable(), (0..other.len()).peekable());
@@ -891,5 +900,24 @@ impl Columns {
         let base = RecordBatch::try_new(Arc::new(definition.schema()), arrays)
             .expect("the columns follow the result's schema");
         Measure::try_new(definition, base, dimensions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adding_terms_on_the_same_coordinates_keeps_their_key_columns() {
+        let axis = DimensionUlid(ulid::Ulid(1));
+        let keys: Column = vec![0, 2, 5].into();
+        let sales = Columns::new(vec![axis], vec![keys.clone()], vec![3.0, 4.0, 5.0]);
+        let cost = Columns::new(vec![axis], vec![keys.clone()], vec![1.0, 1.0, 1.0]);
+
+        let profit = Columns::add(vec![(Sign::Plus, sales), (Sign::Minus, cost)], &[])
+            .expect("both terms have every axis");
+
+        assert!(profit.members[0].ptr_eq(&keys));
+        assert_eq!(&profit.values[..], &[2.0, 3.0, 4.0]);
     }
 }
