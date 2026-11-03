@@ -20,6 +20,12 @@ exclude_re = [
     "replace dense_strides -> Option<\\(usize, Vec<usize>\\)> with None",
     "replace <= with > in dense_strides",
     "column_engine/src/columns.rs:[0-9]+:[0-9]+: replace << with >>",
+    # Not tested: these only read more cells than the region needs, and the old and new cells outside it are equal.
+    "replace == with != in apply",
+    "replace searched -> bool",
+    "replace <= with > in searched",
+    "replace match guard searched\\(members\\) with (true|false) in narrow",
+    "replace Evaluator<'a>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
 ]
 # Not mutated: bench, datagen and oracle are tools, not engine code. A datagen mutant mostly changes which data is generated, which no test can tell apart, every oracle mutant relinks DuckDB and reruns the property test, and bench only drives the engines.
 exclude_globs = ["bench/**", "datagen/**", "oracle/**"]

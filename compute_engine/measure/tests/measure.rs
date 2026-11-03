@@ -231,6 +231,19 @@ fn delta_overrides_base_and_newer_delta_wins() {
     assert_eq!(measure.get(&coordinate(1, 1)).unwrap(), Some(6.0));
     assert_eq!(measure.get(&coordinate(2, 0)).unwrap(), Some(30.0));
     assert_eq!(measure.delta_len(), 4);
+    let changes: Vec<(Vec<MemberId>, Option<f64>)> = measure
+        .changes()
+        .map(|(coordinate, value)| (coordinate.to_vec(), value))
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            (coordinate(0, 0).to_vec(), Some(11.0)),
+            (coordinate(1, 1).to_vec(), Some(5.0)),
+            (coordinate(0, 1).to_vec(), None),
+            (coordinate(1, 1).to_vec(), Some(6.0)),
+        ]
+    );
 }
 
 #[test]

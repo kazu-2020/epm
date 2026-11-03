@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -11,7 +13,13 @@ use evaluator::EvaluateError;
 use formula::{BinaryOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
+use crate::region::Region;
+
 const DENSE_LIMIT: usize = 1 << 22;
+// Above this many members, walking the runs beats one binary search per member.
+const SEARCHED_MEMBERS: usize = 64;
+// Each thread scans whole pieces, so a large range is cut up for the threads to share.
+const SCANNED_ROWS: usize = 1 << 20;
 
 type Column = ScalarBuffer<u32>;
 
@@ -64,6 +72,36 @@ fn sorted_rows(columns: &[&[u32]], len: usize) -> Vec<usize> {
 fn runs<'r>(columns: &[&[u32]], rows: &'r [usize]) -> Vec<&'r [usize]> {
     rows.chunk_by(|&left, &right| compare(columns, left, columns, right) == Ordering::Equal)
         .collect()
+}
+
+// Rows sorted by coordinate keep each leading member in one run, so a leading axis with few members is a binary search; the axes after it are checked row by row.
+fn narrow(
+    columns: &[&[u32]],
+    constraints: &[Option<&BTreeSet<u32>>],
+    axis: usize,
+    rows: Range<usize>,
+    kept: &mut Vec<Range<usize>>,
+) {
+    let members = match constraints.get(axis) {
+        Some(&Some(members)) if searched(members) => members,
+        _ => return kept.push(rows),
+    };
+    let column = &columns[axis][rows.clone()];
+    for &member in members {
+        let start = column.partition_point(|&candidate| candidate < member);
+        let end = column.partition_point(|&candidate| candidate <= member);
+        narrow(
+            columns,
+            constraints,
+            axis + 1,
+            rows.start + start..rows.start + end,
+            kept,
+        );
+    }
+}
+
+fn searched(members: &BTreeSet<u32>) -> bool {
+    members.len() <= SEARCHED_MEMBERS
 }
 
 fn slices(columns: &[Column]) -> Vec<&[u32]> {
@@ -190,7 +228,192 @@ impl Columns {
     }
 
     pub(crate) fn from_measure(measure: &Measure) -> Columns {
-        let measure = measure.compact();
+        Columns::from_base(&measure.compact())
+    }
+
+    pub(crate) fn from_measure_in(measure: &Measure, region: &Region) -> Columns {
+        let base = Columns::from_base(measure).restrict(region);
+        let definition = &measure.definition().axes;
+        let positions: Vec<usize> = base
+            .axes
+            .iter()
+            .map(|axis| {
+                definition
+                    .iter()
+                    .position(|candidate| candidate == axis)
+                    .expect("the columns keep the measure's axes")
+            })
+            .collect();
+        let mut changes = BTreeMap::new();
+        for (coordinate, value) in measure.changes() {
+            let key: Vec<u32> = positions
+                .iter()
+                .map(|&position| coordinate[position].0)
+                .collect();
+            let inside = base.axes.iter().zip(&key).all(|(&axis, member)| {
+                region
+                    .members(axis)
+                    .is_none_or(|members| members.contains(member))
+            });
+            if inside {
+                changes.insert(key, value);
+            }
+        }
+        base.with_changes(changes)
+    }
+
+    fn with_changes(self, changes: BTreeMap<Vec<u32>, Option<f64>>) -> Columns {
+        if changes.is_empty() {
+            return self;
+        }
+        let columns = self.columns();
+        let mut cells: Vec<(Vec<u32>, f64)> = Vec::new();
+        let (mut rows, mut changes) = ((0..self.len()).peekable(), changes.into_iter().peekable());
+        loop {
+            let (coordinate, value) = match (rows.peek(), changes.peek()) {
+                (None, None) => break,
+                (Some(_), None) => self.cell(&columns, rows.next()),
+                (None, Some(_)) => changes.next().expect("peeked above"),
+                (Some(&row), Some((key, _))) => {
+                    match columns
+                        .iter()
+                        .map(|column| column[row])
+                        .cmp(key.iter().copied())
+                    {
+                        Ordering::Less => self.cell(&columns, rows.next()),
+                        Ordering::Greater => changes.next().expect("peeked above"),
+                        Ordering::Equal => {
+                            rows.next();
+                            changes.next().expect("peeked above")
+                        }
+                    }
+                }
+            };
+            if let Some(value) = value {
+                cells.push((coordinate, value));
+            }
+        }
+        Columns {
+            members: (0..self.axes.len())
+                .map(|axis| {
+                    cells
+                        .iter()
+                        .map(|(coordinate, _)| coordinate[axis])
+                        .collect()
+                })
+                .collect(),
+            values: cells.iter().map(|&(_, value)| value).collect(),
+            axes: self.axes,
+        }
+    }
+
+    fn cell(&self, columns: &[&[u32]], row: Option<usize>) -> (Vec<u32>, Option<f64>) {
+        let row = row.expect("peeked above");
+        (
+            columns.iter().map(|column| column[row]).collect(),
+            Some(self.values[row]),
+        )
+    }
+
+    pub(crate) fn restrict(self, region: &Region) -> Columns {
+        let constraints: Vec<Option<&BTreeSet<u32>>> =
+            self.axes.iter().map(|&axis| region.members(axis)).collect();
+        if constraints.iter().all(Option::is_none) {
+            return self;
+        }
+        let columns = self.columns();
+        let mut ranges = Vec::new();
+        narrow(&columns, &constraints, 0, 0..self.len(), &mut ranges);
+        let checks: Vec<(&[u32], Vec<bool>)> = constraints
+            .iter()
+            .zip(&columns)
+            .filter_map(|(constraint, &column)| {
+                let members = (*constraint)?;
+                let mut inside = vec![false; members.last().map_or(0, |&last| last as usize + 1)];
+                for &member in members {
+                    inside[member as usize] = true;
+                }
+                Some((column, inside))
+            })
+            .collect();
+        let pieces: Vec<Range<usize>> = ranges
+            .into_iter()
+            .flat_map(|range| {
+                range
+                    .clone()
+                    .step_by(SCANNED_ROWS)
+                    .map(move |start| start..(start + SCANNED_ROWS).min(range.end))
+            })
+            .collect();
+        let threads = std::thread::available_parallelism().map_or(1, usize::from);
+        let scan = |pieces: &[Range<usize>]| -> Vec<usize> {
+            pieces
+                .iter()
+                .cloned()
+                .flatten()
+                .filter(|&row| {
+                    checks.iter().all(|(column, inside)| {
+                        inside.get(column[row] as usize).copied().unwrap_or(false)
+                    })
+                })
+                .collect()
+        };
+        let rows: Vec<usize> = std::thread::scope(|scope| {
+            let handles: Vec<_> = pieces
+                .chunks(pieces.len().div_ceil(threads).max(1))
+                .map(|chunk| scope.spawn(|| scan(chunk)))
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().expect("a scan does not panic"))
+                .collect()
+        });
+        Columns {
+            members: gather(&self.columns(), &rows),
+            values: rows.iter().map(|&row| self.values[row]).collect(),
+            axes: self.axes,
+        }
+    }
+
+    pub(crate) fn changes_from(&self, old: &Columns) -> Vec<(Vec<u32>, Option<f64>)> {
+        let (new_columns, old_columns) = (self.columns(), old.columns());
+        let mut changes = Vec::new();
+        let (mut new, mut old_rows) = ((0..self.len()).peekable(), (0..old.len()).peekable());
+        loop {
+            match (new.peek(), old_rows.peek()) {
+                (None, None) => break,
+                (Some(_), None) => {
+                    let (coordinate, value) = self.cell(&new_columns, new.next());
+                    changes.push((coordinate, value));
+                }
+                (None, Some(_)) => {
+                    let (coordinate, _) = old.cell(&old_columns, old_rows.next());
+                    changes.push((coordinate, None));
+                }
+                (Some(&row), Some(&old_row)) => {
+                    match compare(&new_columns, row, &old_columns, old_row) {
+                        Ordering::Less => {
+                            changes.push(self.cell(&new_columns, new.next()));
+                        }
+                        Ordering::Greater => {
+                            let (coordinate, _) = old.cell(&old_columns, old_rows.next());
+                            changes.push((coordinate, None));
+                        }
+                        Ordering::Equal => {
+                            old_rows.next();
+                            let (coordinate, value) = self.cell(&new_columns, new.next());
+                            if value.map(f64::to_bits) != Some(old.values[old_row].to_bits()) {
+                                changes.push((coordinate, value));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        changes
+    }
+
+    fn from_base(measure: &Measure) -> Columns {
         let axes = measure.definition().axes.clone();
         let base = measure.base();
         let members = (0..axes.len())
@@ -206,6 +429,14 @@ impl Columns {
             .as_primitive::<Float64Type>()
             .values()
             .clone();
+        if axes.is_sorted() {
+            // Measure::try_new already holds the base sorted by coordinate and normalized.
+            return Columns {
+                axes,
+                members,
+                values,
+            };
+        }
         Columns::new(axes, members, values)
     }
 

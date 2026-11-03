@@ -13,4 +13,5 @@ measure = { path = "../measure" }
 
 [dev-dependencies]
 datagen = { path = "../datagen" }
+rand = "0.10.3"
 ulid = "3.0.0"
