@@ -16,7 +16,7 @@ use rand::{RngExt, SeedableRng};
 use rand_distr::Zipf;
 use ulid::Ulid;
 
-const LARGEST_MAGNITUDE: u32 = 10_000;
+const LARGEST_MAGNITUDE_IN_CENTS: u32 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Configuration {
@@ -162,7 +162,7 @@ impl Generator<'_> {
         if self.random.random_bool(0.1) {
             return 0.0;
         }
-        let magnitude = f64::from(self.skewed(LARGEST_MAGNITUDE) + 1);
+        let magnitude = f64::from(self.skewed(LARGEST_MAGNITUDE_IN_CENTS) + 1) / 100.0;
         if self.random.random_bool(0.3) {
             -magnitude
         } else {
