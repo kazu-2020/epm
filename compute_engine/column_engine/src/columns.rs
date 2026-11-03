@@ -341,18 +341,24 @@ impl Columns {
         }
         let mut ranges = Vec::new();
         self.narrow(&constraints, 0, 0..self.len(), &mut ranges);
-        let checks: Vec<(usize, Vec<bool>)> = constraints
-            .iter()
-            .enumerate()
-            .filter_map(|(axis, constraint)| {
-                let members = (*constraint)?;
-                let mut inside = vec![false; members.last().map_or(0, |&last| last as usize + 1)];
-                for &member in members {
-                    inside[member as usize] = true;
-                }
-                Some((axis, inside))
-            })
-            .collect();
+        // Not one bitmap per axis for a single member: one mask and compare over the whole key tests them all.
+        let (mut mask, mut pattern) = (0, 0);
+        let mut checks: Vec<(usize, Vec<bool>)> = Vec::new();
+        for (axis, constraint) in constraints.iter().enumerate() {
+            let Some(members) = *constraint else {
+                continue;
+            };
+            if let [member] = members.iter().copied().collect::<Vec<_>>()[..] {
+                mask |= self.layout.place(axis, u32::MAX);
+                pattern |= self.layout.place(axis, member);
+                continue;
+            }
+            let mut inside = vec![false; members.last().map_or(0, |&last| last as usize + 1)];
+            for &member in members {
+                inside[member as usize] = true;
+            }
+            checks.push((axis, inside));
+        }
         let pieces: Vec<Range<usize>> = ranges
             .into_iter()
             .flat_map(|range| {
@@ -364,19 +370,22 @@ impl Columns {
             .collect();
         let threads = std::thread::available_parallelism().map_or(1, usize::from);
         let scan = |pieces: &[Range<usize>]| -> Vec<usize> {
-            pieces
-                .iter()
-                .cloned()
-                .flatten()
-                .filter(|&row| {
-                    checks.iter().all(|(axis, inside)| {
-                        inside
-                            .get(self.layout.member(self.keys[row], *axis) as usize)
-                            .copied()
-                            .unwrap_or(false)
-                    })
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for piece in pieces {
+                for (offset, &key) in self.keys[piece.clone()].iter().enumerate() {
+                    if key & mask == pattern
+                        && checks.iter().all(|(axis, inside)| {
+                            inside
+                                .get(self.layout.member(key, *axis) as usize)
+                                .copied()
+                                .unwrap_or(false)
+                        })
+                    {
+                        rows.push(piece.start + offset);
+                    }
+                }
+            }
+            rows
         };
         let mut chunks = pieces.chunks(pieces.len().div_ceil(threads).max(1));
         let first = chunks.next().unwrap_or_default();

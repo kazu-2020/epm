@@ -93,6 +93,10 @@ impl KeyLayout {
             })
     }
 
+    pub fn place(&self, axis: usize, member: u32) -> u64 {
+        (u64::from(member) & self.masks[axis]) << self.shifts[axis]
+    }
+
     pub fn member(&self, key: u64, axis: usize) -> u32 {
         ((key >> self.shifts[axis]) & self.masks[axis]) as u32
     }
