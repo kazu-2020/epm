@@ -1,0 +1,90 @@
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit to measure (empty means the selected branch)
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency: bench
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    environment: bench
+    timeout-minutes: 150
+    env:
+      AWS_REGION: ap-northeast-1
+      BUCKET: ${{ vars.BENCH_BUCKET }}
+      RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: compute_engine
+      - working-directory: compute_engine
+        run: cargo build --release --locked -p bench
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 10800
+      - name: Upload the binaries
+        run: |
+          for binary in generate recalculate edit; do
+            aws s3 cp "compute_engine/target/release/$binary" "s3://$BUCKET/bin/$RUN/$binary"
+          done
+      - name: Start the instance
+        run: |
+          script=compute_engine/bench/ec2/measure.sh
+          { head -n 1 "$script"; echo "BUCKET=$BUCKET"; echo "RUN=$RUN"; tail -n +2 "$script"; } > user-data.sh
+          aws ec2 run-instances \
+            --launch-template 'LaunchTemplateName=bench,Version=$Latest' \
+            --user-data file://user-data.sh \
+            --query 'Instances[0].[InstanceId,ImageId,InstanceType]' --output text > instance.txt
+          read -r instance image type < instance.txt
+          echo "INSTANCE=$instance" >> "$GITHUB_ENV"
+          echo "Instance $instance, $type, AMI $image" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Wait for the results
+        timeout-minutes: 120
+        run: |
+          done_key="results/$RUN/exit-code"
+          until aws s3api head-object --bucket "$BUCKET" --key "$done_key" > /dev/null 2>&1; do
+            state=$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].State.Name' --output text)
+            if [ "$state" = terminated ] && ! aws s3api head-object --bucket "$BUCKET" --key "$done_key" > /dev/null 2>&1; then
+              echo "::error::The instance ended without results"
+              exit 1
+            fi
+            sleep 30
+          done
+          aws s3 cp --recursive "s3://$BUCKET/results/$RUN/" out/
+      - name: Write the summary
+        run: |
+          {
+            echo '## recalculate'
+            cat out/recalculate.md
+            echo
+            grep -E 'Maximum resident set size|Elapsed' out/recalculate-time.txt
+            echo
+            echo '## edit'
+            echo '```'
+            cat out/edit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$(cat out/exit-code)"
+      - if: always() && env.INSTANCE != ''
+        name: Terminate the instance
+        run: aws ec2 terminate-instances --instance-ids "$INSTANCE" > /dev/null
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-${{ env.RUN }}
+          path: out/
+          if-no-files-found: ignore
