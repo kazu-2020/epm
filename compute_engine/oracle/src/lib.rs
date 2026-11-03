@@ -119,7 +119,7 @@ fn query(node: &CheckedNode) -> Query {
         CheckedNode::Binary {
             operator: BinaryOperator::Add | BinaryOperator::Subtract,
             ..
-        } => chain(&node.terms()),
+        } => sum_of_terms(&node.terms()),
         CheckedNode::Binary {
             operator,
             left,
@@ -159,7 +159,7 @@ fn expanded(query: &Query, axes: &[DimensionUlid]) -> String {
     )
 }
 
-fn chain(terms: &[(Sign, &CheckedNode)]) -> Query {
+fn sum_of_terms(terms: &[(Sign, &CheckedNode)]) -> Query {
     let terms: Vec<(Sign, Query)> = terms
         .iter()
         .map(|&(sign, term)| (sign, query(term)))
@@ -170,6 +170,8 @@ fn chain(terms: &[(Sign, &CheckedNode)]) -> Query {
         .collect();
     let axes_list: Vec<DimensionUlid> = axes.iter().copied().collect();
     let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
+    // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
+    let creates_cells = |term: &Query| !any_full || term.axes.len() == axes.len();
     let columns = if axes.is_empty() {
         "1 AS unit".to_string()
     } else {
@@ -179,24 +181,21 @@ fn chain(terms: &[(Sign, &CheckedNode)]) -> Query {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
     let coordinates = terms
         .iter()
-        .filter(|(_, term)| !any_full || term.axes.len() == axes.len())
+        .filter(|(_, term)| creates_cells(term))
         .map(|(_, term)| format!("SELECT {columns} FROM ({})", expanded(term, &axes_list)))
         .collect::<Vec<_>>()
         .join(" UNION ");
-    let mut total = String::new();
+    let mut total = "0::DOUBLE".to_string();
     let mut joins = String::new();
     for (index, (sign, term)) in terms.iter().enumerate() {
         let alias = format!("term_{index}");
-        let value = format!("COALESCE({alias}.value, 0)");
-        total = match (index, sign) {
-            (0, Sign::Plus) => value,
-            (0, Sign::Minus) => format!("-{value}"),
-            (_, Sign::Plus) => format!("({total} + {value})"),
-            (_, Sign::Minus) => format!("({total} - {value})"),
+        let operator = match sign {
+            Sign::Plus => "+",
+            Sign::Minus => "-",
         };
+        total.push_str(&format!(" {operator} COALESCE({alias}.value, 0)"));
         let on: Vec<String> = term
             .axes
             .iter()

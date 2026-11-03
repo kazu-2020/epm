@@ -111,7 +111,7 @@ impl Cells {
             BinaryOperator::Multiply => |left, right| left * right,
             BinaryOperator::Divide => |left, right| left / right,
             BinaryOperator::Add | BinaryOperator::Subtract => {
-                unreachable!("+ and - are evaluated as a chain of terms")
+                unreachable!("+ and - are evaluated as a sum of terms")
             }
         };
         // Not broadcast: only cells present on both sides survive, so spreading a sparse side over every member would build cells the join discards.
@@ -127,18 +127,18 @@ impl Cells {
     ) -> Result<Cells, EvaluateError> {
         let mut axes: Vec<DimensionUlid> = Vec::new();
         for (_, term) in &terms {
-            axes.extend(
-                term.axes
-                    .iter()
-                    .filter(|axis| !axes.contains(axis))
-                    .collect::<Vec<_>>(),
-            );
+            for &axis in &term.axes {
+                if !axes.contains(&axis) {
+                    axes.push(axis);
+                }
+            }
         }
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
+        // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
+        let creates_cells = |term: &Cells| !any_full || term.axes.len() == axes.len();
         let mut coordinates: HashSet<Vec<MemberId>> = HashSet::new();
         for (_, term) in &terms {
-            // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
-            if !any_full || term.axes.len() == axes.len() {
+            if creates_cells(term) {
                 coordinates.extend(term.broadcast(&axes, dimensions)?.values.into_keys());
             }
         }
@@ -156,21 +156,19 @@ impl Cells {
             })
             .collect();
         let values = normalized(coordinates.into_iter().map(|coordinate| {
-            let mut total: Option<f64> = None;
+            let mut total = 0.0;
             for ((sign, term), positions) in terms.iter().zip(&positions) {
                 let key: Vec<MemberId> = positions
                     .iter()
                     .map(|&position| coordinate[position])
                     .collect();
                 let value = term.values.get(&key).copied().unwrap_or(0.0);
-                total = Some(match (total, sign) {
-                    (None, Sign::Plus) => value,
-                    (None, Sign::Minus) => -value,
-                    (Some(total), Sign::Plus) => total + value,
-                    (Some(total), Sign::Minus) => total - value,
-                });
+                match sign {
+                    Sign::Plus => total += value,
+                    Sign::Minus => total -= value,
+                }
             }
-            (coordinate, total.expect("a chain has a term"))
+            (coordinate, total)
         }));
         Ok(Cells { axes, values })
     }
