@@ -9,9 +9,17 @@ exclude_re = [
     # Not tested: these turn the binary search into an endless loop, and cargo-mutants reports the timeout as a failure that turns CI red.
     "replace < with <= in Measure::search",
     "replace \\+ with [-*] in Measure::search",
-    "replace < with <= in Columns::value_at",
-    "replace \\+ with [-*] in Columns::value_at",
-    "replace / with % in Columns::value_at",
+    "replace < with <= in Columns::row_of",
+    "replace \\+ with [-*] in Columns::row_of",
+    "replace / with % in Columns::row_of",
+    # Not tested: these only choose a slower path (sort, filter or binary search) that builds the same cells.
+    "replace in_order -> bool with false",
+    "replace != with == in in_order",
+    "replace is_normalized -> bool with false",
+    "replace == with != in is_normalized",
+    "replace dense_strides -> Option<\\(usize, Vec<usize>\\)> with None",
+    "replace <= with > in dense_strides",
+    "column_engine/src/columns.rs:[0-9]+:[0-9]+: replace << with >>",
 ]
-# Not mutated: datagen and oracle are test tools, not engine code. A datagen mutant mostly changes which data is generated, which no test can tell apart, and every oracle mutant relinks DuckDB and reruns the property test.
-exclude_globs = ["datagen/**", "oracle/**"]
+# Not mutated: bench, datagen and oracle are tools, not engine code. A datagen mutant mostly changes which data is generated, which no test can tell apart, every oracle mutant relinks DuckDB and reruns the property test, and bench only drives the engines.
+exclude_globs = ["bench/**", "datagen/**", "oracle/**"]

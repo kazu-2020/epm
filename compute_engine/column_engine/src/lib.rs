@@ -65,11 +65,12 @@ impl<'a> Evaluator<'a> {
                 operator,
                 left,
                 right,
-            } => Ok(Columns::product(
+            } => Columns::product(
                 *operator,
                 &self.node(left)?,
                 &self.node(right)?,
-            )),
+                self.dimensions,
+            ),
             CheckedNode::Filter {
                 value,
                 dimension,
@@ -82,7 +83,7 @@ impl<'a> Evaluator<'a> {
                     .iter()
                     .map(|axis| self.by_axis(axis, &value))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(value.sum(&by))
+                value.sum(&by, self.dimensions)
             }
         }
     }

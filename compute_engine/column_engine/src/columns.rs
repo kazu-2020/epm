@@ -5,21 +5,31 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, UInt32Type};
 use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
+use arrow_buffer::ScalarBuffer;
 use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
 use evaluator::EvaluateError;
 use formula::{BinaryOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
+const DENSE_LIMIT: usize = 1 << 22;
+
+type Column = ScalarBuffer<u32>;
+
 pub(crate) struct Columns {
     axes: Vec<DimensionUlid>,
-    members: Vec<Vec<u32>>,
-    values: Vec<f64>,
+    members: Vec<Column>,
+    values: ScalarBuffer<f64>,
 }
 
 pub(crate) struct ByAxis<'d> {
     pub(crate) output: DimensionUlid,
     pub(crate) source: usize,
     pub(crate) attribute: Option<Attribute<'d>>,
+}
+
+enum Source<'c> {
+    Cursor(usize),
+    Indexed(Index<'c>, Vec<usize>),
 }
 
 pub(crate) fn find_dimension<'d>(
@@ -39,9 +49,15 @@ fn compare(left: &[&[u32]], left_row: usize, right: &[&[u32]], right_row: usize)
         .cmp(right.iter().map(|column| column[right_row]))
 }
 
+fn in_order(columns: &[&[u32]], len: usize) -> bool {
+    (1..len).all(|row| compare(columns, row - 1, columns, row) != Ordering::Greater)
+}
+
 fn sorted_rows(columns: &[&[u32]], len: usize) -> Vec<usize> {
     let mut rows: Vec<usize> = (0..len).collect();
-    rows.sort_by(|&left, &right| compare(columns, left, columns, right));
+    if !in_order(columns, len) {
+        rows.sort_by(|&left, &right| compare(columns, left, columns, right));
+    }
     rows
 }
 
@@ -50,8 +66,77 @@ fn runs<'r>(columns: &[&[u32]], rows: &'r [usize]) -> Vec<&'r [usize]> {
         .collect()
 }
 
+fn slices(columns: &[Column]) -> Vec<&[u32]> {
+    columns.iter().map(|column| &column[..]).collect()
+}
+
+fn gather(columns: &[&[u32]], rows: &[usize]) -> Vec<Column> {
+    columns
+        .iter()
+        .map(|column| rows.iter().map(|&row| column[row]).collect())
+        .collect()
+}
+
+fn lengths(dimensions: &[&Dimension], axes: &[DimensionUlid]) -> Result<Vec<u32>, EvaluateError> {
+    axes.iter()
+        .map(|&axis| find_dimension(dimensions, axis).map(Dimension::len))
+        .collect()
+}
+
+fn dense_strides(lengths: &[u32]) -> Option<(usize, Vec<usize>)> {
+    let mut strides = vec![0; lengths.len()];
+    let mut space: usize = 1;
+    for (stride, &len) in strides.iter_mut().zip(lengths).rev() {
+        *stride = space;
+        space = space.checked_mul(len as usize)?;
+    }
+    (space <= DENSE_LIMIT).then_some((space, strides))
+}
+
+fn is_normalized(value: f64) -> bool {
+    normalize(value).map(f64::to_bits) == Some(value.to_bits())
+}
+
+struct Index<'c> {
+    columns: &'c Columns,
+    dense: Option<(Vec<usize>, Vec<u32>)>,
+}
+
+impl<'c> Index<'c> {
+    fn new(columns: &'c Columns, dimensions: &[&Dimension]) -> Result<Self, EvaluateError> {
+        let dense = dense_strides(&lengths(dimensions, &columns.axes)?).map(|(space, strides)| {
+            let mut rows = vec![u32::MAX; space];
+            for row in 0..columns.len() {
+                let slot: usize = strides
+                    .iter()
+                    .zip(&columns.members)
+                    .map(|(stride, column)| stride * column[row] as usize)
+                    .sum();
+                rows[slot] = row as u32;
+            }
+            (strides, rows)
+        });
+        Ok(Index { columns, dense })
+    }
+
+    fn find(&self, key: &[u32]) -> Option<usize> {
+        match &self.dense {
+            Some((strides, rows)) => {
+                let slot: usize = strides
+                    .iter()
+                    .zip(key)
+                    .map(|(stride, &member)| stride * member as usize)
+                    .sum();
+                let row = rows[slot];
+                (row != u32::MAX).then_some(row as usize)
+            }
+            None => self.columns.row_of(key),
+        }
+    }
+}
+
 impl ByAxis<'_> {
-    fn member(&self, columns: &[Vec<u32>], row: usize) -> Option<u32> {
+    fn member(&self, columns: &[Column], row: usize) -> Option<u32> {
         let member = columns[self.source][row];
         match self.attribute {
             None => Some(member),
@@ -61,25 +146,34 @@ impl ByAxis<'_> {
 }
 
 impl Columns {
-    fn new(axes: Vec<DimensionUlid>, members: Vec<Vec<u32>>, values: Vec<f64>) -> Columns {
-        let mut by_axis: Vec<(DimensionUlid, Vec<u32>)> = axes.into_iter().zip(members).collect();
+    fn new(
+        axes: Vec<DimensionUlid>,
+        members: Vec<Column>,
+        values: impl Into<ScalarBuffer<f64>>,
+    ) -> Columns {
+        let values: ScalarBuffer<f64> = values.into();
+        let mut by_axis: Vec<(DimensionUlid, Column)> = axes.into_iter().zip(members).collect();
         by_axis.sort_by_key(|&(axis, _)| axis);
-        let (axes, members): (Vec<DimensionUlid>, Vec<Vec<u32>>) = by_axis.into_iter().unzip();
-        let columns: Vec<&[u32]> = members.iter().map(Vec::as_slice).collect();
+        let (axes, members): (Vec<DimensionUlid>, Vec<Column>) = by_axis.into_iter().unzip();
+        let columns = slices(&members);
+        if values.iter().all(|&value| is_normalized(value)) && in_order(&columns, values.len()) {
+            return Columns {
+                axes,
+                members,
+                values,
+            };
+        }
         let mut rows: Vec<usize> = (0..values.len())
             .filter(|&row| normalize(values[row]).is_some())
             .collect();
         rows.sort_unstable_by(|&left, &right| compare(&columns, left, &columns, right));
         Columns {
             axes,
-            members: columns
-                .iter()
-                .map(|column| rows.iter().map(|&row| column[row]).collect())
-                .collect(),
             values: rows
                 .iter()
                 .filter_map(|&row| normalize(values[row]))
                 .collect(),
+            members: gather(&columns, &rows),
         }
     }
 
@@ -88,7 +182,7 @@ impl Columns {
     }
 
     fn columns(&self) -> Vec<&[u32]> {
-        self.members.iter().map(Vec::as_slice).collect()
+        slices(&self.members)
     }
 
     pub(crate) fn number(value: f64) -> Columns {
@@ -104,14 +198,14 @@ impl Columns {
                 base.column(axis)
                     .as_primitive::<UInt32Type>()
                     .values()
-                    .to_vec()
+                    .clone()
             })
             .collect();
         let values = base
             .column(axes.len())
             .as_primitive::<Float64Type>()
             .values()
-            .to_vec();
+            .clone();
         Columns::new(axes, members, values)
     }
 
@@ -140,20 +234,22 @@ impl Columns {
         }
         Columns {
             axes,
-            members: columns
-                .iter()
-                .map(|column| kept.iter().map(|&row| column[row]).collect())
-                .collect(),
+            members: gather(&slices(&columns), &kept),
             values: kept.iter().map(|&row| self.values[row]).collect(),
         }
     }
 
     pub(crate) fn negate(self) -> Columns {
-        let values = self.values.iter().map(|value| -value).collect();
+        let values: Vec<f64> = self.values.iter().map(|value| -value).collect();
         Columns::new(self.axes, self.members, values)
     }
 
-    pub(crate) fn product(operator: BinaryOperator, left: &Columns, right: &Columns) -> Columns {
+    pub(crate) fn product(
+        operator: BinaryOperator,
+        left: &Columns,
+        right: &Columns,
+        dimensions: &[&Dimension],
+    ) -> Result<Columns, EvaluateError> {
         let apply: fn(f64, f64) -> f64 = match operator {
             BinaryOperator::Multiply => |left, right| left * right,
             BinaryOperator::Divide => |left, right| left / right,
@@ -161,6 +257,17 @@ impl Columns {
                 unreachable!("+ and - are evaluated as a sum of terms")
             }
         };
+        if right.axes.iter().all(|axis| left.axes.contains(axis)) {
+            return Columns::lookup_product(left, right, apply, dimensions);
+        }
+        if left.axes.iter().all(|axis| right.axes.contains(axis)) {
+            return Columns::lookup_product(
+                right,
+                left,
+                |right, left| apply(left, right),
+                dimensions,
+            );
+        }
         let shared: Vec<(usize, usize)> = left
             .axes
             .iter()
@@ -175,17 +282,17 @@ impl Columns {
             .collect();
         let left_key: Vec<&[u32]> = shared
             .iter()
-            .map(|&(position, _)| left.members[position].as_slice())
+            .map(|&(position, _)| &left.members[position][..])
             .collect();
         let right_key: Vec<&[u32]> = shared
             .iter()
-            .map(|&(_, position)| right.members[position].as_slice())
+            .map(|&(_, position)| &right.members[position][..])
             .collect();
         let left_rows = sorted_rows(&left_key, left.len());
         let right_rows = sorted_rows(&right_key, right.len());
         let mut axes = left.axes.clone();
         axes.extend(extra.iter().map(|&position| right.axes[position]));
-        let mut members = vec![Vec::new(); axes.len()];
+        let mut members: Vec<Vec<u32>> = vec![Vec::new(); axes.len()];
         let mut values = Vec::new();
         let mut left_runs = runs(&left_key, &left_rows).into_iter().peekable();
         let mut right_runs = runs(&right_key, &right_rows).into_iter().peekable();
@@ -215,7 +322,49 @@ impl Columns {
                 }
             }
         }
-        Columns::new(axes, members, values)
+        Ok(Columns::new(
+            axes,
+            members.into_iter().map(Column::from).collect(),
+            values,
+        ))
+    }
+
+    fn lookup_product(
+        larger: &Columns,
+        smaller: &Columns,
+        apply: impl Fn(f64, f64) -> f64,
+        dimensions: &[&Dimension],
+    ) -> Result<Columns, EvaluateError> {
+        let positions: Vec<usize> = smaller
+            .axes
+            .iter()
+            .map(|&axis| larger.position(axis))
+            .collect();
+        let index = Index::new(smaller, dimensions)?;
+        let mut key = vec![0; positions.len()];
+        let mut rows = Vec::new();
+        let mut values = Vec::new();
+        for row in 0..larger.len() {
+            for (member, &position) in key.iter_mut().zip(&positions) {
+                *member = larger.members[position][row];
+            }
+            if let Some(other) = index.find(&key)
+                && let Some(value) = normalize(apply(larger.values[row], smaller.values[other]))
+            {
+                rows.push(row);
+                values.push(value);
+            }
+        }
+        let members = if rows.len() == larger.len() {
+            larger.members.clone()
+        } else {
+            gather(&larger.columns(), &rows)
+        };
+        Ok(Columns {
+            axes: larger.axes.clone(),
+            members,
+            values: values.into(),
+        })
     }
 
     pub(crate) fn add(
@@ -230,40 +379,68 @@ impl Columns {
         axes.dedup();
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
         // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
-        let creates_cells = |term: &Columns| !any_full || term.axes.len() == axes.len();
-        let mut members = vec![Vec::new(); axes.len()];
-        let mut len = 0;
-        for (_, term) in &terms {
-            if creates_cells(term) {
-                let spread = term.broadcast(&axes, dimensions)?;
-                len += spread.len();
-                for (column, source) in members.iter_mut().zip(spread.members) {
-                    column.extend(source);
-                }
-            }
-        }
-        let coordinates = Columns::new(axes, members, vec![0.0; len]).unique();
-        let positions: Vec<Vec<usize>> = terms
+        let spread: Vec<Columns> = if any_full {
+            Vec::new()
+        } else {
+            terms
+                .iter()
+                .map(|(_, term)| term.broadcast(&axes, dimensions))
+                .collect::<Result<_, _>>()?
+        };
+        let creators: Vec<&Columns> = if any_full {
+            terms
+                .iter()
+                .map(|(_, term)| term)
+                .filter(|term| term.axes.len() == axes.len())
+                .collect()
+        } else {
+            spread.iter().collect()
+        };
+        let coordinates = creators[1..]
             .iter()
-            .map(|(_, term)| {
-                term.axes
-                    .iter()
-                    .map(|&axis| coordinates.position(axis))
-                    .collect()
+            .fold(creators[0].coordinates(), |union, creator| {
+                union.union(creator)
+            });
+        let columns = coordinates.columns();
+        let mut sources = terms
+            .iter()
+            .map(|(sign, term)| {
+                let source = if term.axes.len() == axes.len() {
+                    Source::Cursor(0)
+                } else {
+                    Source::Indexed(
+                        Index::new(term, dimensions)?,
+                        term.axes
+                            .iter()
+                            .map(|&axis| coordinates.position(axis))
+                            .collect(),
+                    )
+                };
+                Ok((*sign, term.columns(), term, source))
             })
-            .collect();
+            .collect::<Result<Vec<_>, EvaluateError>>()?;
         let mut key = Vec::new();
-        let values = (0..coordinates.len())
+        let values: Vec<f64> = (0..coordinates.len())
             .map(|row| {
                 let mut total = 0.0;
-                for ((sign, term), positions) in terms.iter().zip(&positions) {
-                    key.clear();
-                    key.extend(
-                        positions
-                            .iter()
-                            .map(|&position| coordinates.members[position][row]),
-                    );
-                    let value = term.value_at(&key).unwrap_or(0.0);
+                for (sign, term_columns, term, source) in &mut sources {
+                    let value = match source {
+                        Source::Cursor(next) => {
+                            if *next < term.len()
+                                && compare(term_columns, *next, &columns, row) == Ordering::Equal
+                            {
+                                *next += 1;
+                                term.values[*next - 1]
+                            } else {
+                                0.0
+                            }
+                        }
+                        Source::Indexed(index, positions) => {
+                            key.clear();
+                            key.extend(positions.iter().map(|&position| columns[position][row]));
+                            index.find(&key).map_or(0.0, |found| term.values[found])
+                        }
+                    };
                     match sign {
                         Sign::Plus => total += value,
                         Sign::Minus => total -= value,
@@ -272,25 +449,60 @@ impl Columns {
                 total
             })
             .collect();
+        drop(sources);
+        drop(columns);
         Ok(Columns::new(coordinates.axes, coordinates.members, values))
     }
 
-    fn unique(self) -> Columns {
-        let columns = self.columns();
-        let kept: Vec<usize> = (0..self.len())
-            .filter(|&row| row == 0 || compare(&columns, row - 1, &columns, row) != Ordering::Equal)
-            .collect();
+    fn coordinates(&self) -> Columns {
         Columns {
-            members: columns
-                .iter()
-                .map(|column| kept.iter().map(|&row| column[row]).collect())
-                .collect(),
-            values: kept.iter().map(|&row| self.values[row]).collect(),
-            axes: self.axes,
+            axes: self.axes.clone(),
+            members: self.members.clone(),
+            values: vec![0.0; self.len()].into(),
         }
     }
 
-    fn value_at(&self, coordinate: &[u32]) -> Option<f64> {
+    fn union(self, other: &Columns) -> Columns {
+        let (mine, theirs) = (self.columns(), other.columns());
+        let mut rows = Vec::new();
+        let (mut own, mut their) = ((0..self.len()).peekable(), (0..other.len()).peekable());
+        loop {
+            let (from_mine, row) = match (own.peek(), their.peek()) {
+                (None, None) => break,
+                (Some(_), None) => (true, own.next()),
+                (None, Some(_)) => (false, their.next()),
+                (Some(&left), Some(&right)) => match compare(&mine, left, &theirs, right) {
+                    Ordering::Less => (true, own.next()),
+                    Ordering::Greater => (false, their.next()),
+                    Ordering::Equal => {
+                        their.next();
+                        (true, own.next())
+                    }
+                },
+            };
+            rows.push((from_mine, row.expect("peeked above")));
+        }
+        let members = (0..self.axes.len())
+            .map(|axis| {
+                rows.iter()
+                    .map(|&(from_mine, row)| {
+                        if from_mine {
+                            mine[axis][row]
+                        } else {
+                            theirs[axis][row]
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        Columns {
+            values: vec![0.0; rows.len()].into(),
+            members,
+            axes: self.axes.clone(),
+        }
+    }
+
+    fn row_of(&self, coordinate: &[u32]) -> Option<usize> {
         let (mut low, mut high) = (0, self.len());
         while low < high {
             let middle = low + (high - low) / 2;
@@ -302,13 +514,49 @@ impl Columns {
             {
                 Ordering::Less => low = middle + 1,
                 Ordering::Greater => high = middle,
-                Ordering::Equal => return Some(self.values[middle]),
+                Ordering::Equal => return Some(middle),
             }
         }
         None
     }
 
-    pub(crate) fn sum(&self, by: &[ByAxis<'_>]) -> Columns {
+    pub(crate) fn sum(
+        &self,
+        by: &[ByAxis<'_>],
+        dimensions: &[&Dimension],
+    ) -> Result<Columns, EvaluateError> {
+        let mut outputs: Vec<&ByAxis<'_>> = by.iter().collect();
+        outputs.sort_by_key(|axis| axis.output);
+        let axes: Vec<DimensionUlid> = outputs.iter().map(|axis| axis.output).collect();
+        let lengths = lengths(dimensions, &axes)?;
+        if let Some((space, strides)) = dense_strides(&lengths) {
+            let mut totals = vec![0.0; space];
+            let mut seen = vec![false; space];
+            'rows: for row in 0..self.len() {
+                let mut slot = 0;
+                for (axis, stride) in outputs.iter().zip(&strides) {
+                    let Some(member) = axis.member(&self.members, row) else {
+                        continue 'rows;
+                    };
+                    slot += stride * member as usize;
+                }
+                totals[slot] += self.values[row];
+                seen[slot] = true;
+            }
+            let slots: Vec<usize> = (0..space).filter(|&slot| seen[slot]).collect();
+            let members = strides
+                .iter()
+                .zip(&lengths)
+                .map(|(stride, &len)| {
+                    slots
+                        .iter()
+                        .map(|slot| (slot / stride) as u32 % len)
+                        .collect()
+                })
+                .collect();
+            let values: Vec<f64> = slots.iter().map(|&slot| totals[slot]).collect();
+            return Ok(Columns::new(axes, members, values));
+        }
         let kept: Vec<usize> = (0..self.len())
             .filter(|&row| {
                 by.iter()
@@ -338,7 +586,7 @@ impl Columns {
             .iter()
             .map(|column| runs.iter().map(|run| column[run[0]]).collect())
             .collect();
-        let values = runs
+        let values: Vec<f64> = runs
             .iter()
             .map(|run| {
                 run.iter().fold(0.0, |total, &group_row| {
@@ -346,11 +594,11 @@ impl Columns {
                 })
             })
             .collect();
-        Columns::new(
+        Ok(Columns::new(
             groups.into_iter().map(|(axis, _)| axis).collect(),
             members,
             values,
-        )
+        ))
     }
 
     pub(crate) fn broadcast(
@@ -388,23 +636,34 @@ impl Columns {
         definition: MeasureDefinition,
         dimensions: &[&Dimension],
     ) -> Result<Measure, MeasureError> {
-        let columns: Vec<&[u32]> = definition
+        let positions: Vec<usize> = definition
             .axes
             .iter()
-            .map(|&axis| self.members[self.position(axis)].as_slice())
+            .map(|&axis| self.position(axis))
             .collect();
-        let rows = sorted_rows(&columns, self.len());
-        let mut arrays: Vec<ArrayRef> = columns
+        let columns: Vec<&[u32]> = positions
             .iter()
-            .map(|column| {
-                Arc::new(UInt32Array::from_iter_values(
-                    rows.iter().map(|&row| column[row]),
-                )) as ArrayRef
-            })
+            .map(|&position| &self.members[position][..])
             .collect();
-        arrays.push(Arc::new(Float64Array::from_iter_values(
-            rows.iter().map(|&row| self.values[row]),
-        )));
+        let mut arrays: Vec<ArrayRef>;
+        let values;
+        if positions.is_sorted() {
+            arrays = positions
+                .iter()
+                .map(|&position| {
+                    Arc::new(UInt32Array::new(self.members[position].clone(), None)) as ArrayRef
+                })
+                .collect();
+            values = self.values.clone();
+        } else {
+            let rows = sorted_rows(&columns, self.len());
+            arrays = gather(&columns, &rows)
+                .into_iter()
+                .map(|column| Arc::new(UInt32Array::new(column, None)) as ArrayRef)
+                .collect();
+            values = rows.iter().map(|&row| self.values[row]).collect();
+        }
+        arrays.push(Arc::new(Float64Array::new(values, None)));
         let base = RecordBatch::try_new(Arc::new(definition.schema()), arrays)
             .expect("the columns follow the result's schema");
         Measure::try_new(definition, base, dimensions)
