@@ -1,5 +1,6 @@
 pub mod cases;
 mod formulas;
+pub mod representative;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

@@ -126,6 +126,12 @@ fn query(node: &CheckedNode) -> Query {
             right,
         } => product(*operator, &query(left), &query(right)),
         CheckedNode::Sum { value, by } => sum(&query(value), by),
+        CheckedNode::Filter {
+            value,
+            dimension,
+            members,
+            keeps_axis,
+        } => filter(&query(value), *dimension, members, *keeps_axis),
     };
     let mut items: Vec<String> = query.axes.iter().map(|&axis| column(axis)).collect();
     items.push("CASE WHEN node.value = 0 THEN 0::DOUBLE ELSE node.value END AS value".into());
@@ -256,6 +262,31 @@ fn product(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
             expanded(right, &axes)
         ),
         axes: axes.into_iter().collect(),
+    }
+}
+
+fn filter(
+    value: &Query,
+    dimension: DimensionUlid,
+    members: &[MemberId],
+    keeps_axis: bool,
+) -> Query {
+    let mut axes = value.axes.clone();
+    if !keeps_axis {
+        axes.remove(&dimension);
+    }
+    let mut items: Vec<String> = axes.iter().map(|&axis| column(axis)).collect();
+    items.push("value".into());
+    let members: Vec<String> = members.iter().map(|member| member.0.to_string()).collect();
+    Query {
+        sql: format!(
+            "SELECT {} FROM ({}) WHERE {} IN ({})",
+            items.join(", "),
+            value.sql,
+            column(dimension),
+            members.join(", ")
+        ),
+        axes,
     }
 }
 

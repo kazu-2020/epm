@@ -1,9 +1,9 @@
 use std::ops::Range;
 
-use dimension::DimensionDefinition;
+use dimension::{Dimension, MemberId};
 use measure::MeasureDefinition;
 
-use crate::expression::{Axis, Expression, ExpressionKind};
+use crate::expression::{Axis, Expression, ExpressionKind, QuotedName};
 use crate::resolve_error::{ResolveError, ResolveErrorKind};
 use crate::resolved_expression::{
     ResolvedAxis, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind,
@@ -19,7 +19,7 @@ pub struct Resolved {
 pub fn resolve(
     expression: &Expression,
     measures: &[MeasureDefinition],
-    dimensions: &[DimensionDefinition],
+    dimensions: &[&Dimension],
 ) -> Resolved {
     let mut resolver = Resolver {
         measures,
@@ -35,7 +35,7 @@ pub fn resolve(
 
 struct Resolver<'a> {
     measures: &'a [MeasureDefinition],
-    dimensions: &'a [DimensionDefinition],
+    dimensions: &'a [&'a Dimension],
     errors: Vec<ResolveError>,
 }
 
@@ -63,12 +63,64 @@ impl<'a> Resolver<'a> {
                 value: Box::new(self.expression(value)),
                 by: by.iter().map(|axis| self.axis(axis)).collect(),
             },
+            ExpressionKind::Filter {
+                value,
+                dimension,
+                members,
+                keeps_axis,
+            } => {
+                let value = self.expression(value);
+                self.filter(value, dimension, members, *keeps_axis)
+                    .unwrap_or(ResolvedExpressionKind::Error)
+            }
             ExpressionKind::Error => ResolvedExpressionKind::Error,
         };
         ResolvedExpression {
             kind,
             span: expression.span.clone(),
         }
+    }
+
+    fn filter(
+        &mut self,
+        value: ResolvedExpression,
+        dimension: &QuotedName,
+        members: &[QuotedName],
+        keeps_axis: bool,
+    ) -> Option<ResolvedExpressionKind> {
+        let found = match (
+            self.find_dimension(&dimension.name),
+            self.find_measure(&dimension.name),
+        ) {
+            (Some(found), _) => found,
+            (None, Some(_)) => {
+                self.error(ResolveErrorKind::MeasureAsAxis, &dimension.span);
+                return None;
+            }
+            (None, None) => {
+                self.error(ResolveErrorKind::UnknownName, &dimension.span);
+                return None;
+            }
+        };
+        let mut ids: Vec<MemberId> = Vec::with_capacity(members.len());
+        let mut known = true;
+        for member in members {
+            match found.member_by_key(&member.name) {
+                Some(found_member) => ids.push(found_member.id()),
+                None => {
+                    self.error(ResolveErrorKind::UnknownMember, &member.span);
+                    known = false;
+                }
+            }
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        known.then(|| ResolvedExpressionKind::Filter {
+            value: Box::new(value),
+            dimension: found.ulid(),
+            members: ids,
+            keeps_axis,
+        })
     }
 
     fn measure(&self, name: &str) -> Result<ResolvedExpressionKind, ResolveErrorKind> {
@@ -102,6 +154,7 @@ impl<'a> Resolver<'a> {
             (None, Some(_)) => return Err(ResolveErrorKind::MeasureAsAxis),
             (None, None) => return Err(ResolveErrorKind::UnknownName),
         };
+        let dimension = dimension.definition();
         Ok(match &axis.attribute {
             None => ResolvedAxisKind::Dimension(dimension.ulid),
             Some(name) => {
@@ -125,10 +178,11 @@ impl<'a> Resolver<'a> {
         self.measures.iter().find(|measure| measure.name == name)
     }
 
-    fn find_dimension(&self, name: &str) -> Option<&'a DimensionDefinition> {
+    fn find_dimension(&self, name: &str) -> Option<&'a Dimension> {
         self.dimensions
             .iter()
-            .find(|dimension| dimension.name == name)
+            .find(|dimension| dimension.name() == name)
+            .copied()
     }
 
     fn error(&mut self, kind: ResolveErrorKind, span: &Range<usize>) {

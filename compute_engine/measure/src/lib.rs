@@ -234,6 +234,10 @@ impl Measure {
         &self.base
     }
 
+    pub fn changes(&self) -> impl Iterator<Item = (&[MemberId], Option<f64>)> {
+        self.deltas.iter().flat_map(|delta| delta.changes())
+    }
+
     pub fn delta_len(&self) -> usize {
         self.deltas.iter().map(|delta| delta.len()).sum()
     }

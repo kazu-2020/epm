@@ -4,7 +4,7 @@ use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt32Type;
 use datagen::{Configuration, Workspace};
-use dimension::DimensionDefinition;
+use dimension::Dimension;
 use measure::MeasureDefinition;
 
 fn configuration(seed: u64) -> Configuration {
@@ -44,11 +44,7 @@ fn every_formula_parses_resolves_and_passes_the_axis_check() {
     let mut texts = String::new();
     for seed in 0..300 {
         let workspace = datagen::generate(&configuration(seed));
-        let dimensions: Vec<DimensionDefinition> = workspace
-            .dimensions
-            .iter()
-            .map(|dimension| dimension.definition().clone())
-            .collect();
+        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let measures: Vec<MeasureDefinition> = workspace
             .inputs
             .iter()
@@ -75,7 +71,8 @@ fn every_formula_parses_resolves_and_passes_the_axis_check() {
         }
     }
     for construct in [
-        " + ", " - ", " * ", " / ", "-'", "SUM(", ", BY ", "'.'親'", "0",
+        " + ", " - ", " * ", " / ", "-'", "SUM(", ", BY ", "'.'親'", "0", "': 'm", "FILTER(",
+        "' = 'm", " IN ('m", ", 'm",
     ] {
         assert!(texts.contains(construct), "no formula uses {construct}");
     }

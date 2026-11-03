@@ -153,6 +153,18 @@ pub const CASES: &[Case] = &[
         expected: &[(&[0, 0], 200.0), (&[0, 1], 400.0), (&[1, 0], 150.0)],
     },
     Case {
+        name: "数値は結果のすべての軸の全メンバーに広げる",
+        steps: &[("結果", "1")],
+        expected: &[
+            (&[0, 0], 1.0),
+            (&[0, 1], 1.0),
+            (&[1, 0], 1.0),
+            (&[1, 1], 1.0),
+            (&[2, 0], 1.0),
+            (&[2, 1], 1.0),
+        ],
+    },
+    Case {
         name: "SUM BY はディメンションごとに合計し、セルのない組は空",
         steps: &[("部門結果", "SUM('原価', BY '部門')")],
         expected: &[(&[0], 25.0), (&[1], 20.0)],
@@ -183,6 +195,24 @@ pub const CASES: &[Case] = &[
         expected: &[],
     },
     Case {
+        name: "1メンバーの絞り込みは、そのディメンションの軸を消す",
+        steps: &[("部門結果", "'売上'['期間': '4月']")],
+        expected: &[(&[0], 100.0), (&[1], 50.0)],
+    },
+    Case {
+        name: "1メンバーの絞り込みどうしは、消えた軸の違うメンバーを引き算できる",
+        steps: &[("部門結果", "'売上'['期間': '5月'] - '売上'['期間': '4月']")],
+        expected: &[(&[0], 100.0), (&[1], -50.0), (&[2], 7.0)],
+    },
+    Case {
+        name: "複数メンバーの絞り込みは軸を残し、選んだメンバーのセルだけを残す",
+        steps: &[(
+            "期間結果",
+            "SUM(FILTER('売上', '部門' IN ('営業部', '管理部')), BY '期間')",
+        )],
+        expected: &[(&[0], 100.0), (&[1], 207.0)],
+    },
+    Case {
         name: "入力は未反映の差分を反映して読む",
         steps: &[("結果", "'改定'")],
         expected: &[(&[0, 0], 5.0), (&[2, 1], 3.0)],
@@ -200,7 +230,6 @@ pub const CASES: &[Case] = &[
 pub struct Fixture {
     pub dimensions: Vec<Dimension>,
     pub inputs: Vec<Measure>,
-    dimension_definitions: Vec<DimensionDefinition>,
     measure_definitions: Vec<MeasureDefinition>,
 }
 
@@ -284,10 +313,6 @@ impl Default for Fixture {
         delta.set(&[MemberId(2), MemberId(1)], 3.0).unwrap();
         *revised = revised.apply(delta).unwrap();
         Fixture {
-            dimension_definitions: dimensions
-                .iter()
-                .map(|dimension| dimension.definition().clone())
-                .collect(),
             dimensions,
             inputs,
             measure_definitions,
@@ -309,7 +334,7 @@ impl Fixture {
         let resolved = formula::resolve(
             &parsed.expression,
             &self.measure_definitions,
-            &self.dimension_definitions,
+            &self.dimensions.iter().collect::<Vec<_>>(),
         );
         assert_eq!(resolved.errors, [], "{source}");
         resolved.expression

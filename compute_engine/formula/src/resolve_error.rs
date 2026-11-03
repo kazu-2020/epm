@@ -12,4 +12,5 @@ pub enum ResolveErrorKind {
     DimensionAsValue,
     UnknownAttribute,
     MeasureAsAxis,
+    UnknownMember,
 }

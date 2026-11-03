@@ -1,8 +1,8 @@
-use dimension::{Dimension, DimensionUlid};
+use dimension::{Dimension, DimensionUlid, MemberId};
 use formula::BinaryOperator;
 use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::RngExt;
-use rand::seq::IndexedRandom;
+use rand::seq::{IndexedRandom, index};
 
 use crate::{Formula, Generator, dimension};
 
@@ -149,12 +149,52 @@ impl Formulas<'_, '_, '_> {
     }
 
     fn reference(&mut self, reference: usize, allowed: &[DimensionUlid]) -> Generated {
-        let generated = self.references[reference].clone();
+        let mut generated = self.references[reference].clone();
+        if !generated.axes.is_empty() && self.generator.random.random_bool(0.3) {
+            generated = self.filter(generated);
+        }
         if fits(&generated.axes, allowed) && self.generator.random.random_bool(0.8) {
             generated
         } else {
             self.sum(generated, allowed)
         }
+    }
+
+    fn filter(&mut self, value: Generated) -> Generated {
+        let position = self.generator.random.random_range(0..value.axes.len());
+        let filtered = dimension(self.dimensions, value.axes[position]);
+        let count = self
+            .generator
+            .random
+            .random_range(1..=filtered.len().min(2));
+        let members: Vec<String> = index::sample(
+            &mut self.generator.random,
+            filtered.len() as usize,
+            count as usize,
+        )
+        .into_iter()
+        .map(|member| {
+            let member = filtered
+                .member(MemberId(member as u32))
+                .expect("the sample is within the dimension");
+            quote(member.key())
+        })
+        .collect();
+        let mut axes = value.axes;
+        let dimension = quote(filtered.name());
+        let text = match members.as_slice() {
+            [member] if self.generator.random.random_bool(0.5) => {
+                axes.remove(position);
+                format!("{}[{dimension}: {member}]", value.text)
+            }
+            [member] => format!("FILTER({}, {dimension} = {member})", value.text),
+            _ => format!(
+                "FILTER({}, {dimension} IN ({}))",
+                value.text,
+                members.join(", ")
+            ),
+        };
+        Generated { text, axes }
     }
 
     fn sum(&mut self, value: Generated, allowed: &[DimensionUlid]) -> Generated {

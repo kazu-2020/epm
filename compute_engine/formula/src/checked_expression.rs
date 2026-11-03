@@ -1,4 +1,4 @@
-use dimension::{AttributeUlid, DimensionUlid};
+use dimension::{AttributeUlid, DimensionUlid, MemberId};
 use measure::MeasureUlid;
 
 use crate::expression::BinaryOperator;
@@ -26,6 +26,12 @@ pub enum CheckedNode {
     Sum {
         value: Box<CheckedNode>,
         by: Vec<CheckedAxis>,
+    },
+    Filter {
+        value: Box<CheckedNode>,
+        dimension: DimensionUlid,
+        members: Vec<MemberId>,
+        keeps_axis: bool,
     },
 }
 
@@ -142,6 +148,17 @@ fn node(expression: &ResolvedExpression) -> Option<CheckedNode> {
                     ResolvedAxisKind::Unresolved => None,
                 })
                 .collect::<Option<_>>()?,
+        },
+        ResolvedExpressionKind::Filter {
+            value,
+            dimension,
+            members,
+            keeps_axis,
+        } => CheckedNode::Filter {
+            value: Box::new(node(value)?),
+            dimension: *dimension,
+            members: members.clone(),
+            keeps_axis: *keeps_axis,
         },
         ResolvedExpressionKind::Error => return None,
     })

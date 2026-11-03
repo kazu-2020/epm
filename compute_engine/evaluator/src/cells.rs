@@ -173,6 +173,36 @@ impl Cells {
         Ok(Cells { axes, values })
     }
 
+    pub(crate) fn filter(
+        mut self,
+        dimension: DimensionUlid,
+        members: &[MemberId],
+        keeps_axis: bool,
+    ) -> Cells {
+        let position = self
+            .axes
+            .iter()
+            .position(|&axis| axis == dimension)
+            .expect("a checked expression filters an axis of its value");
+        self.values
+            .retain(|coordinate, _| members.contains(&coordinate[position]));
+        if keeps_axis {
+            return self;
+        }
+        self.axes.remove(position);
+        Cells {
+            axes: self.axes,
+            values: self
+                .values
+                .into_iter()
+                .map(|(mut coordinate, value)| {
+                    coordinate.remove(position);
+                    (coordinate, value)
+                })
+                .collect(),
+        }
+    }
+
     pub(crate) fn sum(&self, by: &[ByAxis<'_>]) -> Cells {
         let mut order: Vec<usize> = (0..self.axes.len()).collect();
         order.sort_by_key(|&axis| self.axes[axis]);
