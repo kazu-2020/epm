@@ -170,21 +170,50 @@ fn binary(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
     let symbol = operator.symbol();
     let sql = match operator {
         BinaryOperator::Add | BinaryOperator::Subtract => {
+            let shared: Vec<DimensionUlid> = left.axes.intersection(&right.axes).copied().collect();
+            let on = if shared.is_empty() {
+                "TRUE".to_string()
+            } else {
+                shared
+                    .iter()
+                    .map(|&axis| format!("left_side.{0} = right_side.{0}", column(axis)))
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            };
+            let (join, side) = match (
+                left.axes.len() == axes.len(),
+                right.axes.len() == axes.len(),
+            ) {
+                (true, true) => ("FULL OUTER JOIN", None),
+                (true, false) => ("LEFT JOIN", Some("left_side")),
+                (false, true) => ("RIGHT JOIN", Some("right_side")),
+                // Not an outer join: neither side has all the axes, so only pairs that both have make a cell.
+                (false, false) => ("JOIN", None),
+            };
             let mut items: Vec<String> = axes
                 .iter()
                 .map(|&axis| {
-                    format!(
-                        "COALESCE(left_side.{0}, right_side.{0}) AS {0}",
-                        column(axis)
-                    )
+                    let name = column(axis);
+                    match side {
+                        Some(side) => format!("{side}.{name} AS {name}"),
+                        None if !right.axes.contains(&axis) => {
+                            format!("left_side.{name} AS {name}")
+                        }
+                        None if !left.axes.contains(&axis) => {
+                            format!("right_side.{name} AS {name}")
+                        }
+                        None => format!("COALESCE(left_side.{name}, right_side.{name}) AS {name}"),
+                    }
                 })
                 .collect();
             items.push(format!(
                 "COALESCE(left_side.value, 0) {symbol} COALESCE(right_side.value, 0) AS value"
             ));
             format!(
-                "SELECT {} FROM ({left_sql}) AS left_side FULL OUTER JOIN ({right_sql}) AS right_side ON {condition}",
-                items.join(", ")
+                "SELECT {} FROM ({}) AS left_side {join} ({}) AS right_side ON {on}",
+                items.join(", "),
+                left.sql,
+                right.sql
             )
         }
         BinaryOperator::Multiply | BinaryOperator::Divide => {

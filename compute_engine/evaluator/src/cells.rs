@@ -93,6 +93,30 @@ fn join(left: &Cells, right: &Cells, apply: fn(f64, f64) -> f64) -> Vec<(Vec<Mem
     joined
 }
 
+fn onto(full: &Cells, other: &Cells, apply: impl Fn(f64, f64) -> f64) -> Vec<(Vec<MemberId>, f64)> {
+    let positions: Vec<usize> = other
+        .axes
+        .iter()
+        .map(|axis| {
+            full.axes
+                .iter()
+                .position(|own| own == axis)
+                .expect("full has every axis of other")
+        })
+        .collect();
+    full.values
+        .iter()
+        .map(|(coordinate, &value)| {
+            let key: Vec<MemberId> = positions
+                .iter()
+                .map(|&position| coordinate[position])
+                .collect();
+            let other_value = other.values.get(&key).copied().unwrap_or(0.0);
+            (coordinate.clone(), apply(value, other_value))
+        })
+        .collect()
+}
+
 impl Cells {
     pub(crate) fn number(value: f64) -> Cells {
         Cells {
@@ -130,14 +154,29 @@ impl Cells {
         let (presence, apply) = rule(operator);
         let values = match presence {
             Presence::Either => {
-                let left = left.broadcast(&axes, dimensions)?;
-                let right = right.broadcast(&axes, dimensions)?;
-                let coordinates: HashSet<&Vec<MemberId>> =
-                    left.values.keys().chain(right.values.keys()).collect();
-                normalized(coordinates.into_iter().map(|coordinate| {
-                    let side = |cells: &Cells| cells.values.get(coordinate).copied().unwrap_or(0.0);
-                    (coordinate.clone(), apply(side(&left), side(&right)))
-                }))
+                match (
+                    left.axes.len() == axes.len(),
+                    right.axes.len() == axes.len(),
+                ) {
+                    (true, true) => {
+                        let right = right.broadcast(&axes, dimensions)?;
+                        let coordinates: HashSet<&Vec<MemberId>> =
+                            left.values.keys().chain(right.values.keys()).collect();
+                        normalized(coordinates.into_iter().map(|coordinate| {
+                            let side = |cells: &Cells| {
+                                cells.values.get(coordinate).copied().unwrap_or(0.0)
+                            };
+                            (coordinate.clone(), apply(side(&left), side(&right)))
+                        }))
+                    }
+                    (true, false) => normalized(onto(&left, &right, apply)),
+                    (false, true) => {
+                        let right = right.broadcast(&axes, dimensions)?;
+                        normalized(onto(&right, &left, |right, left| apply(left, right)))
+                    }
+                    // Not spread over every member: neither side has all the axes, so only pairs that both have make a cell.
+                    (false, false) => normalized(join(&left, &right, apply)),
+                }
             }
             // Not broadcast like Either: only cells present on both sides survive, so spreading a sparse side over every member would build cells the join discards.
             Presence::Both => normalized(join(&left, &right, apply)),
