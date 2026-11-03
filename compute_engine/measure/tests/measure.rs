@@ -68,7 +68,8 @@ fn coordinate(period: u32, department: u32) -> [MemberId; 2] {
 }
 
 fn rows(measure: &Measure) -> Vec<(u32, u32, f64)> {
-    let columns = measure.base().columns();
+    let base = measure.base();
+    let columns = base.columns();
     let periods = columns[0].as_any().downcast_ref::<UInt32Array>().unwrap();
     let departments = columns[1].as_any().downcast_ref::<UInt32Array>().unwrap();
     let values = columns[2].as_any().downcast_ref::<Float64Array>().unwrap();
@@ -532,29 +533,53 @@ fn keys_wider_than_64_bits_are_rejected() {
 }
 
 #[test]
-fn given_keys_must_match_the_member_columns() {
+fn keys_from_the_engine_are_checked_like_a_base() {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
-    let batch =
-        RecordBatch::try_new(Arc::new(definition.schema()), columns(&[(0, 1, 1.0)])).unwrap();
     let layout = KeyLayout::new(&[3, 2]).unwrap();
     let dimensions = [&periods(), &departments()];
+    let from_keys = |keys: Vec<u64>| {
+        let values = vec![1.0; keys.len()];
+        Measure::try_from_keys(definition.clone(), keys.into(), values.into(), &dimensions)
+    };
     assert_eq!(
-        Measure::try_new_with_keys(
-            definition.clone(),
-            batch.clone(),
-            Some(vec![layout.pack([1, 0])].into()),
-            &dimensions
-        )
-        .unwrap_err(),
+        from_keys(vec![layout.pack([3, 0])]).unwrap_err(),
+        MeasureError::MemberOutOfRange {
+            axis: PERIOD,
+            member: MemberId(3)
+        }
+    );
+    assert_eq!(
+        from_keys(vec![1 << 3]).unwrap_err(),
         MeasureError::KeyMismatch(0)
     );
-    assert!(
-        Measure::try_new_with_keys(
-            definition,
-            batch,
-            Some(vec![layout.pack([0, 1])].into()),
-            &dimensions
-        )
-        .is_ok()
+    assert_eq!(
+        from_keys(vec![layout.pack([1, 0]), layout.pack([0, 1])]).unwrap_err(),
+        MeasureError::UnsortedCoordinate(1)
+    );
+    assert_eq!(
+        from_keys(vec![layout.pack([0, 1]), layout.pack([2, 0])])
+            .unwrap()
+            .cells()
+            .collect::<Vec<_>>(),
+        vec![
+            (vec![MemberId(0), MemberId(1)], 1.0),
+            (vec![MemberId(2), MemberId(0)], 1.0)
+        ]
+    );
+}
+
+#[test]
+fn values_read_from_part_of_a_larger_buffer_are_copied_out() {
+    let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
+    let mut columns = columns(&[(0, 0, 1.0), (0, 1, 2.0), (1, 0, 3.0)]);
+    for column in &mut columns {
+        *column = column.slice(1, 1);
+    }
+    let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
+    let measure = Measure::try_new(definition, batch, &[&periods(), &departments()]).unwrap();
+    assert_eq!(measure.values().inner().capacity(), 8);
+    assert_eq!(
+        measure.cells().collect::<Vec<_>>(),
+        vec![(vec![MemberId(0), MemberId(1)], 2.0)]
     );
 }

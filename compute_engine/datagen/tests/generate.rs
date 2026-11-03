@@ -24,9 +24,9 @@ fn batches(workspace: &Workspace) -> Vec<RecordBatch> {
     let dimensions = workspace
         .dimensions
         .iter()
-        .map(|dimension| dimension.batch());
+        .map(|dimension| dimension.batch().clone());
     let inputs = workspace.inputs.iter().map(|input| input.base());
-    dimensions.chain(inputs).cloned().collect()
+    dimensions.chain(inputs).collect()
 }
 
 #[test]

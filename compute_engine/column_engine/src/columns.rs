@@ -1,11 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::ops::Range;
-use std::sync::Arc;
 
-use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, UInt32Type};
-use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
 use arrow_buffer::ScalarBuffer;
 use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
 use evaluator::EvaluateError;
@@ -20,15 +16,11 @@ const SEARCHED_MEMBERS: usize = 64;
 // Not one range per thread: a single large range would leave the other threads idle.
 const SCANNED_ROWS: usize = 1 << 20;
 
-type Column = ScalarBuffer<u32>;
-
 pub(crate) struct Columns {
     axes: Vec<DimensionUlid>,
     layout: KeyLayout,
     keys: ScalarBuffer<u64>,
     values: ScalarBuffer<f64>,
-    // Not always unpacked: a result on the rows of a stored measure keeps that measure's columns instead of a copy.
-    members: Option<Vec<Column>>,
 }
 
 pub(crate) struct ByAxis<'d> {
@@ -165,11 +157,7 @@ impl Columns {
         let keys: Vec<u64> = (0..values.len())
             .map(|row| layout.pack(members.iter().map(|column| column[row])))
             .collect();
-        let in_order = keys.is_sorted() && values.iter().all(|&value| is_normalized(value));
-        Ok(Columns {
-            members: in_order.then(|| members.into_iter().map(Column::from).collect()),
-            ..Columns::from_keys(axes, layout, keys, values)
-        })
+        Ok(Columns::from_keys(axes, layout, keys, values))
     }
 
     fn from_keys(
@@ -191,7 +179,6 @@ impl Columns {
                 layout,
                 keys: keys.into(),
                 values: values.into(),
-                members: None,
             };
         }
         Columns {
@@ -202,7 +189,6 @@ impl Columns {
                 .iter()
                 .filter_map(|&row| normalize(values[row]))
                 .collect(),
-            members: None,
         }
     }
 
@@ -225,7 +211,6 @@ impl Columns {
                 .iter()
                 .map(|&row| normalize(self.values[row]).unwrap_or(0.0))
                 .collect(),
-            members: None,
         }
     }
 
@@ -308,7 +293,6 @@ impl Columns {
             layout: self.layout,
             keys: keys.into(),
             values: values.into(),
-            members: None,
         }
     }
 
@@ -442,50 +426,39 @@ impl Columns {
 
     fn from_base(measure: &Measure) -> Columns {
         let axes = measure.definition().axes.clone();
-        let base = measure.base();
-        let members: Vec<Column> = (0..axes.len())
-            .map(|axis| {
-                base.column(axis)
-                    .as_primitive::<UInt32Type>()
-                    .values()
-                    .clone()
-            })
-            .collect();
-        let values = base
-            .column(axes.len())
-            .as_primitive::<Float64Type>()
-            .values()
-            .clone();
         if axes.is_sorted() {
-            // Not Columns::from_keys: Measure::try_new already rejects unsorted or unnormalized bases.
+            // Not Columns::from_keys: Measure already rejects unsorted or unnormalized cells.
             return Columns {
                 axes,
                 layout: measure.layout().clone(),
                 keys: measure.keys().clone(),
-                values,
-                members: Some(members),
+                values: measure.values().clone(),
             };
         }
-        let mut by_axis: Vec<(DimensionUlid, Column)> = axes.into_iter().zip(members).collect();
-        by_axis.sort_by_key(|&(axis, _)| axis);
-        let (axes, members): (Vec<DimensionUlid>, Vec<Column>) = by_axis.into_iter().unzip();
-        let lengths: Vec<u32> = axes
+        let mut order: Vec<usize> = (0..axes.len()).collect();
+        order.sort_by_key(|&position| axes[position]);
+        let lengths: Vec<u32> = order
             .iter()
-            .map(|axis| {
-                let position = measure
-                    .definition()
-                    .axes
-                    .iter()
-                    .position(|candidate| candidate == axis)
-                    .expect("the columns keep the measure's axes");
-                measure.layout().member(u64::MAX, position) + 1
-            })
+            .map(|&position| measure.layout().member(u64::MAX, position) + 1)
             .collect();
         let layout = KeyLayout::new(&lengths).expect("the measure's key fits the same widths");
-        let keys = (0..values.len())
-            .map(|row| layout.pack(members.iter().map(|column| column[row])))
+        let keys = measure
+            .keys()
+            .iter()
+            .map(|&key| {
+                layout.pack(
+                    order
+                        .iter()
+                        .map(|&position| measure.layout().member(key, position)),
+                )
+            })
             .collect();
-        Columns::from_keys(axes, layout, keys, values.to_vec())
+        Columns::from_keys(
+            order.iter().map(|&position| axes[position]).collect(),
+            layout,
+            keys,
+            measure.values().to_vec(),
+        )
     }
 
     pub(crate) fn position(&self, dimension: DimensionUlid) -> usize {
@@ -678,12 +651,13 @@ impl Columns {
                 layout: larger.layout.clone(),
                 keys: larger.keys.clone(),
                 values: values.into(),
-                members: larger.members.clone(),
             });
         }
         Ok(Columns {
+            axes: larger.axes.clone(),
+            layout: larger.layout.clone(),
+            keys: rows.iter().map(|&row| larger.keys[row]).collect(),
             values: values.into(),
-            ..larger.take(&rows)
         })
     }
 
@@ -784,8 +758,8 @@ impl Columns {
             axes: self.axes.clone(),
             layout: self.layout.clone(),
             keys: self.keys.clone(),
-            values: ScalarBuffer::from(Vec::new()),
-            members: self.members.clone(),
+            // Not an empty buffer: len() counts the values, and these columns have one row per key.
+            values: vec![0.0; self.keys.len()].into(),
         }
     }
 
@@ -820,9 +794,8 @@ impl Columns {
             keys.push(next);
         }
         Columns {
+            values: vec![0.0; keys.len()].into(),
             keys: keys.into(),
-            values: ScalarBuffer::from(Vec::new()),
-            members: None,
             axes: self.axes,
             layout: self.layout,
         }
@@ -899,7 +872,6 @@ impl Columns {
                 layout: self.layout.clone(),
                 keys: self.keys.clone(),
                 values: self.values.clone(),
-                members: self.members.clone(),
             });
         }
         let mut spread_axes = self.axes.clone();
@@ -944,51 +916,34 @@ impl Columns {
             .iter()
             .map(|&axis| self.position(axis))
             .collect();
-        let unpack = |position: usize| -> Column {
-            self.keys
-                .iter()
-                .map(|&key| self.layout.member(key, position))
-                .collect()
-        };
-        let mut arrays: Vec<ArrayRef>;
         if positions.is_sorted() {
-            arrays = positions
-                .iter()
-                .map(|&position| {
-                    let column = match &self.members {
-                        Some(members) => members[position].clone(),
-                        None => unpack(position),
-                    };
-                    Arc::new(UInt32Array::new(column, None)) as ArrayRef
-                })
-                .collect();
-            arrays.push(Arc::new(Float64Array::new(self.values.clone(), None)));
-            let base = RecordBatch::try_new(Arc::new(definition.schema()), arrays)
-                .expect("the columns follow the result's schema");
-            return Measure::try_new_with_keys(definition, base, Some(self.keys), dimensions);
+            return Measure::try_from_keys(definition, self.keys, self.values, dimensions);
         }
-        let columns: Vec<Column> = positions.iter().map(|&position| unpack(position)).collect();
-        let mut rows: Vec<usize> = (0..self.len()).collect();
-        rows.sort_by(|&left, &right| {
-            columns
+        let layout = KeyLayout::new(
+            &positions
                 .iter()
-                .map(|column| column[left])
-                .cmp(columns.iter().map(|column| column[right]))
-        });
-        arrays = columns
+                .map(|&position| self.layout.member(u64::MAX, position) + 1)
+                .collect::<Vec<_>>(),
+        )
+        .expect("the same widths fit in a key");
+        let keys: Vec<u64> = self
+            .keys
             .iter()
-            .map(|column| {
-                Arc::new(UInt32Array::from_iter_values(
-                    rows.iter().map(|&row| column[row]),
-                )) as ArrayRef
+            .map(|&key| {
+                layout.pack(
+                    positions
+                        .iter()
+                        .map(|&position| self.layout.member(key, position)),
+                )
             })
             .collect();
-        arrays.push(Arc::new(Float64Array::from_iter_values(
-            rows.iter().map(|&row| self.values[row]),
-        )));
-        let base = RecordBatch::try_new(Arc::new(definition.schema()), arrays)
-            .expect("the columns follow the result's schema");
-        Measure::try_new(definition, base, dimensions)
+        let rows = stable_order(&keys);
+        Measure::try_from_keys(
+            definition,
+            rows.iter().map(|&row| keys[row]).collect(),
+            rows.iter().map(|&row| self.values[row]).collect(),
+            dimensions,
+        )
     }
 }
 

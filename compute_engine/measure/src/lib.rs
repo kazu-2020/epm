@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::BuildHasher;
-use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
 use arrow_array::cast::AsArray;
@@ -98,6 +97,15 @@ impl KeyLayout {
         ((key >> self.shifts[axis]) & self.masks[axis]) as u32
     }
 
+    pub fn holds(&self, key: u64) -> bool {
+        let width = self
+            .shifts
+            .first()
+            .zip(self.masks.first())
+            .map_or(0, |(shift, mask)| shift + mask.count_ones());
+        key.checked_shr(width).unwrap_or(0) == 0
+    }
+
     pub fn members(&self, key: u64) -> impl Iterator<Item = u32> + '_ {
         (0..self.len()).map(move |axis| self.member(key, axis))
     }
@@ -148,11 +156,10 @@ impl std::error::Error for MeasureError {}
 pub struct Measure {
     definition: MeasureDefinition,
     axes: Vec<Axis>,
-    base: RecordBatch,
-    coordinate_columns: Vec<UInt32Array>,
     layout: KeyLayout,
+    // Not the u32 columns of the base: one packed key per row takes 8 B in place of 4 B per axis.
     keys: ScalarBuffer<u64>,
-    values: Float64Array,
+    values: ScalarBuffer<f64>,
     // Not Vec<Delta>: every version would copy all earlier deltas of the measure.
     deltas: Vec<Arc<Delta>>,
 }
@@ -163,33 +170,7 @@ impl Measure {
         base: RecordBatch,
         dimensions: &[&Dimension],
     ) -> Result<Self, MeasureError> {
-        Self::try_new_with_keys(definition, base, None, dimensions)
-    }
-
-    pub fn try_new_with_keys(
-        definition: MeasureDefinition,
-        base: RecordBatch,
-        keys: Option<ScalarBuffer<u64>>,
-        dimensions: &[&Dimension],
-    ) -> Result<Self, MeasureError> {
-        if definition.axes.is_empty() {
-            return Err(MeasureError::NoAxes);
-        }
-        let mut seen = HashSet::new();
-        let mut axes = Vec::with_capacity(definition.axes.len());
-        for &axis in &definition.axes {
-            if !seen.insert(axis) {
-                return Err(MeasureError::DuplicateAxis(axis));
-            }
-            let dimension = dimensions
-                .iter()
-                .find(|dimension| dimension.ulid() == axis)
-                .ok_or(MeasureError::MissingDimension(axis))?;
-            axes.push(Axis {
-                dimension: axis,
-                len: dimension.len(),
-            });
-        }
+        let (axes, layout) = Self::axes(&definition, dimensions)?;
         let expected = definition.schema();
         let found = base.schema();
         let same_shape =
@@ -214,50 +195,116 @@ impl Measure {
         {
             return Err(MeasureError::NullInColumn(field.name().clone()));
         }
-
-        let base = RecordBatch::try_new(Arc::new(expected), base.columns().to_vec())
-            .expect("columns without nulls fit the non-nullable measure schema");
-        let layout = KeyLayout::new(&axes.iter().map(|axis| axis.len).collect::<Vec<_>>())
-            .ok_or(MeasureError::KeyTooWide)?;
-        let given = keys.is_some();
-        let measure = Self::from_parts(definition, axes, layout, base, keys);
-        let (axes, coordinate_columns, values) =
-            (&measure.axes, &measure.coordinate_columns, &measure.values);
-        for (axis, column) in axes.iter().zip(coordinate_columns) {
-            if let Some(&member) = column.values().iter().find(|&&member| member >= axis.len) {
+        let columns: Vec<&[u32]> = base.columns()[..axes.len()]
+            .iter()
+            .map(|column| &column.as_primitive::<UInt32Type>().values()[..])
+            .collect();
+        for (axis, column) in axes.iter().zip(&columns) {
+            if let Some(&member) = column.iter().find(|&&member| member >= axis.len) {
                 return Err(MeasureError::MemberOutOfRange {
                     axis: axis.dimension,
                     member: MemberId(member),
                 });
             }
         }
-        for (row, &value) in values.values().iter().enumerate() {
+        let keys = (0..base.num_rows())
+            .map(|row| layout.pack(columns.iter().map(|column| column[row])))
+            .collect();
+        let values = base.columns()[axes.len()]
+            .as_primitive::<Float64Type>()
+            .values();
+        // Not the given buffer when it is part of a larger one: an IPC file read as one buffer would keep its member columns alive.
+        let values = if values.inner().capacity() > values.inner().len() {
+            values.to_vec().into()
+        } else {
+            values.clone()
+        };
+        Self::checked(definition, axes, layout, keys, values)
+    }
+
+    pub fn try_from_keys(
+        definition: MeasureDefinition,
+        keys: ScalarBuffer<u64>,
+        values: ScalarBuffer<f64>,
+        dimensions: &[&Dimension],
+    ) -> Result<Self, MeasureError> {
+        let (axes, layout) = Self::axes(&definition, dimensions)?;
+        if keys.len() != values.len() {
+            return Err(MeasureError::KeyMismatch(keys.len().min(values.len())));
+        }
+        if let Some(row) = keys.iter().position(|&key| !layout.holds(key)) {
+            return Err(MeasureError::KeyMismatch(row));
+        }
+        for (position, axis) in axes.iter().enumerate() {
+            if let Some(member) = keys
+                .iter()
+                .map(|&key| layout.member(key, position))
+                .find(|&member| member >= axis.len)
+            {
+                return Err(MeasureError::MemberOutOfRange {
+                    axis: axis.dimension,
+                    member: MemberId(member),
+                });
+            }
+        }
+        Self::checked(definition, axes, layout, keys, values)
+    }
+
+    fn axes(
+        definition: &MeasureDefinition,
+        dimensions: &[&Dimension],
+    ) -> Result<(Vec<Axis>, KeyLayout), MeasureError> {
+        if definition.axes.is_empty() {
+            return Err(MeasureError::NoAxes);
+        }
+        let mut seen = HashSet::new();
+        let mut axes = Vec::with_capacity(definition.axes.len());
+        for &axis in &definition.axes {
+            if !seen.insert(axis) {
+                return Err(MeasureError::DuplicateAxis(axis));
+            }
+            let dimension = dimensions
+                .iter()
+                .find(|dimension| dimension.ulid() == axis)
+                .ok_or(MeasureError::MissingDimension(axis))?;
+            axes.push(Axis {
+                dimension: axis,
+                len: dimension.len(),
+            });
+        }
+        let layout = KeyLayout::new(&axes.iter().map(|axis| axis.len).collect::<Vec<_>>())
+            .ok_or(MeasureError::KeyTooWide)?;
+        Ok((axes, layout))
+    }
+
+    fn checked(
+        definition: MeasureDefinition,
+        axes: Vec<Axis>,
+        layout: KeyLayout,
+        keys: ScalarBuffer<u64>,
+        values: ScalarBuffer<f64>,
+    ) -> Result<Self, MeasureError> {
+        for (row, &value) in values.iter().enumerate() {
             if normalize(value).map(f64::to_bits) != Some(value.to_bits()) {
                 return Err(MeasureError::UnnormalizedValue(row));
             }
         }
-        if measure.keys.len() != values.len() {
-            return Err(MeasureError::KeyMismatch(measure.keys.len()));
-        }
-        if given
-            && let Some(row) = (0..values.len()).find(|&row| {
-                measure.keys[row]
-                    != measure
-                        .layout
-                        .pack(coordinate_columns.iter().map(|column| column.value(row)))
-            })
-        {
-            return Err(MeasureError::KeyMismatch(row));
-        }
         // Keys order coordinates as the columns do: each axis takes the bits below the axes before it.
-        for row in 1..values.len() {
-            match measure.keys[row - 1].cmp(&measure.keys[row]) {
+        for row in 1..keys.len() {
+            match keys[row - 1].cmp(&keys[row]) {
                 Ordering::Less => {}
                 Ordering::Equal => return Err(MeasureError::DuplicateCoordinate(row)),
                 Ordering::Greater => return Err(MeasureError::UnsortedCoordinate(row)),
             }
         }
-        Ok(measure)
+        Ok(Measure {
+            definition,
+            axes,
+            layout,
+            keys,
+            values,
+            deltas: Vec::new(),
+        })
     }
 
     pub fn from_cells(
@@ -293,14 +340,14 @@ impl Measure {
 
     pub fn cells(&self) -> impl ExactSizeIterator<Item = (Vec<MemberId>, f64)> {
         let measure = self.compact();
-        (0..measure.values.len()).map(move |row| {
-            let coordinate = measure
-                .coordinate_columns
-                .iter()
-                .map(|column| MemberId(column.value(row)))
-                .collect();
-            (coordinate, measure.values.value(row))
-        })
+        (0..measure.values.len()).map(move |row| measure.cell(row))
+    }
+
+    pub fn cell(&self, row: usize) -> (Vec<MemberId>, f64) {
+        (
+            self.layout.members(self.keys[row]).map(MemberId).collect(),
+            self.values[row],
+        )
     }
 
     pub fn definition(&self) -> &MeasureDefinition {
@@ -311,8 +358,37 @@ impl Measure {
         self.definition.ulid
     }
 
-    pub fn base(&self) -> &RecordBatch {
-        &self.base
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub fn layout(&self) -> &KeyLayout {
+        &self.layout
+    }
+
+    pub fn keys(&self) -> &ScalarBuffer<u64> {
+        &self.keys
+    }
+
+    pub fn values(&self) -> &ScalarBuffer<f64> {
+        &self.values
+    }
+
+    pub fn base(&self) -> RecordBatch {
+        let mut columns: Vec<ArrayRef> = (0..self.axes.len())
+            .map(|axis| {
+                Arc::new(UInt32Array::from_iter_values(
+                    self.keys.iter().map(|&key| self.layout.member(key, axis)),
+                )) as ArrayRef
+            })
+            .collect();
+        columns.push(Arc::new(Float64Array::new(self.values.clone(), None)));
+        RecordBatch::try_new(Arc::new(self.definition.schema()), columns)
+            .expect("the unpacked columns follow the measure schema")
     }
 
     pub fn changes(&self) -> impl Iterator<Item = (&[MemberId], Option<f64>)> {
@@ -336,10 +412,15 @@ impl Measure {
                 return Ok(change);
             }
         }
-        Ok(self
-            .search(0, coordinate)
-            .ok()
-            .map(|row| self.values.value(row)))
+        if self
+            .axes
+            .iter()
+            .zip(coordinate)
+            .any(|(axis, member)| member.0 >= axis.len)
+        {
+            return Ok(None);
+        }
+        Ok(self.search(0, coordinate).ok().map(|row| self.values[row]))
     }
 
     pub fn delta(&self) -> Delta {
@@ -385,11 +466,7 @@ impl Measure {
 
         // Not `+`: a capacity hint is invisible to tests, so cargo-mutants would report its `*` mutant as surviving.
         let capacity = self.values.len().saturating_add(merged.changes.len());
-        let mut coordinate_columns: Vec<Vec<u32>> = self
-            .axes
-            .iter()
-            .map(|_| Vec::with_capacity(capacity))
-            .collect();
+        let mut keys = Vec::with_capacity(capacity);
         let mut values = Vec::with_capacity(capacity);
         let mut start = 0;
         for change in order {
@@ -398,35 +475,24 @@ impl Measure {
                 Ok(row) => (row, row + 1),
                 Err(row) => (row, row),
             };
-            self.copy_rows(start..end, &mut coordinate_columns, &mut values);
+            keys.extend_from_slice(&self.keys[start..end]);
+            values.extend_from_slice(&self.values[start..end]);
             start = next;
             if let Some(value) = merged.changes[change] {
-                for (output, member) in coordinate_columns.iter_mut().zip(coordinate) {
-                    output.push(member.0);
-                }
+                keys.push(self.layout.pack(coordinate.iter().map(|member| member.0)));
                 values.push(value);
             }
         }
-        self.copy_rows(
-            start..self.values.len(),
-            &mut coordinate_columns,
-            &mut values,
-        );
-
-        let mut columns: Vec<ArrayRef> = coordinate_columns
-            .into_iter()
-            .map(|column| Arc::new(UInt32Array::from(column)) as ArrayRef)
-            .collect();
-        columns.push(Arc::new(Float64Array::from(values)));
-        let base = RecordBatch::try_new(Arc::new(self.definition.schema()), columns)
-            .expect("compaction builds columns in the measure schema");
-        Self::from_parts(
-            self.definition.clone(),
-            self.axes.clone(),
-            self.layout.clone(),
-            base,
-            None,
-        )
+        keys.extend_from_slice(&self.keys[start..]);
+        values.extend_from_slice(&self.values[start..]);
+        Measure {
+            definition: self.definition.clone(),
+            axes: self.axes.clone(),
+            layout: self.layout.clone(),
+            keys: keys.into(),
+            values: values.into(),
+            deltas: Vec::new(),
+        }
     }
 
     fn merged_delta(&self) -> Delta {
@@ -439,71 +505,12 @@ impl Measure {
         merged
     }
 
-    fn from_parts(
-        definition: MeasureDefinition,
-        axes: Vec<Axis>,
-        layout: KeyLayout,
-        base: RecordBatch,
-        keys: Option<ScalarBuffer<u64>>,
-    ) -> Measure {
-        let columns = base.columns();
-        let coordinate_columns: Vec<UInt32Array> = columns[..axes.len()]
-            .iter()
-            .map(|column| column.as_primitive::<UInt32Type>().clone())
-            .collect();
-        let values = columns[axes.len()].as_primitive::<Float64Type>().clone();
-        let keys = keys.unwrap_or_else(|| {
-            (0..values.len())
-                .map(|row| layout.pack(coordinate_columns.iter().map(|column| column.value(row))))
-                .collect()
-        });
-        Measure {
-            definition,
-            axes,
-            base,
-            coordinate_columns,
-            layout,
-            keys,
-            values,
-            deltas: Vec::new(),
-        }
-    }
-
-    pub fn layout(&self) -> &KeyLayout {
-        &self.layout
-    }
-
-    pub fn keys(&self) -> &ScalarBuffer<u64> {
-        &self.keys
-    }
-
-    fn copy_rows(
-        &self,
-        rows: Range<usize>,
-        coordinate_columns: &mut [Vec<u32>],
-        values: &mut Vec<f64>,
-    ) {
-        for (column, output) in self.coordinate_columns.iter().zip(coordinate_columns) {
-            output.extend_from_slice(&column.values()[rows.clone()]);
-        }
-        values.extend_from_slice(&self.values.values()[rows]);
-    }
-
     fn search(&self, from: usize, coordinate: &[MemberId]) -> Result<usize, usize> {
-        let (mut low, mut high) = (from, self.values.len());
-        while low < high {
-            let middle = usize::midpoint(low, high);
-            let row_coordinate = self
-                .coordinate_columns
-                .iter()
-                .map(|column| column.value(middle));
-            match row_coordinate.cmp(coordinate.iter().map(|member| member.0)) {
-                Ordering::Less => low = middle + 1,
-                Ordering::Equal => return Ok(middle),
-                Ordering::Greater => high = middle,
-            }
-        }
-        Err(low)
+        let key = self.layout.pack(coordinate.iter().map(|member| member.0));
+        self.keys[from..]
+            .binary_search(&key)
+            .map(|row| from + row)
+            .map_err(|row| from + row)
     }
 }
 
