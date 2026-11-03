@@ -8,7 +8,7 @@ use ulid::Ulid;
 #[test]
 fn small_model_matches_the_evaluator_on_dense_paths() {
     matches_the_evaluator(
-        &[],
+        &["SUM('売上', BY '部門', '期間') * SUM('売上', BY '商品', '期間')"],
         &Size {
             products: 30,
             customers: 20,

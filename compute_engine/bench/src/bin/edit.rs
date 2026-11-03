@@ -62,7 +62,7 @@ fn main() -> std::io::Result<()> {
                 .expect("the edit recalculates");
             times.push(started.elapsed());
             eprintln!("{name}\t{edit}\t{:.3}s", started.elapsed().as_secs_f64());
-            // Off the clock: the server folds deltas into the base in the background.
+            // Not timed: the server folds deltas into the base in the background.
             for measure in &mut measures {
                 if measure.delta_len() > 0 {
                     *measure = measure.compact();

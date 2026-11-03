@@ -4,7 +4,6 @@ use dimension::{DimensionUlid, MemberId};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Region {
-    // A dimension left out spans all of its members.
     members: BTreeMap<DimensionUlid, BTreeSet<u32>>,
 }
 

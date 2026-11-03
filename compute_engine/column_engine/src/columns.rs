@@ -16,9 +16,9 @@ use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 use crate::region::Region;
 
 const DENSE_LIMIT: usize = 1 << 22;
-// Above this many members, walking the runs beats one binary search per member.
+// Not one binary search per member above this many: walking the runs is faster.
 const SEARCHED_MEMBERS: usize = 64;
-// Each thread scans whole pieces, so a large range is cut up for the threads to share.
+// Not one range per thread: a single large range would leave the other threads idle.
 const SCANNED_ROWS: usize = 1 << 20;
 
 type Column = ScalarBuffer<u32>;
@@ -64,6 +64,7 @@ fn in_order(columns: &[&[u32]], len: usize) -> bool {
 fn sorted_rows(columns: &[&[u32]], len: usize) -> Vec<usize> {
     let mut rows: Vec<usize> = (0..len).collect();
     if !in_order(columns, len) {
+        // Not sort_unstable_by: SUM adds each group in coordinate order.
         rows.sort_by(|&left, &right| compare(columns, left, columns, right));
     }
     rows
@@ -74,7 +75,6 @@ fn runs<'r>(columns: &[&[u32]], rows: &'r [usize]) -> Vec<&'r [usize]> {
         .collect()
 }
 
-// Rows sorted by coordinate keep each leading member in one run, so a leading axis with few members is a binary search; the axes after it are checked row by row.
 fn narrow(
     columns: &[&[u32]],
     constraints: &[Option<&BTreeSet<u32>>],
@@ -358,15 +358,15 @@ impl Columns {
                 })
                 .collect()
         };
+        let mut chunks = pieces.chunks(pieces.len().div_ceil(threads).max(1));
+        let first = chunks.next().unwrap_or_default();
         let rows: Vec<usize> = std::thread::scope(|scope| {
-            let handles: Vec<_> = pieces
-                .chunks(pieces.len().div_ceil(threads).max(1))
-                .map(|chunk| scope.spawn(|| scan(chunk)))
-                .collect();
-            handles
-                .into_iter()
-                .flat_map(|handle| handle.join().expect("a scan does not panic"))
-                .collect()
+            let handles: Vec<_> = chunks.map(|chunk| scope.spawn(|| scan(chunk))).collect();
+            let mut rows = scan(first);
+            for handle in handles {
+                rows.extend(handle.join().expect("a scan does not panic"));
+            }
+            rows
         });
         Columns {
             members: gather(&self.columns(), &rows),
@@ -430,7 +430,7 @@ impl Columns {
             .values()
             .clone();
         if axes.is_sorted() {
-            // Measure::try_new already holds the base sorted by coordinate and normalized.
+            // Not Columns::new: Measure::try_new already rejects unsorted or unnormalized bases.
             return Columns {
                 axes,
                 members,
@@ -453,21 +453,15 @@ impl Columns {
         members: &[MemberId],
         keeps_axis: bool,
     ) -> Columns {
-        let position = self.position(dimension);
-        let kept: Vec<usize> = (0..self.len())
-            .filter(|&row| members.contains(&MemberId(self.members[position][row])))
-            .collect();
-        let mut axes = self.axes;
-        let mut columns = self.members;
+        let mut region = Region::default();
+        region.constrain(dimension, members.iter().map(|member| member.0).collect());
+        let mut columns = self.restrict(&region);
         if !keeps_axis {
-            axes.remove(position);
-            columns.remove(position);
+            let position = columns.position(dimension);
+            columns.axes.remove(position);
+            columns.members.remove(position);
         }
-        Columns {
-            axes,
-            members: gather(&slices(&columns), &kept),
-            values: kept.iter().map(|&row| self.values[row]).collect(),
-        }
+        columns
     }
 
     pub(crate) fn negate(self) -> Columns {
@@ -609,7 +603,7 @@ impl Columns {
         axes.sort_unstable();
         axes.dedup();
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
-        // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
+        // Not an empty result when no term is full: ADR 0002 spreads every term, so '人数' + SUM('売上', BY '期間') has a cell on every pair.
         let spread: Vec<Columns> = if any_full {
             Vec::new()
         } else {
@@ -810,7 +804,6 @@ impl Columns {
         groups.sort_by_key(|&(axis, _)| axis);
         let group_columns: Vec<&[u32]> =
             groups.iter().map(|(_, column)| column.as_slice()).collect();
-        // Stable, so each group adds its values in the value's coordinate order.
         let order = sorted_rows(&group_columns, kept.len());
         let runs = runs(&group_columns, &order);
         let members = group_columns

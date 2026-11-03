@@ -788,7 +788,7 @@ fn a_malformed_filter_is_an_error_node_up_to_its_closing_bracket() {
 fn a_bracket_takes_one_member_and_reports_the_rest() {
     assert_outcome(
         "'X'['D': 'a', 'b', 'c']",
-        "(Filter 'X' 'D': 'a' 'b' 'c')",
+        "ERROR",
         &[(SyntaxErrorKind::MoreThanOneMember, 14..22)],
     );
 }

@@ -383,6 +383,7 @@ impl Parser {
         if let [_, second, ..] = members.as_slice() {
             let end = members.last().expect("two members or more").span.end;
             self.error(SyntaxErrorKind::MoreThanOneMember, second.span.start..end);
+            return None;
         }
         Some((dimension, members))
     }

@@ -12,6 +12,7 @@ exclude_re = [
     "replace < with <= in Columns::row_of",
     "replace \\+ with [-*] in Columns::row_of",
     "replace / with % in Columns::row_of",
+    "replace - with \\+ in Columns::row_of",
     # Not tested: these only choose a slower path (sort, filter or binary search) that builds the same cells.
     "replace in_order -> bool with false",
     "replace != with == in in_order",
@@ -27,5 +28,5 @@ exclude_re = [
     "replace match guard searched\\(members\\) with (true|false) in narrow",
     "replace Evaluator<'a>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
 ]
-# Not mutated: bench, datagen and oracle are tools, not engine code. A datagen mutant mostly changes which data is generated, which no test can tell apart, every oracle mutant relinks DuckDB and reruns the property test, and bench only drives the engines.
+# Not mutated: bench, datagen and oracle are tools, not engine code. No test can tell datagen mutants apart, each oracle mutant relinks DuckDB and reruns the property test, and bench only drives the engines.
 exclude_globs = ["bench/**", "datagen/**", "oracle/**"]

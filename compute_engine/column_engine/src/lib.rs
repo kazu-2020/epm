@@ -29,23 +29,20 @@ pub fn edit(
     formulas: &[(MeasureUlid, &CheckedExpression)],
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {
+    // Not edited in place: an error part way would leave results that disagree with their inputs.
+    let mut next = measures.to_vec();
     let mut changed = HashMap::new();
-    apply(measures, edited, delta, &mut changed, dimensions)?;
+    apply(&mut next, edited, delta, &mut changed, dimensions)?;
     for &(result, expression) in formulas {
         let Some(region) = changed_region(expression, &changed, dimensions)? else {
             continue;
         };
-        let references: Vec<&Measure> = measures.iter().collect();
-        let output = position(measures, result)?;
-        let delta = recalculate(
-            expression,
-            &measures[output],
-            &region,
-            &references,
-            dimensions,
-        )?;
-        apply(measures, result, delta, &mut changed, dimensions)?;
+        let references: Vec<&Measure> = next.iter().collect();
+        let output = position(&next, result)?;
+        let delta = recalculate(expression, &next[output], &region, &references, dimensions)?;
+        apply(&mut next, result, delta, &mut changed, dimensions)?;
     }
+    measures.swap_with_slice(&mut next);
     Ok(())
 }
 
