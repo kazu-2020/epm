@@ -241,7 +241,17 @@ fn sum(value: &Query, by: &[CheckedAxis]) -> Query {
             }
         }
     }
-    items.push("SUM(node.value) AS value".into());
+    let order: Vec<String> = value
+        .axes
+        .iter()
+        .map(|&axis| format!("node.{}", column(axis)))
+        .collect();
+    // Not a bare SUM: DuckDB's parallel SUM adds in a different order on each run.
+    items.push(if order.is_empty() {
+        "SUM(node.value) AS value".into()
+    } else {
+        format!("SUM(node.value ORDER BY {}) AS value", order.join(", "))
+    });
     let group_by = if groups.is_empty() {
         String::new()
     } else {

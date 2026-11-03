@@ -144,6 +144,11 @@ pub const CASES: &[Case] = &[
         expected: &[(&[0], 357.0), (&[1], 357.0)],
     },
     Case {
+        name: "SUM は座標の小さい順に足す",
+        steps: &[("期間結果", "SUM('桁落ち')")],
+        expected: &[(&[0], 1.0), (&[1], 1.0)],
+    },
+    Case {
         name: "空のメジャーの SUM は空",
         steps: &[("期間結果", "SUM('空')")],
         expected: &[],
@@ -194,7 +199,7 @@ impl Default for Fixture {
             &[&divisions],
         );
         let dimensions = vec![periods, departments, divisions];
-        let input_cells: [(MeasureDefinition, &Cells); 5] = [
+        let input_cells: [(MeasureDefinition, &Cells); 6] = [
             (
                 measure_definition(11, "売上", &[DEPARTMENT, PERIOD]),
                 &[
@@ -216,6 +221,11 @@ impl Default for Fixture {
             (
                 measure_definition(15, "改定", &[DEPARTMENT, PERIOD]),
                 &[(&[0, 0], 1.0), (&[1, 0], 2.0)],
+            ),
+            (
+                measure_definition(16, "桁落ち", &[DEPARTMENT, PERIOD]),
+                // Not stored in coordinate order: the rows are laid out by 部門 first, so adding them as stored rounds 1 away next to 1e16, while 期間 first cancels the two large values before 1.
+                &[(&[0, 0], 1e16), (&[0, 1], 1.0), (&[1, 0], -1e16)],
             ),
         ];
         let results = [

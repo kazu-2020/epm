@@ -12,13 +12,6 @@ const NUMBERS: [&str; 7] = ["0", "1", "2", "3", "10", "0.5", "1.5"];
 struct Generated {
     text: String,
     axes: Vec<DimensionUlid>,
-    exact: bool,
-}
-
-impl Generated {
-    fn referable_in(&self, allowed: &[DimensionUlid]) -> bool {
-        self.exact || fits(&self.axes, allowed)
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -34,13 +27,6 @@ const NODES: [Node; 6] = [
     Node::Binary(BinaryOperator::Subtract),
     Node::Binary(BinaryOperator::Multiply),
     Node::Binary(BinaryOperator::Divide),
-    Node::Sum,
-];
-
-const EXACT_NODES: [Node; 4] = [
-    Node::Negate,
-    Node::Binary(BinaryOperator::Add),
-    Node::Binary(BinaryOperator::Subtract),
     Node::Sum,
 ];
 
@@ -61,7 +47,6 @@ impl Generator<'_> {
             .map(|input| Generated {
                 text: quote(&input.definition().name),
                 axes: input.definition().axes.clone(),
-                exact: true,
             })
             .collect();
         let mut formulas = Formulas {
@@ -80,17 +65,18 @@ impl Formulas<'_, '_, '_> {
         let previous = (index > 0).then(|| self.references.len() - 1);
         let mut axes = self.generator.axes(self.dimensions);
         if let Some(previous) = previous
-            && !self.references[previous].referable_in(&axes)
+            && !fits(&self.references[previous].axes, &axes)
+            && self.generator.random.random_bool(0.5)
         {
             axes = union(axes, self.references[previous].axes.clone());
         }
         let depth = self.generator.configuration.maximum_depth;
         let root = match previous {
-            None => self.expression(&axes, depth, false),
+            None => self.expression(&axes, depth),
             Some(previous) if depth == 0 => self.reference(previous, &axes),
             Some(previous) => {
                 let link = self.reference(previous, &axes);
-                let other = self.expression(&axes, depth - 1, false);
+                let other = self.expression(&axes, depth - 1);
                 let operator = *[
                     BinaryOperator::Add,
                     BinaryOperator::Subtract,
@@ -113,7 +99,6 @@ impl Formulas<'_, '_, '_> {
         self.references.push(Generated {
             text: quote(&definition.name),
             axes: definition.axes.clone(),
-            exact: root.exact,
         });
         Formula {
             result: definition,
@@ -121,66 +106,51 @@ impl Formulas<'_, '_, '_> {
         }
     }
 
-    fn expression(&mut self, allowed: &[DimensionUlid], depth: usize, exact: bool) -> Generated {
+    fn expression(&mut self, allowed: &[DimensionUlid], depth: usize) -> Generated {
         if depth == 0 || self.generator.random.random_bool(0.2) {
-            return self.leaf(allowed, exact);
+            return self.leaf(allowed);
         }
-        let nodes: &[Node] = if exact { &EXACT_NODES } else { &NODES };
-        match *nodes
+        match *NODES
             .choose(&mut self.generator.random)
             .expect("there are nodes")
         {
             Node::Negate => {
-                let operand = self.expression(allowed, depth - 1, exact);
+                let operand = self.expression(allowed, depth - 1);
                 Generated {
                     text: format!("-{}", operand.text),
                     ..operand
                 }
             }
             Node::Binary(operator) => {
-                let left = self.expression(allowed, depth - 1, exact);
-                let right = self.expression(allowed, depth - 1, exact);
+                let left = self.expression(allowed, depth - 1);
+                let right = self.expression(allowed, depth - 1);
                 binary(left, operator, right)
             }
             Node::Sum => {
                 let value_axes = self.generator.axes(self.dimensions);
-                let value = self.expression(&value_axes, depth - 1, true);
+                let value = self.expression(&value_axes, depth - 1);
                 self.sum(value, allowed)
             }
         }
     }
 
-    fn leaf(&mut self, allowed: &[DimensionUlid], exact: bool) -> Generated {
-        let candidates: Vec<usize> = (0..self.references.len())
-            .filter(|&index| {
-                let reference = &self.references[index];
-                if exact {
-                    reference.exact
-                } else {
-                    reference.referable_in(allowed)
-                }
-            })
-            .collect();
-        match candidates.choose(&mut self.generator.random) {
-            Some(&reference) if self.generator.random.random_bool(0.75) => {
-                self.reference(reference, allowed)
-            }
-            _ => Generated {
-                text: NUMBERS
-                    .choose(&mut self.generator.random)
-                    .expect("there are numbers")
-                    .to_string(),
-                axes: Vec::new(),
-                exact: true,
-            },
+    fn leaf(&mut self, allowed: &[DimensionUlid]) -> Generated {
+        if !self.references.is_empty() && self.generator.random.random_bool(0.75) {
+            let reference = self.generator.random.random_range(0..self.references.len());
+            return self.reference(reference, allowed);
+        }
+        Generated {
+            text: NUMBERS
+                .choose(&mut self.generator.random)
+                .expect("there are numbers")
+                .to_string(),
+            axes: Vec::new(),
         }
     }
 
     fn reference(&mut self, reference: usize, allowed: &[DimensionUlid]) -> Generated {
         let generated = self.references[reference].clone();
-        if fits(&generated.axes, allowed)
-            && (!generated.exact || self.generator.random.random_bool(0.8))
-        {
+        if fits(&generated.axes, allowed) && self.generator.random.random_bool(0.8) {
             generated
         } else {
             self.sum(generated, allowed)
@@ -188,8 +158,6 @@ impl Formulas<'_, '_, '_> {
     }
 
     fn sum(&mut self, value: Generated, allowed: &[DimensionUlid]) -> Generated {
-        // Not any value under SUM: the evaluator and the oracle add in different orders, so a sum of rounded values can differ in the last bits and flip whether a later division sees 0.
-        assert!(value.exact, "only an exact value is summed: {}", value.text);
         let mut outputs: Vec<DimensionUlid> = Vec::new();
         let mut by: Vec<String> = Vec::new();
         for &axis in &value.axes {
@@ -223,7 +191,6 @@ impl Formulas<'_, '_, '_> {
         Generated {
             text,
             axes: outputs,
-            exact: value.exact,
         }
     }
 }
@@ -231,9 +198,6 @@ impl Formulas<'_, '_, '_> {
 fn binary(left: Generated, operator: BinaryOperator, right: Generated) -> Generated {
     Generated {
         text: format!("({} {} {})", left.text, operator.symbol(), right.text),
-        exact: left.exact
-            && right.exact
-            && matches!(operator, BinaryOperator::Add | BinaryOperator::Subtract),
         axes: union(left.axes, right.axes),
     }
 }

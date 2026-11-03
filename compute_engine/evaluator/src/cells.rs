@@ -146,8 +146,18 @@ impl Cells {
     }
 
     pub(crate) fn sum(&self, by: &[ByAxis<'_>]) -> Cells {
+        let mut order: Vec<usize> = (0..self.axes.len()).collect();
+        order.sort_by_key(|&axis| self.axes[axis]);
+        let mut cells: Vec<(&Vec<MemberId>, &f64)> = self.values.iter().collect();
+        // Not the map's order: f64 addition depends on order, and the map's changes from run to run.
+        cells.sort_unstable_by(|(left, _), (right, _)| {
+            order
+                .iter()
+                .map(|&axis| left[axis])
+                .cmp(order.iter().map(|&axis| right[axis]))
+        });
         let mut groups: HashMap<Vec<MemberId>, f64> = HashMap::new();
-        for (coordinate, value) in &self.values {
+        for (coordinate, &value) in cells {
             // Not a group of its own: the design document drops a member whose attribute is null from the sum.
             let group: Option<Vec<MemberId>> = by
                 .iter()
