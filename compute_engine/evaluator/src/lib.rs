@@ -2,7 +2,7 @@ mod cells;
 mod evaluate_error;
 
 use dimension::{Dimension, DimensionUlid};
-use formula::{CheckedAxis, CheckedExpression, CheckedNode};
+use formula::{BinaryOperator, CheckedAxis, CheckedExpression, CheckedNode};
 use measure::{Measure, MeasureDefinition};
 
 use crate::cells::{ByAxis, Cells, find_dimension};
@@ -54,15 +54,24 @@ impl<'a> Evaluator<'a> {
             }
             CheckedNode::Negate(operand) => Ok(self.node(operand)?.negate()),
             CheckedNode::Binary {
+                operator: BinaryOperator::Add | BinaryOperator::Subtract,
+                ..
+            } => Cells::add(
+                node.terms()
+                    .into_iter()
+                    .map(|(sign, term)| Ok((sign, self.node(term)?)))
+                    .collect::<Result<Vec<_>, EvaluateError>>()?,
+                self.dimensions,
+            ),
+            CheckedNode::Binary {
                 operator,
                 left,
                 right,
-            } => Cells::combine(
+            } => Ok(Cells::product(
                 *operator,
                 self.node(left)?,
                 self.node(right)?,
-                self.dimensions,
-            ),
+            )),
             CheckedNode::Sum { value, by } => {
                 let value = self.node(value)?;
                 let by = by

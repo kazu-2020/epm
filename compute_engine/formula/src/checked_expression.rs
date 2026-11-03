@@ -30,6 +30,49 @@ pub enum CheckedNode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sign {
+    Plus,
+    Minus,
+}
+
+impl Sign {
+    fn flipped(self) -> Sign {
+        match self {
+            Sign::Plus => Sign::Minus,
+            Sign::Minus => Sign::Plus,
+        }
+    }
+}
+
+impl CheckedNode {
+    #[must_use]
+    pub fn terms(&self) -> Vec<(Sign, &CheckedNode)> {
+        let mut terms = Vec::new();
+        self.push_terms(Sign::Plus, &mut terms);
+        terms
+    }
+
+    fn push_terms<'n>(&'n self, sign: Sign, terms: &mut Vec<(Sign, &'n CheckedNode)>) {
+        match self {
+            CheckedNode::Binary {
+                operator: operator @ (BinaryOperator::Add | BinaryOperator::Subtract),
+                left,
+                right,
+            } => {
+                left.push_terms(sign, terms);
+                let right_sign = if *operator == BinaryOperator::Add {
+                    sign
+                } else {
+                    sign.flipped()
+                };
+                right.push_terms(right_sign, terms);
+            }
+            _ => terms.push((sign, self)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckedAxis {
     Dimension(DimensionUlid),
     Attribute {

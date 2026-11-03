@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
-use formula::BinaryOperator;
+use formula::{BinaryOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
 use crate::evaluate_error::EvaluateError;
@@ -17,24 +17,9 @@ pub(crate) struct ByAxis<'d> {
     pub(crate) attribute: Option<Attribute<'d>>,
 }
 
-#[derive(Clone, Copy)]
-enum Presence {
-    Either,
-    Both,
-}
-
 enum Source {
     Kept(usize),
     Repeated(u32),
-}
-
-fn rule(operator: BinaryOperator) -> (Presence, fn(f64, f64) -> f64) {
-    match operator {
-        BinaryOperator::Add => (Presence::Either, |left, right| left + right),
-        BinaryOperator::Subtract => (Presence::Either, |left, right| left - right),
-        BinaryOperator::Multiply => (Presence::Both, |left, right| left * right),
-        BinaryOperator::Divide => (Presence::Both, |left, right| left / right),
-    }
 }
 
 pub(crate) fn find_dimension<'d>(
@@ -93,30 +78,6 @@ fn join(left: &Cells, right: &Cells, apply: fn(f64, f64) -> f64) -> Vec<(Vec<Mem
     joined
 }
 
-fn onto(full: &Cells, other: &Cells, apply: impl Fn(f64, f64) -> f64) -> Vec<(Vec<MemberId>, f64)> {
-    let positions: Vec<usize> = other
-        .axes
-        .iter()
-        .map(|axis| {
-            full.axes
-                .iter()
-                .position(|own| own == axis)
-                .expect("full has every axis of other")
-        })
-        .collect();
-    full.values
-        .iter()
-        .map(|(coordinate, &value)| {
-            let key: Vec<MemberId> = positions
-                .iter()
-                .map(|&position| coordinate[position])
-                .collect();
-            let other_value = other.values.get(&key).copied().unwrap_or(0.0);
-            (coordinate.clone(), apply(value, other_value))
-        })
-        .collect()
-}
-
 impl Cells {
     pub(crate) fn number(value: f64) -> Cells {
         Cells {
@@ -143,44 +104,74 @@ impl Cells {
         }
     }
 
-    pub(crate) fn combine(
-        operator: BinaryOperator,
-        left: Cells,
-        right: Cells,
-        dimensions: &[&Dimension],
-    ) -> Result<Cells, EvaluateError> {
+    pub(crate) fn product(operator: BinaryOperator, left: Cells, right: Cells) -> Cells {
         let mut axes = left.axes.clone();
         axes.extend(right.axes.iter().filter(|axis| !left.axes.contains(axis)));
-        let (presence, apply) = rule(operator);
-        let values = match presence {
-            Presence::Either => {
-                match (
-                    left.axes.len() == axes.len(),
-                    right.axes.len() == axes.len(),
-                ) {
-                    (true, true) => {
-                        let right = right.broadcast(&axes, dimensions)?;
-                        let coordinates: HashSet<&Vec<MemberId>> =
-                            left.values.keys().chain(right.values.keys()).collect();
-                        normalized(coordinates.into_iter().map(|coordinate| {
-                            let side = |cells: &Cells| {
-                                cells.values.get(coordinate).copied().unwrap_or(0.0)
-                            };
-                            (coordinate.clone(), apply(side(&left), side(&right)))
-                        }))
-                    }
-                    (true, false) => normalized(onto(&left, &right, apply)),
-                    (false, true) => {
-                        let right = right.broadcast(&axes, dimensions)?;
-                        normalized(onto(&right, &left, |right, left| apply(left, right)))
-                    }
-                    // Not spread over every member: neither side has all the axes, so only pairs that both have make a cell.
-                    (false, false) => normalized(join(&left, &right, apply)),
-                }
+        let apply: fn(f64, f64) -> f64 = match operator {
+            BinaryOperator::Multiply => |left, right| left * right,
+            BinaryOperator::Divide => |left, right| left / right,
+            BinaryOperator::Add | BinaryOperator::Subtract => {
+                unreachable!("+ and - are evaluated as a chain of terms")
             }
-            // Not broadcast like Either: only cells present on both sides survive, so spreading a sparse side over every member would build cells the join discards.
-            Presence::Both => normalized(join(&left, &right, apply)),
         };
+        // Not broadcast: only cells present on both sides survive, so spreading a sparse side over every member would build cells the join discards.
+        Cells {
+            axes,
+            values: normalized(join(&left, &right, apply)),
+        }
+    }
+
+    pub(crate) fn add(
+        terms: Vec<(Sign, Cells)>,
+        dimensions: &[&Dimension],
+    ) -> Result<Cells, EvaluateError> {
+        let mut axes: Vec<DimensionUlid> = Vec::new();
+        for (_, term) in &terms {
+            axes.extend(
+                term.axes
+                    .iter()
+                    .filter(|axis| !axes.contains(axis))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
+        let mut coordinates: HashSet<Vec<MemberId>> = HashSet::new();
+        for (_, term) in &terms {
+            // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
+            if !any_full || term.axes.len() == axes.len() {
+                coordinates.extend(term.broadcast(&axes, dimensions)?.values.into_keys());
+            }
+        }
+        let positions: Vec<Vec<usize>> = terms
+            .iter()
+            .map(|(_, term)| {
+                term.axes
+                    .iter()
+                    .map(|axis| {
+                        axes.iter()
+                            .position(|own| own == axis)
+                            .expect("axes has every term's axes")
+                    })
+                    .collect()
+            })
+            .collect();
+        let values = normalized(coordinates.into_iter().map(|coordinate| {
+            let mut total: Option<f64> = None;
+            for ((sign, term), positions) in terms.iter().zip(&positions) {
+                let key: Vec<MemberId> = positions
+                    .iter()
+                    .map(|&position| coordinate[position])
+                    .collect();
+                let value = term.values.get(&key).copied().unwrap_or(0.0);
+                total = Some(match (total, sign) {
+                    (None, Sign::Plus) => value,
+                    (None, Sign::Minus) => -value,
+                    (Some(total), Sign::Plus) => total + value,
+                    (Some(total), Sign::Minus) => total - value,
+                });
+            }
+            (coordinate, total.expect("a chain has a term"))
+        }));
         Ok(Cells { axes, values })
     }
 
@@ -219,7 +210,7 @@ impl Cells {
     }
 
     pub(crate) fn broadcast(
-        self,
+        &self,
         axes: &[DimensionUlid],
         dimensions: &[&Dimension],
     ) -> Result<Cells, EvaluateError> {
@@ -234,7 +225,7 @@ impl Cells {
             )
             .collect::<Result<Vec<_>, _>>()?;
         let mut values = HashMap::new();
-        for (coordinate, value) in self.values {
+        for (coordinate, &value) in &self.values {
             let mut coordinates = vec![Vec::with_capacity(axes.len())];
             for source in &sources {
                 let members: Vec<MemberId> = match *source {
