@@ -2,7 +2,7 @@ mod common;
 
 use std::ops::Range;
 
-use formula::{AxisError, AxisErrorKind, CheckedAxis, CheckedNode, ResolveErrorKind};
+use formula::{AxisError, AxisErrorKind, CheckedAxis, CheckedNode, ResolveErrorKind, Sign};
 use measure::MeasureDefinition;
 
 use AxisErrorKind::{
@@ -362,5 +362,31 @@ fn a_passing_check_keeps_the_resolved_tree_without_spans() {
     assert_eq!(
         render(check.checked.expect("the check passes").root()),
         "(Subtract (Negate (Sum (Divide [部門 期間] 2) BY 部門->事業部 期間)) 1)"
+    );
+}
+
+#[test]
+fn a_chain_of_additions_and_subtractions_splits_into_signed_terms_through_parentheses_and_negation()
+{
+    let check = formula::check_axes(
+        &resolved("'売上' - (2 - -'売上') + 1 * 3").expression,
+        &result("売上").axes,
+    );
+    assert_eq!(check.errors, []);
+    let checked = check.checked.expect("the check passes");
+    let terms: Vec<(Sign, String)> = checked
+        .root()
+        .terms()
+        .into_iter()
+        .map(|(sign, term)| (sign, render(term)))
+        .collect();
+    assert_eq!(
+        terms,
+        [
+            (Sign::Plus, "[部門 期間]".to_string()),
+            (Sign::Minus, "2".to_string()),
+            (Sign::Minus, "[部門 期間]".to_string()),
+            (Sign::Plus, "(Multiply 1 3)".to_string()),
+        ]
     );
 }

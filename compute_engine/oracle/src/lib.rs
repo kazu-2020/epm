@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use dimension::{AttributeUlid, Dimension, DimensionUlid, MemberId};
 use duckdb::Connection;
-use formula::{BinaryOperator, CheckedAxis, CheckedExpression, CheckedNode};
+use formula::{BinaryOperator, CheckedAxis, CheckedExpression, CheckedNode, Sign};
 use measure::{Measure, MeasureUlid};
 
 pub struct Oracle {
@@ -117,10 +117,14 @@ fn query(node: &CheckedNode) -> Query {
             }
         }
         CheckedNode::Binary {
+            operator: BinaryOperator::Add | BinaryOperator::Subtract,
+            ..
+        } => sum_of_terms(&node.terms()),
+        CheckedNode::Binary {
             operator,
             left,
             right,
-        } => binary(*operator, &query(left), &query(right)),
+        } => product(*operator, &query(left), &query(right)),
         CheckedNode::Sum { value, by } => sum(&query(value), by),
     };
     let mut items: Vec<String> = query.axes.iter().map(|&axis| column(axis)).collect();
@@ -155,10 +159,74 @@ fn expanded(query: &Query, axes: &[DimensionUlid]) -> String {
     )
 }
 
-fn binary(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
+fn sum_of_terms(terms: &[(Sign, &CheckedNode)]) -> Query {
+    let terms: Vec<(Sign, Query)> = terms
+        .iter()
+        .map(|&(sign, term)| (sign, query(term)))
+        .collect();
+    let axes: BTreeSet<DimensionUlid> = terms
+        .iter()
+        .flat_map(|(_, term)| term.axes.iter().copied())
+        .collect();
+    let axes_list: Vec<DimensionUlid> = axes.iter().copied().collect();
+    let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
+    // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
+    let creates_cells = |term: &Query| !any_full || term.axes.len() == axes.len();
+    let columns = if axes.is_empty() {
+        "1 AS unit".to_string()
+    } else {
+        axes_list
+            .iter()
+            .map(|&axis| column(axis))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let coordinates = terms
+        .iter()
+        .filter(|(_, term)| creates_cells(term))
+        .map(|(_, term)| format!("SELECT {columns} FROM ({})", expanded(term, &axes_list)))
+        .collect::<Vec<_>>()
+        .join(" UNION ");
+    let mut total = "0::DOUBLE".to_string();
+    let mut joins = String::new();
+    for (index, (sign, term)) in terms.iter().enumerate() {
+        let alias = format!("term_{index}");
+        let operator = match sign {
+            Sign::Plus => "+",
+            Sign::Minus => "-",
+        };
+        total.push_str(&format!(" {operator} COALESCE({alias}.value, 0)"));
+        let on: Vec<String> = term
+            .axes
+            .iter()
+            .map(|&axis| format!("{alias}.{0} = coordinate.{0}", column(axis)))
+            .collect();
+        joins.push_str(&format!(
+            " LEFT JOIN ({}) AS {alias} ON {}",
+            term.sql,
+            if on.is_empty() {
+                "TRUE".to_string()
+            } else {
+                on.join(" AND ")
+            }
+        ));
+    }
+    let mut items: Vec<String> = axes_list
+        .iter()
+        .map(|&axis| format!("coordinate.{}", column(axis)))
+        .collect();
+    items.push(format!("{total} AS value"));
+    Query {
+        sql: format!(
+            "SELECT {} FROM ({coordinates}) AS coordinate{joins}",
+            items.join(", ")
+        ),
+        axes,
+    }
+}
+
+fn product(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
     let axes: Vec<DimensionUlid> = left.axes.union(&right.axes).copied().collect();
-    let left_sql = expanded(left, &axes);
-    let right_sql = expanded(right, &axes);
     let condition = if axes.is_empty() {
         "TRUE".to_string()
     } else {
@@ -167,47 +235,26 @@ fn binary(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
             .collect::<Vec<_>>()
             .join(" AND ")
     };
-    let symbol = operator.symbol();
-    let sql = match operator {
-        BinaryOperator::Add | BinaryOperator::Subtract => {
-            let mut items: Vec<String> = axes
-                .iter()
-                .map(|&axis| {
-                    format!(
-                        "COALESCE(left_side.{0}, right_side.{0}) AS {0}",
-                        column(axis)
-                    )
-                })
-                .collect();
-            items.push(format!(
-                "COALESCE(left_side.value, 0) {symbol} COALESCE(right_side.value, 0) AS value"
-            ));
-            format!(
-                "SELECT {} FROM ({left_sql}) AS left_side FULL OUTER JOIN ({right_sql}) AS right_side ON {condition}",
-                items.join(", ")
-            )
-        }
-        BinaryOperator::Multiply | BinaryOperator::Divide => {
-            let mut items: Vec<String> = axes
-                .iter()
-                .map(|&axis| format!("left_side.{}", column(axis)))
-                .collect();
-            items.push(format!(
-                "left_side.value {symbol} right_side.value AS value"
-            ));
-            let filter = if operator == BinaryOperator::Divide {
-                " WHERE right_side.value <> 0"
-            } else {
-                ""
-            };
-            format!(
-                "SELECT {} FROM ({left_sql}) AS left_side JOIN ({right_sql}) AS right_side ON {condition}{filter}",
-                items.join(", ")
-            )
-        }
+    let mut items: Vec<String> = axes
+        .iter()
+        .map(|&axis| format!("left_side.{}", column(axis)))
+        .collect();
+    items.push(format!(
+        "left_side.value {} right_side.value AS value",
+        operator.symbol()
+    ));
+    let filter = if operator == BinaryOperator::Divide {
+        " WHERE right_side.value <> 0"
+    } else {
+        ""
     };
     Query {
-        sql,
+        sql: format!(
+            "SELECT {} FROM ({}) AS left_side JOIN ({}) AS right_side ON {condition}{filter}",
+            items.join(", "),
+            expanded(left, &axes),
+            expanded(right, &axes)
+        ),
         axes: axes.into_iter().collect(),
     }
 }
