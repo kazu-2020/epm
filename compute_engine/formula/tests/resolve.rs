@@ -32,10 +32,16 @@ fn render(expression: &ResolvedExpression) -> String {
             value,
             dimension,
             members,
+            keeps_axis,
         } => {
             let members: Vec<_> = members.iter().map(|member| member.0.to_string()).collect();
             format!(
-                "(Filter {} '{}' [{}])",
+                "({} {} '{}' [{}])",
+                if *keeps_axis {
+                    "FilterKeepingAxis"
+                } else {
+                    "Filter"
+                },
                 render(value),
                 common::dimension_name(*dimension),
                 members.join(" ")
@@ -264,8 +270,11 @@ fn a_syntax_error_node_resolves_to_an_error_node_without_a_new_error() {
 #[test]
 fn a_filter_resolves_its_dimension_and_member_keys_to_sorted_unique_ids() {
     assert_eq!(
-        resolve("'売上'['期間': '2月', '1月', '2月']"),
-        ("(Filter '売上'{部門,期間} '期間' [0 1])".into(), vec![])
+        resolve("FILTER('売上', '期間' IN ('2月', '1月', '2月'))"),
+        (
+            "(FilterKeepingAxis '売上'{部門,期間} '期間' [0 1])".into(),
+            vec![]
+        )
     );
 }
 
@@ -273,7 +282,7 @@ fn a_filter_resolves_its_dimension_and_member_keys_to_sorted_unique_ids() {
 fn a_filter_with_an_unknown_dimension_or_member_is_an_error_at_that_name() {
     for (source, kind, part) in [
         (
-            "'売上'['期間': '3月', '1月']",
+            "FILTER('売上', '期間' IN ('3月', '1月'))",
             ResolveErrorKind::UnknownMember,
             "'3月'",
         ),

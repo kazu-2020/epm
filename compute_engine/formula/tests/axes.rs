@@ -403,9 +403,9 @@ fn a_chain_of_additions_and_subtractions_splits_into_signed_terms_through_parent
 }
 
 #[test]
-fn a_one_member_filter_removes_its_axis_and_a_filter_of_more_keeps_it() {
+fn a_bracket_removes_its_axis_and_filter_keeps_it() {
     assert_eq!(check("全社売上", "'売上'['部門': '営業']"), passes(&[]));
-    let source = "'売上'['部門': '営業', '開発']";
+    let source = "FILTER('売上', '部門' = '営業')";
     assert_eq!(
         check("全社売上", source),
         outcome(
@@ -415,13 +415,15 @@ fn a_one_member_filter_removes_its_axis_and_a_filter_of_more_keeps_it() {
     );
     assert_eq!(check("売上計画", source), passes(&[]));
     let check = formula::check_axes(
-        &resolved("'売上'['部門': '開発'] + '売上'['部門': '営業', '開発']['期間': '1月']")
-            .expression,
+        &resolved(
+            "'売上'['部門': '開発'] + FILTER('売上'['期間': '1月'], '部門' IN ('営業', '開発'))",
+        )
+        .expression,
         &result("売上計画").axes,
     );
     assert_eq!(
         render(check.checked.expect("the check passes").root()),
-        "(Add (Filter [部門 期間] 部門: [MemberId(1)] keeps_axis=false) (Filter (Filter [部門 期間] 部門: [MemberId(0), MemberId(1)] keeps_axis=true) 期間: [MemberId(0)] keeps_axis=false))"
+        "(Add (Filter [部門 期間] 部門: [MemberId(1)] keeps_axis=false) (Filter (Filter [部門 期間] 期間: [MemberId(0)] keeps_axis=false) 部門: [MemberId(0), MemberId(1)] keeps_axis=true))"
     );
 }
 

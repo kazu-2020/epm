@@ -25,4 +25,5 @@ pub enum SyntaxErrorKind {
     ExpectedAxis,
     ExpectedFilter,
     ExpectedClosingBracket,
+    MoreThanOneMember,
 }

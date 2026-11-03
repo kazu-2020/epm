@@ -67,9 +67,10 @@ impl<'a> Resolver<'a> {
                 value,
                 dimension,
                 members,
+                keeps_axis,
             } => {
                 let value = self.expression(value);
-                self.filter(value, dimension, members)
+                self.filter(value, dimension, members, *keeps_axis)
                     .unwrap_or(ResolvedExpressionKind::Error)
             }
             ExpressionKind::Error => ResolvedExpressionKind::Error,
@@ -85,6 +86,7 @@ impl<'a> Resolver<'a> {
         value: ResolvedExpression,
         dimension: &QuotedName,
         members: &[QuotedName],
+        keeps_axis: bool,
     ) -> Option<ResolvedExpressionKind> {
         let found = match (
             self.find_dimension(&dimension.name),
@@ -117,6 +119,7 @@ impl<'a> Resolver<'a> {
             value: Box::new(value),
             dimension: found.ulid(),
             members: ids,
+            keeps_axis,
         })
     }
 

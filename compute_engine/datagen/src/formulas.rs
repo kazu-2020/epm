@@ -181,18 +181,20 @@ impl Formulas<'_, '_, '_> {
         })
         .collect();
         let mut axes = value.axes;
-        if count == 1 {
-            axes.remove(position);
-        }
-        Generated {
-            text: format!(
-                "{}[{}: {}]",
+        let dimension = quote(filtered.name());
+        let text = match members.as_slice() {
+            [member] if self.generator.random.random_bool(0.5) => {
+                axes.remove(position);
+                format!("{}[{dimension}: {member}]", value.text)
+            }
+            [member] => format!("FILTER({}, {dimension} = {member})", value.text),
+            _ => format!(
+                "FILTER({}, {dimension} IN ({}))",
                 value.text,
-                quote(filtered.name()),
                 members.join(", ")
             ),
-            axes,
-        }
+        };
+        Generated { text, axes }
     }
 
     fn sum(&mut self, value: Generated, allowed: &[DimensionUlid]) -> Generated {

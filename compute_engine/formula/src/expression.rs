@@ -24,6 +24,7 @@ pub enum ExpressionKind {
         value: Box<Expression>,
         dimension: QuotedName,
         members: Vec<QuotedName>,
+        keeps_axis: bool,
     },
     Error,
 }

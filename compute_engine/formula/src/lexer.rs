@@ -11,6 +11,9 @@ pub(crate) enum TokenKind {
     Word,
     Sum,
     By,
+    Filter,
+    In,
+    Equals,
     Plus,
     Minus,
     Asterisk,
@@ -61,6 +64,8 @@ impl Lexer<'_> {
                     match &self.source[start..self.offset()] {
                         "SUM" => TokenKind::Sum,
                         "BY" => TokenKind::By,
+                        "FILTER" => TokenKind::Filter,
+                        "IN" => TokenKind::In,
                         _ => TokenKind::Word,
                     }
                 }
@@ -170,6 +175,7 @@ fn punctuation(character: char) -> Option<TokenKind> {
         '[' => Some(TokenKind::LeftBracket),
         ']' => Some(TokenKind::RightBracket),
         ':' => Some(TokenKind::Colon),
+        '=' => Some(TokenKind::Equals),
         _ => None,
     }
 }

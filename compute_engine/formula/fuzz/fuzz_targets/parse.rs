@@ -41,6 +41,7 @@ fn check(source: &str, expression: &Expression, outer: &Range<usize>) -> usize {
             value,
             dimension,
             members,
+            ..
         } => {
             let height = check(source, value, &expression.span);
             let mut previous_end = value.span.end;

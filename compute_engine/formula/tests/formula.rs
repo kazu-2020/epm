@@ -21,13 +21,19 @@ fn render(expression: &Expression) -> String {
             value,
             dimension,
             members,
+            keeps_axis,
         } => {
             let members: Vec<_> = members
                 .iter()
                 .map(|member| format!("'{}'", member.name))
                 .collect();
             format!(
-                "(Filter {} '{}': {})",
+                "({} {} '{}': {})",
+                if *keeps_axis {
+                    "FilterKeepingAxis"
+                } else {
+                    "Filter"
+                },
                 render(value),
                 dimension.name,
                 members.join(" ")
@@ -749,8 +755,8 @@ fn a_filter_follows_a_name_and_may_be_chained() {
         "(Filter '粗利' 'バージョン': '実績')"
     );
     assert_eq!(
-        tree("'X'['D': 'a', 'b']['E': 'c'] * 2"),
-        "(Multiply (Filter (Filter 'X' 'D': 'a' 'b') 'E': 'c') 2)"
+        tree("'X'['D': 'a']['E': 'c'] * 2"),
+        "(Multiply (Filter (Filter 'X' 'D': 'a') 'E': 'c') 2)"
     );
     let source = "1 + 'X'['D': 'a']";
     let ExpressionKind::Binary { right, .. } = formula::parse(source).expression.kind else {
@@ -779,6 +785,69 @@ fn a_malformed_filter_is_an_error_node_up_to_its_closing_bracket() {
 }
 
 #[test]
+fn a_bracket_takes_one_member_and_reports_the_rest() {
+    assert_outcome(
+        "'X'['D': 'a', 'b', 'c']",
+        "(Filter 'X' 'D': 'a' 'b' 'c')",
+        &[(SyntaxErrorKind::MoreThanOneMember, 14..22)],
+    );
+}
+
+#[test]
+fn filter_keeps_the_axis_for_one_member_or_a_list() {
+    assert_eq!(
+        tree("FILTER('X', 'D' = 'a')"),
+        "(FilterKeepingAxis 'X' 'D': 'a')"
+    );
+    assert_eq!(
+        tree("FILTER('X'['E': 'c'] * 2, 'D' IN ('a', 'b')) + 1"),
+        "(Add (FilterKeepingAxis (Multiply (Filter 'X' 'E': 'c') 2) 'D': 'a' 'b') 1)"
+    );
+    let source = "1 + FILTER('X', 'D' = 'a')";
+    let ExpressionKind::Binary { right, .. } = formula::parse(source).expression.kind else {
+        panic!("{source} parses to an addition");
+    };
+    assert_eq!(right.span, 4..source.len());
+}
+
+#[test]
+fn a_malformed_filter_function_is_an_error_node_up_to_its_closing_parenthesis() {
+    assert_outcome(
+        "FILTER 'X'",
+        "ERROR",
+        &[
+            (SyntaxErrorKind::ExpectedOpeningParenthesis, 7..7),
+            (SyntaxErrorKind::UnexpectedToken, 7..10),
+        ],
+    );
+    assert_outcome(
+        "FILTER('X') + 1",
+        "(Add ERROR 1)",
+        &[(SyntaxErrorKind::ExpectedFilter, 10..10)],
+    );
+    assert_outcome(
+        "FILTER('X', 'D' 'a', SUM(1)) + 1",
+        "(Add ERROR 1)",
+        &[(SyntaxErrorKind::ExpectedFilter, 16..16)],
+    );
+    assert_outcome(
+        "FILTER('X', 'D' IN 'a') + 1",
+        "(Add ERROR 1)",
+        &[(SyntaxErrorKind::ExpectedFilter, 19..19)],
+    );
+    assert_outcome(
+        "FILTER('X', 'D' IN ('a', 1)) + 1",
+        "(Add ERROR 1)",
+        &[(SyntaxErrorKind::ExpectedFilter, 25..25)],
+    );
+    assert_outcome(
+        "FILTER('X', 'D' IN ('a') + 1",
+        "(Add (FilterKeepingAxis 'X' 'D': 'a') 1)",
+        &[(SyntaxErrorKind::ExpectedClosingParenthesis, 25..25)],
+    );
+}
+
+#[test]
 fn each_filter_counts_as_one_level_toward_the_nesting_limit() {
     let filter = "['D': 'a']";
     assert_eq!(errors(&format!("'X'{}", filter.repeat(128))), []);
@@ -798,5 +867,25 @@ fn an_empty_name_in_a_filter_is_reported_once_by_the_lexer() {
         "'X'['': 'a']",
         "ERROR",
         &[(SyntaxErrorKind::EmptyName, 4..6)],
+    );
+}
+
+#[test]
+fn each_filter_function_is_one_level_of_the_128_level_limit() {
+    let nested = |levels: usize| {
+        format!(
+            "{}'X'{}",
+            "FILTER(".repeat(levels),
+            ", 'D' = 'a')".repeat(levels)
+        )
+    };
+    assert_eq!(errors(&nested(128)), []);
+    assert_eq!(
+        errors(&nested(129)),
+        [(SyntaxErrorKind::TooDeeplyNested, 896..2454)]
+    );
+    assert_eq!(
+        errors(&format!("{} + 1", nested(128))),
+        [(SyntaxErrorKind::TooDeeplyNested, 2436..2439)]
     );
 }

@@ -145,6 +145,7 @@ impl Parser {
                 })
             }
             Some(TokenKind::Sum) => self.sum(depth),
+            Some(TokenKind::Filter) => self.filter_function(depth),
             Some(TokenKind::Number(_) | TokenKind::Name(_) | TokenKind::Word) => {
                 let token = self.next_token();
                 let kind = match token.kind {
@@ -262,6 +263,7 @@ impl Parser {
                 value: Box::new(value),
                 dimension,
                 members,
+                keeps_axis: false,
             },
             None => ExpressionKind::Error,
         };
@@ -269,6 +271,102 @@ impl Parser {
             height: 1 + height,
             expression: Expression { kind, span },
         })
+    }
+
+    fn filter_function(&mut self, depth: usize) -> Parsing {
+        self.descend(depth + 1)?;
+        let keyword = self.next_token();
+        if self
+            .next_if(|kind| matches!(kind, TokenKind::LeftParenthesis))
+            .is_none()
+        {
+            let position = self.position();
+            self.error(
+                SyntaxErrorKind::ExpectedOpeningParenthesis,
+                position..position,
+            );
+            return Ok(Subtree::leaf(ExpressionKind::Error, keyword.span));
+        }
+        let value = self.expression(depth + 1)?;
+        let condition = if self
+            .next_if(|kind| matches!(kind, TokenKind::Comma))
+            .is_some()
+        {
+            self.condition()
+        } else {
+            let position = self.position();
+            self.error(SyntaxErrorKind::ExpectedFilter, position..position);
+            None
+        };
+        if condition.is_none() {
+            self.skip_to_closing_parenthesis();
+        }
+        let end = self.closing_parenthesis(self.previous_end.max(value.expression.span.end));
+        let kind = match condition {
+            Some((dimension, members)) => ExpressionKind::Filter {
+                value: Box::new(value.expression),
+                dimension,
+                members,
+                keeps_axis: true,
+            },
+            None => ExpressionKind::Error,
+        };
+        Ok(Subtree {
+            height: 1 + value.height,
+            expression: Expression {
+                kind,
+                span: keyword.span.start..end,
+            },
+        })
+    }
+
+    fn condition(&mut self) -> Option<(QuotedName, Vec<QuotedName>)> {
+        let dimension = self.filter_name()?;
+        if self
+            .next_if(|kind| matches!(kind, TokenKind::Equals))
+            .is_some()
+        {
+            return Some((dimension, vec![self.filter_name()?]));
+        }
+        if self.next_if(|kind| matches!(kind, TokenKind::In)).is_none()
+            || self
+                .next_if(|kind| matches!(kind, TokenKind::LeftParenthesis))
+                .is_none()
+        {
+            let position = self.position();
+            self.error(SyntaxErrorKind::ExpectedFilter, position..position);
+            return None;
+        }
+        let members = self.member_list();
+        if members.is_none() {
+            self.skip_to_closing_parenthesis();
+        }
+        self.closing_parenthesis(self.previous_end);
+        Some((dimension, members?))
+    }
+
+    fn member_list(&mut self) -> Option<Vec<QuotedName>> {
+        let mut members = vec![self.filter_name()?];
+        while self
+            .next_if(|kind| matches!(kind, TokenKind::Comma))
+            .is_some()
+        {
+            members.push(self.filter_name()?);
+        }
+        Some(members)
+    }
+
+    fn skip_to_closing_parenthesis(&mut self) {
+        let mut open_parentheses = 0usize;
+        while let Some(token) = self
+            .next_if(|kind| open_parentheses > 0 || !matches!(kind, TokenKind::RightParenthesis))
+        {
+            match token.kind {
+                TokenKind::LeftParenthesis => open_parentheses += 1,
+                TokenKind::RightParenthesis => open_parentheses -= 1,
+                _ => {}
+            }
+        }
     }
 
     fn filter_parts(&mut self) -> Option<(QuotedName, Vec<QuotedName>)> {
@@ -281,12 +379,10 @@ impl Parser {
             self.error(SyntaxErrorKind::ExpectedFilter, position..position);
             return None;
         }
-        let mut members = vec![self.filter_name()?];
-        while self
-            .next_if(|kind| matches!(kind, TokenKind::Comma))
-            .is_some()
-        {
-            members.push(self.filter_name()?);
+        let members = self.member_list()?;
+        if let [_, second, ..] = members.as_slice() {
+            let end = members.last().expect("two members or more").span.end;
+            self.error(SyntaxErrorKind::MoreThanOneMember, second.span.start..end);
         }
         Some((dimension, members))
     }

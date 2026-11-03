@@ -32,6 +32,7 @@ pub enum ResolvedExpressionKind {
         value: Box<ResolvedExpression>,
         dimension: DimensionUlid,
         members: Vec<MemberId>,
+        keeps_axis: bool,
     },
     Error,
 }

@@ -153,11 +153,12 @@ fn node(expression: &ResolvedExpression) -> Option<CheckedNode> {
             value,
             dimension,
             members,
+            keeps_axis,
         } => CheckedNode::Filter {
             value: Box::new(node(value)?),
             dimension: *dimension,
             members: members.clone(),
-            keeps_axis: members.len() > 1,
+            keeps_axis: *keeps_axis,
         },
         ResolvedExpressionKind::Error => return None,
     })

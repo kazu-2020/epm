@@ -71,7 +71,8 @@ fn every_formula_parses_resolves_and_passes_the_axis_check() {
         }
     }
     for construct in [
-        " + ", " - ", " * ", " / ", "-'", "SUM(", ", BY ", "'.'親'", "0", "': 'm", ", 'm",
+        " + ", " - ", " * ", " / ", "-'", "SUM(", ", BY ", "'.'親'", "0", "': 'm", "FILTER(",
+        "' = 'm", " IN ('m", ", 'm",
     ] {
         assert!(texts.contains(construct), "no formula uses {construct}");
     }

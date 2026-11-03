@@ -81,14 +81,15 @@ impl Checker {
             ResolvedExpressionKind::Filter {
                 value,
                 dimension,
-                members,
+                keeps_axis,
+                ..
             } => {
                 let mut axes = self.axes(value, allowed)?;
                 if !axes.contains(dimension) {
                     self.error(AxisErrorKind::ValueLacksAxis, *dimension, &expression.span);
                     return None;
                 }
-                if members.len() == 1 {
+                if !keeps_axis {
                     axes.remove(dimension);
                 }
                 Some(axes)
