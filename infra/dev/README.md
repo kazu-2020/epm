@@ -2,38 +2,20 @@
 
 AWS アカウント epm-dev(東京リージョン)のリソースを、HCP Terraform のワークスペース `epm-dev` で管理する。今あるのは EC2 での測定(`.github/workflows/bench.yml`)に使うものだけで、名前は `bench` で始まり、`Purpose=bench` のタグが付く。
 
-## 最初に手で行うこと
+## Terraform の外にあるもの
 
-HCP Terraform が epm-dev に apply するには、HCP Terraform 用の OIDC プロバイダーとロールが先に要る。アカウントを払い出したあと、管理者の権限で次を1回だけ作る。
+次のものは、このディレクトリのコードが前提にしているが、Terraform では管理していない。アカウントを作り直すときや、ほかのアカウントに同じ構成を作るときは、先に手で作る。
 
-1. IAM の Identity provider を作る。Provider type は OpenID Connect、Provider URL は `https://app.terraform.io`、Audience は `aws.workload.identity`。
-2. 次の信頼ポリシーでロール `terraform-cloud` を作り、`AdministratorAccess` を付ける。`<account>` は epm-dev のアカウント ID。
+- IAM の Identity provider `app.terraform.io`。Audience は `aws.workload.identity`。
+- IAM ロール `terraform-cloud`。`AdministratorAccess` を付け、信頼ポリシーで次の `sub` だけを許す。plan と apply で同じロールを使う。
 
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [{
-       "Effect": "Allow",
-       "Principal": { "Federated": "arn:aws:iam::<account>:oidc-provider/app.terraform.io" },
-       "Action": "sts:AssumeRoleWithWebIdentity",
-       "Condition": {
-         "StringEquals": { "app.terraform.io:aud": "aws.workload.identity" },
-         "StringLike": { "app.terraform.io:sub": "organization:matazou_organization:project:*:workspace:epm-dev:run_phase:*" }
-       }
-     }]
-   }
-   ```
+  ```text
+  organization:matazou_organization:project:*:workspace:epm-dev:run_phase:*
+  ```
 
-3. ワークスペース `epm-dev` の Variables で「Dynamic Provider Credential」の Quick setup を開き、Single role、Role name に `terraform-cloud` を入れる。表示されたカードで「Mark complete」を押すと、環境変数 `TFC_AWS_PROVIDER_AUTH` が `true` になる。`TFC_AWS_RUN_ROLE_ARN` が手順2のロールの ARN になっているかも確かめる。
-
-## apply のあとに手で行うこと
-
-GitHub の environment `bench`(Settings → Environments)の Deployment branches and tags を「Selected branches and tags」にし、`main` だけを足す。そのあと、変数を2つ足す。値は apply の出力にある。
-
-- `AWS_ROLE_ARN`:`bench_role_arn` の値
-- `BENCH_BUCKET`:`bench_bucket` の値
-
-最初の測定の前に、epm-dev の Service Quotas で「Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances」(L-1216C47A)が 8 vCPU 以上あるかを確かめる。足りなければ引き上げを申請する。r7i.2xlarge は 8 vCPU を使う。
+- HCP Terraform のワークスペース `epm-dev` の環境変数。`TFC_AWS_PROVIDER_AUTH` は `true`、`TFC_AWS_RUN_ROLE_ARN` は `terraform-cloud` の ARN。
+- GitHub の environment `bench`。Deployment branches は `main` だけに限る。変数 `AWS_ROLE_ARN` には apply の出力の `bench_role_arn`、`BENCH_BUCKET` には `bench_bucket` を入れる。
+- epm-dev の On-Demand の vCPU の上限(Service Quotas の L-1216C47A)。r7i.2xlarge を1台起動するため、8 vCPU 以上にする。
 
 ## 測定の流れ
 
