@@ -1,6 +1,7 @@
 mod columns;
 mod region;
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
 use dimension::{Attribute, Dimension, MemberId};
@@ -135,6 +136,7 @@ fn evaluate_in(
     let evaluator = Evaluator {
         measures,
         dimensions,
+        shared: RefCell::new(repeated(expression.root())),
     };
     Ok(evaluator
         .node(expression.root(), region)?
@@ -226,13 +228,93 @@ fn find_attribute<'d>(
         .ok_or(EvaluateError::MissingAttribute(attribute))
 }
 
-struct Evaluator<'a> {
+struct Evaluator<'a, 'e> {
     measures: &'a [&'a Measure],
     dimensions: &'a [&'a Dimension],
+    shared: RefCell<Vec<Shared<'e>>>,
 }
 
-impl<'a> Evaluator<'a> {
-    fn node(&self, node: &CheckedNode, region: &Region) -> Result<Columns, EvaluateError> {
+struct Shared<'e> {
+    node: &'e CheckedNode,
+    uses_left: usize,
+    result: Option<(Region, Columns)>,
+}
+
+fn operands(node: &CheckedNode) -> Vec<&CheckedNode> {
+    match node {
+        CheckedNode::Number(_) | CheckedNode::Measure { .. } => Vec::new(),
+        CheckedNode::Negate(operand) => vec![operand],
+        CheckedNode::Binary {
+            operator: BinaryOperator::Add | BinaryOperator::Subtract,
+            ..
+        } => node.terms().into_iter().map(|(_, term)| term).collect(),
+        CheckedNode::Binary { left, right, .. } => vec![left, right],
+        CheckedNode::Filter { value, .. } | CheckedNode::Sum { value, .. } => vec![value],
+    }
+}
+
+fn repeated(root: &CheckedNode) -> Vec<Shared<'_>> {
+    fn visit<'e>(node: &'e CheckedNode, seen: &mut Vec<Shared<'e>>) {
+        if operands(node).is_empty() {
+            return;
+        }
+        if let Some(entry) = seen.iter_mut().find(|entry| entry.node == node) {
+            // Not a visit of the operands again: only the first use evaluates them.
+            entry.uses_left += 1;
+            return;
+        }
+        seen.push(Shared {
+            node,
+            uses_left: 1,
+            result: None,
+        });
+        for operand in operands(node) {
+            visit(operand, seen);
+        }
+    }
+    let mut seen = Vec::new();
+    visit(root, &mut seen);
+    seen.retain(|entry| entry.uses_left > 1);
+    seen
+}
+
+impl<'a, 'e> Evaluator<'a, 'e> {
+    fn node(&self, node: &'e CheckedNode, region: &Region) -> Result<Columns, EvaluateError> {
+        let Some(position) = self
+            .shared
+            .borrow()
+            .iter()
+            .position(|entry| entry.node == node)
+        else {
+            return self.compute(node, region);
+        };
+        let cached = {
+            let mut shared = self.shared.borrow_mut();
+            let entry = &mut shared[position];
+            entry.uses_left -= 1;
+            match &entry.result {
+                Some((cached_region, columns)) if cached_region == region => {
+                    let columns = columns.clone();
+                    if entry.uses_left == 0 {
+                        entry.result = None;
+                    }
+                    Some(columns)
+                }
+                _ => None,
+            }
+        };
+        if let Some(columns) = cached {
+            return Ok(columns);
+        }
+        let columns = self.compute(node, region)?;
+        let mut shared = self.shared.borrow_mut();
+        if shared[position].uses_left > 0 {
+            shared[position].result = Some((region.clone(), columns.clone()));
+        }
+        Ok(columns)
+    }
+
+    fn compute(&self, node: &'e CheckedNode, region: &Region) -> Result<Columns, EvaluateError> {
         match node {
             CheckedNode::Number(value) => Ok(Columns::number(*value)),
             CheckedNode::Measure { ulid, axes } => {

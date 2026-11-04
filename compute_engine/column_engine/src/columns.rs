@@ -21,6 +21,7 @@ const SCANNED_ROWS: usize = 1 << 20;
 // Not smaller pieces: below this many rows the cost of handing out work is larger than the work.
 const PARALLEL_ROWS: usize = 1 << 14;
 
+#[derive(Clone)]
 pub(crate) struct Columns {
     axes: Vec<DimensionUlid>,
     layout: KeyLayout,
