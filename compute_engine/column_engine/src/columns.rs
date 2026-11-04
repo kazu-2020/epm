@@ -195,8 +195,9 @@ impl Columns {
         axes: Vec<DimensionUlid>,
         layout: KeyLayout,
         keys: Vec<u64>,
-        values: Vec<f64>,
+        values: impl Into<ScalarBuffer<f64>>,
     ) -> Columns {
+        let values = values.into();
         if first_unsorted(&keys).is_none()
             && first_row(&values, |&value| !is_normalized(value)).is_none()
         {
@@ -204,7 +205,7 @@ impl Columns {
                 axes,
                 layout,
                 keys: keys.into(),
-                values: values.into(),
+                values,
             };
         }
         let rows: Vec<usize> = stable_order(&keys)
@@ -475,7 +476,7 @@ impl Columns {
             order.iter().map(|&position| axes[position]).collect(),
             layout,
             keys,
-            measure.values().to_vec(),
+            measure.values().clone(),
         )
     }
 
@@ -518,12 +519,7 @@ impl Columns {
                 )
             })
             .collect();
-        Ok(Columns::from_keys(
-            axes,
-            layout,
-            keys,
-            columns.values.to_vec(),
-        ))
+        Ok(Columns::from_keys(axes, layout, keys, columns.values))
     }
 
     pub(crate) fn negate(self) -> Columns {
@@ -885,7 +881,7 @@ impl Columns {
         let order = stable_order(&group_keys);
         let runs = runs(&group_keys, &order);
         let keys = runs.iter().map(|run| group_keys[run[0]]).collect();
-        let values = runs
+        let values: Vec<f64> = runs
             .par_iter()
             .map(|run| {
                 run.iter().fold(0.0, |total, &group_row| {
@@ -969,7 +965,7 @@ fn union(mine: ScalarBuffer<u64>, theirs: &ScalarBuffer<u64>) -> ScalarBuffer<u6
     if mine.ptr_eq(theirs) {
         return mine;
     }
-    let mut keys = Vec::with_capacity(mine.len().max(theirs.len()));
+    let mut keys = Vec::with_capacity(mine.len() + theirs.len());
     let (mut own, mut their) = (0, 0);
     while own < mine.len() || their < theirs.len() {
         let next = match (mine.get(own), theirs.get(their)) {
