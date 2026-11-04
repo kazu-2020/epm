@@ -9,12 +9,14 @@ data "aws_ec2_instance_type_offerings" "bench" {
 }
 
 locals {
-  bench_tags         = { Purpose = "bench" }
-  bench_instance     = "r7i.2xlarge"
-  bench_ami          = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
-  canonical_account  = "099720109477"
-  github_environment = "repo:kazu-2020/epm:environment:bench"
-  ec2_arn            = "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}"
+  bench_tags           = { Purpose = "bench" }
+  bench_instance       = "r7i.2xlarge"
+  bench_ami            = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
+  canonical_account    = "099720109477"
+  github_owner_id      = "64774307"
+  github_repository_id = "1438427453"
+  github_environment   = "repo:kazu-2020@${local.github_owner_id}/epm@${local.github_repository_id}:environment:bench"
+  ec2_arn              = "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}"
 }
 
 resource "aws_vpc" "bench" {
