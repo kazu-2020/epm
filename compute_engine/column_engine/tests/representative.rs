@@ -41,7 +41,8 @@ fn repeated_subexpressions_match_the_evaluator() {
     matches_the_evaluator(
         &[
             "SUM('売上' * 2, BY '部門', '期間') / SUM('売上' * 2, BY '期間') + '売上' * 2",
-            "('売上' * 2)['バージョン': '実績'] - ('売上' * 2)['バージョン': '予算'] + '売上' * 2",
+            "FILTER('売上' * 2, 'バージョン' = '実績') - FILTER('売上' * 2, 'バージョン' = '予算') + '売上' * 2",
+            "FILTER('売上' * 2 + 1, 'バージョン' = '実績') - FILTER('売上' * 2 + 1, 'バージョン' = '予算') + '売上' * 2",
         ],
         &Size {
             products: 30,
@@ -103,6 +104,12 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
     let mut measures: Vec<Measure> = workspace.inputs.clone();
     for formula in &workspace.formulas {
         let parsed = formula::parse(&formula.text);
+        assert!(
+            parsed.errors.is_empty(),
+            "{}: {:?}",
+            formula.text,
+            parsed.errors
+        );
         let resolved = formula::resolve(&parsed.expression, &definitions, &dimensions);
         let checked = formula::check_axes(&resolved.expression, &formula.result.axes)
             .checked

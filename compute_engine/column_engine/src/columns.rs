@@ -437,7 +437,7 @@ impl Columns {
                     .map(move |start| start..(start + SCANNED_ROWS).min(range.end))
             })
             .collect();
-        let selected = self.select(&pieces, |row| {
+        self.select(&pieces, |row| {
             let key = self.keys[row];
             key & mask == pattern
                 && checks.iter().all(|(axis, inside)| {
@@ -446,11 +446,7 @@ impl Columns {
                         .copied()
                         .unwrap_or(false)
                 })
-        });
-        if selected.len() == self.len() {
-            return self;
-        }
-        selected
+        })
     }
 
     pub(crate) fn changes_from(&self, old: &Columns) -> Vec<(Vec<u32>, Option<f64>)> {

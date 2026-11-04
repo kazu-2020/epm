@@ -291,7 +291,8 @@ impl<'a, 'e> Evaluator<'a, 'e> {
         let cached = {
             let mut shared = self.shared.borrow_mut();
             let entry = &mut shared[position];
-            entry.uses_left -= 1;
+            // Not `-= 1`: an outer shared node that misses on another region evaluates its operands again, so they get more uses than visit counted.
+            entry.uses_left = entry.uses_left.saturating_sub(1);
             match &entry.result {
                 Some((cached_region, columns)) if cached_region == region => {
                     let columns = columns.clone();
