@@ -24,5 +24,5 @@ Actions の `bench` を手で起動する。SHA を空にすると、起動す�
 1. `build` ジョブが GitHub のランナーで `compute_engine` の bench をビルドする。このジョブは OIDC トークンを取れない。
 2. `measure` ジョブがビルドした実行ファイルを artifact から受け取り、S3 の `bin/` に置く。
 3. `measure` ジョブが起動テンプレート `bench`(r7i.2xlarge、Ubuntu 24.04 の最新 AMI、インバウンドなし)で EC2 を1台起動する。user-data は `compute_engine/bench/ec2/measure.sh`。
-4. EC2 は1億セルのデータを作り、`recalculate` を hyperfine で5回、`edit` を入力ごとに100回回して、結果を S3 の `results/` に置き、自分で終了する。計測が75分を超えたら打ち切り、そこまでの結果を置いて終了する。
+4. EC2 は1億セルのデータを作り、`recalculate` を hyperfine で5回、`edit` を入力ごとに100回回して、結果を S3 の `results/` に置き、自分で終了する。計測が75分を超えたら打ち切り、そこまでの結果を置いて終了する。時間の上限は、計測の `timeout`(75分)< EC2 の `shutdown`(90分)< 結果を待つステップ(120分)< `measure` ジョブ(150分)< ロールのセッション(180分)の順にする。どれかを変えるときは、この順を保つ。
 5. `measure` ジョブは結果を取り、実行ページの要約と artifact に残す。S3 のファイルは7日で消える。

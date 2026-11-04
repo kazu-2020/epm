@@ -62,9 +62,7 @@ jobs:
           role-duration-seconds: 10800
       - name: Upload the binaries
         run: |
-          for binary in generate recalculate edit; do
-            aws s3 cp "bin/$binary" "s3://$BUCKET/bin/$RUN/$binary"
-          done
+          aws s3 cp --recursive bin/ "s3://$BUCKET/bin/$RUN/"
       - name: Start the instance
         run: |
           script=compute_engine/bench/ec2/measure.sh
