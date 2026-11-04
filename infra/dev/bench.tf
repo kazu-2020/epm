@@ -13,7 +13,7 @@ locals {
   bench_instance     = "r7i.2xlarge"
   bench_ami          = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
   canonical_account  = "099720109477"
-  github_environment = "repo:kazu-2020/epm:environment:bench"
+  github_environment = "repo:kazu-2020@64774307/epm@1438427453:environment:bench"
   ec2_arn            = "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}"
 }
 
