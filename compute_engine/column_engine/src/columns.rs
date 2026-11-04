@@ -104,6 +104,13 @@ fn reorder(layout: &KeyLayout, keys: &[u64], positions: &[usize]) -> (KeyLayout,
     (reordered, keys)
 }
 
+fn pieces(len: usize) -> Vec<Range<usize>> {
+    (0..len)
+        .step_by(PARALLEL_ROWS)
+        .map(|start| start..(start + PARALLEL_ROWS).min(len))
+        .collect()
+}
+
 fn gather<T: Copy + Send + Sync>(rows: &[usize], from: &[T]) -> Vec<T> {
     rows.par_iter()
         .with_min_len(PARALLEL_ROWS)
@@ -230,20 +237,46 @@ impl Columns {
         if first_row(&self.values, |&value| !is_normalized(value)).is_none() {
             return self;
         }
-        let rows: Vec<usize> = (0..self.len())
-            .into_par_iter()
-            .with_min_len(PARALLEL_ROWS)
-            .filter(|&row| normalize(self.values[row]).is_some())
-            .collect();
-        self.take(&rows)
+        self.select(&pieces(self.len()), |row| {
+            normalize(self.values[row]).is_some()
+        })
     }
 
-    fn take(&self, rows: &[usize]) -> Columns {
+    fn select(&self, pieces: &[Range<usize>], keep: impl Fn(usize) -> bool + Sync) -> Columns {
+        let counts: Vec<usize> = pieces
+            .par_iter()
+            .map(|piece| piece.clone().filter(|&row| keep(row)).count())
+            .collect();
+        let total = counts.iter().sum();
+        if total == self.len() {
+            return self.clone();
+        }
+        // Not with_capacity and push: calloc gives untouched pages, and each page is only written, so no read of the zero page comes first.
+        let mut keys = vec![0; total];
+        let mut values = vec![0.0; total];
+        let mut outputs = Vec::with_capacity(pieces.len());
+        let (mut keys_left, mut values_left) = (keys.as_mut_slice(), values.as_mut_slice());
+        for &count in &counts {
+            let (piece_keys, rest_keys) = keys_left.split_at_mut(count);
+            let (piece_values, rest_values) = values_left.split_at_mut(count);
+            outputs.push((piece_keys, piece_values));
+            (keys_left, values_left) = (rest_keys, rest_values);
+        }
+        outputs
+            .into_par_iter()
+            .zip(pieces)
+            .for_each(|((piece_keys, piece_values), piece)| {
+                let kept = piece.clone().filter(|&row| keep(row));
+                for ((key, value), row) in piece_keys.iter_mut().zip(piece_values).zip(kept) {
+                    *key = self.keys[row];
+                    *value = self.values[row];
+                }
+            });
         Columns {
             axes: self.axes.clone(),
             layout: self.layout.clone(),
-            keys: gather(rows, &self.keys).into(),
-            values: gather(rows, &self.values).into(),
+            keys: keys.into(),
+            values: values.into(),
         }
     }
 
@@ -404,28 +437,20 @@ impl Columns {
                     .map(move |start| start..(start + SCANNED_ROWS).min(range.end))
             })
             .collect();
-        let rows: Vec<usize> = pieces
-            .par_iter()
-            .flat_map_iter(|piece| {
-                self.keys[piece.clone()]
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, &key)| {
-                        key & mask == pattern
-                            && checks.iter().all(|(axis, inside)| {
-                                inside
-                                    .get(self.layout.member(key, *axis) as usize)
-                                    .copied()
-                                    .unwrap_or(false)
-                            })
-                    })
-                    .map(move |(offset, _)| piece.start + offset)
-            })
-            .collect();
-        if rows.len() == self.len() {
+        let selected = self.select(&pieces, |row| {
+            let key = self.keys[row];
+            key & mask == pattern
+                && checks.iter().all(|(axis, inside)| {
+                    inside
+                        .get(self.layout.member(key, *axis) as usize)
+                        .copied()
+                        .unwrap_or(false)
+                })
+        });
+        if selected.len() == self.len() {
             return self;
         }
-        self.take(&rows)
+        selected
     }
 
     pub(crate) fn changes_from(&self, old: &Columns) -> Vec<(Vec<u32>, Option<f64>)> {
@@ -675,12 +700,7 @@ impl Columns {
         if !columns.values.par_iter().any(|value| value.is_nan()) {
             return Ok(columns);
         }
-        let rows: Vec<usize> = (0..columns.len())
-            .into_par_iter()
-            .with_min_len(PARALLEL_ROWS)
-            .filter(|&row| !columns.values[row].is_nan())
-            .collect();
-        Ok(columns.take(&rows))
+        Ok(columns.select(&pieces(columns.len()), |row| !columns.values[row].is_nan()))
     }
 
     pub(crate) fn add(
