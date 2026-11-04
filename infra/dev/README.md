@@ -24,7 +24,7 @@ HCP Terraform が epm-dev に apply するには、HCP Terraform 用の OIDC プ
    }
    ```
 
-3. ワークスペース `epm-dev` の Variables で「Dynamic Provider Credential」の Quick setup を開き、Single role、Role name に `terraform-cloud` を入れる。これで環境変数 `TFC_AWS_PROVIDER_AUTH`(`true`)と `TFC_AWS_RUN_ROLE_ARN`(手順2のロールの ARN)ができる。
+3. ワークスペース `epm-dev` の Variables で「Dynamic Provider Credential」の Quick setup を開き、Single role、Role name に `terraform-cloud` を入れる。表示されたカードで「Mark complete」を押すと、環境変数 `TFC_AWS_PROVIDER_AUTH` が `true` になる。`TFC_AWS_RUN_ROLE_ARN` が手順2のロールの ARN になっているかも確かめる。
 
 ## apply のあとに手で行うこと
 
@@ -37,7 +37,8 @@ GitHub の environment `bench`(Settings → Environments)に変数を2つ足す�
 
 Actions の `bench` を手で起動する。SHA を空にすると、起動するときに選んだブランチの先頭を測る。environment `bench` は main だけに限っているので、ブランチは main を選ぶ。測るコミットは SHA で指定する。
 
-1. GitHub のランナーで `compute_engine` の bench をビルドし、実行ファイルを S3 の `bin/` に置く。
-2. 起動テンプレート `bench`(r7i.2xlarge、Ubuntu 24.04 の最新 AMI、インバウンドなし)で EC2 を1台起動する。user-data は `compute_engine/bench/ec2/measure.sh`。
-3. EC2 は1億セルのデータを作り、`recalculate` を hyperfine で5回、`edit` を入力ごとに100回回して、結果を S3 の `results/` に置き、自分で終了する。計測が75分を超えたら打ち切り、そこまでの結果を置いて終了する。
-4. ランナーは結果を取り、実行ページの要約と artifact に残す。S3 のファイルは7日で消える。
+1. `build` ジョブが GitHub のランナーで `compute_engine` の bench をビルドする。このジョブは OIDC トークンを取れない。
+2. `measure` ジョブがビルドした実行ファイルを artifact から受け取り、S3 の `bin/` に置く。
+3. `measure` ジョブが起動テンプレート `bench`(r7i.2xlarge、Ubuntu 24.04 の最新 AMI、インバウンドなし)で EC2 を1台起動する。user-data は `compute_engine/bench/ec2/measure.sh`。
+4. EC2 は1億セルのデータを作り、`recalculate` を hyperfine で5回、`edit` を入力ごとに100回回して、結果を S3 の `results/` に置き、自分で終了する。計測が75分を超えたら打ち切り、そこまでの結果を置いて終了する。
+5. `measure` ジョブは結果を取り、実行ページの要約と artifact に残す。S3 のファイルは7日で消える。
