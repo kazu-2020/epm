@@ -16,8 +16,8 @@ set -e
 
 snap wait system seed.loaded
 snap install aws-cli --classic
-apt-get update
-apt-get install -y hyperfine time
+apt-get -o DPkg::Lock::Timeout=600 update
+apt-get -o DPkg::Lock::Timeout=600 install -y hyperfine time
 
 cd /root
 aws s3 cp --recursive "s3://$BUCKET/bin/$RUN/" bin/

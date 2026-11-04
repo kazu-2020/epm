@@ -28,10 +28,12 @@ HCP Terraform が epm-dev に apply するには、HCP Terraform 用の OIDC プ
 
 ## apply のあとに手で行うこと
 
-GitHub の environment `bench`(Settings → Environments)に変数を2つ足す。値は apply の出力にある。
+GitHub の environment `bench`(Settings → Environments)の Deployment branches and tags を「Selected branches and tags」にし、`main` だけを足す。そのあと、変数を2つ足す。値は apply の出力にある。
 
 - `AWS_ROLE_ARN`:`bench_role_arn` の値
 - `BENCH_BUCKET`:`bench_bucket` の値
+
+最初の測定の前に、epm-dev の Service Quotas で「Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances」(L-1216C47A)が 8 vCPU 以上あるかを確かめる。足りなければ引き上げを申請する。r7i.2xlarge は 8 vCPU を使う。
 
 ## 測定の流れ
 
