@@ -251,7 +251,6 @@ impl Columns {
         if total == self.len() {
             return self.clone();
         }
-        // Not with_capacity and push: calloc gives untouched pages, and each page is only written, so no read of the zero page comes first.
         let mut keys = vec![0; total];
         let mut values = vec![0.0; total];
         let mut outputs = Vec::with_capacity(pieces.len());
