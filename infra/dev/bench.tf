@@ -12,7 +12,6 @@ locals {
   bench_tags           = { Purpose = "bench" }
   bench_instance       = "r7i.2xlarge"
   bench_ami            = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
-  canonical_account    = "099720109477"
   github_owner_id      = "64774307"
   github_repository_id = "1438427453"
   github_environment   = "repo:kazu-2020@${local.github_owner_id}/epm@${local.github_repository_id}:environment:bench"
@@ -235,7 +234,8 @@ resource "aws_iam_role_policy" "bench_github" {
         Effect    = "Allow"
         Action    = "ec2:RunInstances"
         Resource  = "arn:aws:ec2:${data.aws_region.current.region}::image/*"
-        Condition = { StringEquals = { "ec2:Owner" = local.canonical_account } }
+        # Not the Canonical account ID: AWS gives "amazon" as ec2:Owner for the Ubuntu AMIs.
+        Condition = { StringEquals = { "ec2:Owner" = "amazon" } }
       },
       {
         Effect = "Allow"
