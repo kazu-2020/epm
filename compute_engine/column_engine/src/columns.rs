@@ -748,7 +748,9 @@ impl Columns {
                     })
                     .collect();
                 let mut key = Vec::new();
-                for (total, &coordinate) in totals.iter_mut().zip(coordinates) {
+                for (output, &coordinate) in totals.iter_mut().zip(coordinates) {
+                    // Not `*output += value`: a read of the zeroed page before the write makes the kernel copy the zero page and flush the TLB of every core.
+                    let mut total = 0.0;
                     for ((sign, term, source), next) in sources.iter().zip(&mut cursors) {
                         let value =
                             match source {
@@ -769,10 +771,11 @@ impl Columns {
                                 }
                             };
                         match sign {
-                            Sign::Plus => *total += value,
-                            Sign::Minus => *total -= value,
+                            Sign::Plus => total += value,
+                            Sign::Minus => total -= value,
                         }
                     }
+                    *output = total;
                 }
             });
         Ok(Columns {

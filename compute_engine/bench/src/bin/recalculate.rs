@@ -75,10 +75,16 @@ fn main() -> std::io::Result<()> {
         };
         let keys = fresh(measure.keys().inner());
         let values = fresh(measure.values().inner());
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash_slice(measure.keys(), &mut hasher);
+        for value in measure.values().iter() {
+            std::hash::Hash::hash(&value.to_bits(), &mut hasher);
+        }
         eprintln!(
-            "unique\t{}\t{}\tkeys {keys}\tvalues {values}",
+            "unique\t{}\t{}\tkeys {keys}\tvalues {values}\thash {:016x}",
             measure.definition().name,
-            measure.len()
+            measure.len(),
+            std::hash::Hasher::finish(&hasher)
         );
     }
     println!(
