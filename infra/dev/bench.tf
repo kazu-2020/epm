@@ -1,8 +1,20 @@
+data "aws_region" "current" {}
+
+data "aws_ec2_instance_type_offerings" "bench" {
+  location_type = "availability-zone"
+  filter {
+    name   = "instance-type"
+    values = [local.bench_instance]
+  }
+}
+
 locals {
   bench_tags         = { Purpose = "bench" }
   bench_instance     = "r7i.2xlarge"
+  bench_ami          = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
   canonical_account  = "099720109477"
   github_environment = "repo:kazu-2020/epm:environment:bench"
+  ec2_arn            = "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}"
 }
 
 resource "aws_vpc" "bench" {
@@ -16,10 +28,10 @@ resource "aws_internet_gateway" "bench" {
 }
 
 resource "aws_subnet" "bench" {
-  vpc_id                  = aws_vpc.bench.id
-  cidr_block              = aws_vpc.bench.cidr_block
-  map_public_ip_on_launch = true
-  tags                    = merge(local.bench_tags, { Name = "bench" })
+  vpc_id            = aws_vpc.bench.id
+  cidr_block        = aws_vpc.bench.cidr_block
+  availability_zone = sort(data.aws_ec2_instance_type_offerings.bench.locations)[0]
+  tags              = merge(local.bench_tags, { Name = "bench" })
 }
 
 resource "aws_route_table" "bench" {
@@ -125,7 +137,7 @@ resource "aws_iam_instance_profile" "bench" {
 
 resource "aws_launch_template" "bench" {
   name                                 = "bench"
-  image_id                             = "resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
+  image_id                             = "resolve:ssm:${local.bench_ami}"
   instance_type                        = local.bench_instance
   instance_initiated_shutdown_behavior = "terminate"
 
@@ -200,7 +212,7 @@ resource "aws_iam_role_policy" "bench_github" {
       {
         Effect   = "Allow"
         Action   = "ec2:RunInstances"
-        Resource = "arn:aws:ec2:ap-northeast-1:${data.aws_caller_identity.current.account_id}:instance/*"
+        Resource = "${local.ec2_arn}:instance/*"
         Condition = {
           ArnEquals    = { "ec2:LaunchTemplate" = aws_launch_template.bench.arn }
           StringEquals = { "ec2:InstanceType" = local.bench_instance }
@@ -213,39 +225,38 @@ resource "aws_iam_role_policy" "bench_github" {
           aws_launch_template.bench.arn,
           aws_subnet.bench.arn,
           aws_security_group.bench.arn,
-          "arn:aws:ec2:ap-northeast-1:${data.aws_caller_identity.current.account_id}:volume/*",
-          "arn:aws:ec2:ap-northeast-1:${data.aws_caller_identity.current.account_id}:network-interface/*",
+          "${local.ec2_arn}:volume/*",
+          "${local.ec2_arn}:network-interface/*",
         ]
       },
       {
         Effect    = "Allow"
         Action    = "ec2:RunInstances"
-        Resource  = "arn:aws:ec2:ap-northeast-1::image/*"
+        Resource  = "arn:aws:ec2:${data.aws_region.current.region}::image/*"
         Condition = { StringEquals = { "ec2:Owner" = local.canonical_account } }
       },
       {
         Effect = "Allow"
         Action = "ec2:CreateTags"
         Resource = [
-          "arn:aws:ec2:ap-northeast-1:${data.aws_caller_identity.current.account_id}:instance/*",
-          "arn:aws:ec2:ap-northeast-1:${data.aws_caller_identity.current.account_id}:volume/*",
+          "${local.ec2_arn}:instance/*",
+          "${local.ec2_arn}:volume/*",
         ]
         Condition = { StringEquals = { "ec2:CreateAction" = "RunInstances" } }
       },
       {
         Effect    = "Allow"
         Action    = "ec2:TerminateInstances"
-        Resource  = "arn:aws:ec2:ap-northeast-1:${data.aws_caller_identity.current.account_id}:instance/*"
+        Resource  = "${local.ec2_arn}:instance/*"
         Condition = { StringEquals = { "ec2:ResourceTag/Purpose" = "bench" } }
       },
       {
-        # EC2 reads the AMI parameter of the launch template with the permissions of the caller.
         Effect   = "Allow"
         Action   = "ssm:GetParameters"
-        Resource = "arn:aws:ssm:ap-northeast-1::parameter/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
+        Resource = "arn:aws:ssm:${data.aws_region.current.region}::parameter${local.bench_ami}"
       },
       {
-        # DescribeInstances has no resource-level permissions.
+        # Not scoped to bench instances: DescribeInstances has no resource-level permissions.
         Effect   = "Allow"
         Action   = "ec2:DescribeInstances"
         Resource = "*"

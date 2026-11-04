@@ -15,7 +15,8 @@ concurrency: bench
 
 jobs:
   measure:
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: the binaries must link against the glibc of the Ubuntu 24.04 AMI.
+    runs-on: ubuntu-24.04
     environment: bench
     timeout-minutes: 150
     env:
@@ -25,11 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: workflow
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
           ref: ${{ inputs.sha || github.sha }}
+          path: measured
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: compute_engine
-      - working-directory: compute_engine
+          workspaces: measured/compute_engine
+      - working-directory: measured/compute_engine
         run: cargo build --release --locked -p bench
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
@@ -39,11 +44,11 @@ jobs:
       - name: Upload the binaries
         run: |
           for binary in generate recalculate edit; do
-            aws s3 cp "compute_engine/target/release/$binary" "s3://$BUCKET/bin/$RUN/$binary"
+            aws s3 cp "measured/compute_engine/target/release/$binary" "s3://$BUCKET/bin/$RUN/$binary"
           done
       - name: Start the instance
         run: |
-          script=compute_engine/bench/ec2/measure.sh
+          script=workflow/compute_engine/bench/ec2/measure.sh
           { head -n 1 "$script"; echo "BUCKET=$BUCKET"; echo "RUN=$RUN"; tail -n +2 "$script"; } > user-data.sh
           aws ec2 run-instances \
             --launch-template 'LaunchTemplateName=bench,Version=$Latest' \
@@ -57,7 +62,7 @@ jobs:
         run: |
           done_key="results/$RUN/exit-code"
           until aws s3api head-object --bucket "$BUCKET" --key "$done_key" > /dev/null 2>&1; do
-            state=$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].State.Name' --output text)
+            state=$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].State.Name' --output text || true)
             if [ "$state" = terminated ] && ! aws s3api head-object --bucket "$BUCKET" --key "$done_key" > /dev/null 2>&1; then
               echo "::error::The instance ended without results"
               exit 1
@@ -69,13 +74,13 @@ jobs:
         run: |
           {
             echo '## recalculate'
-            cat out/recalculate.md
+            cat out/recalculate.md || true
             echo
-            grep -E 'Maximum resident set size|Elapsed' out/recalculate-time.txt
+            grep -E 'Maximum resident set size|Elapsed' out/recalculate-time.txt || true
             echo
             echo '## edit'
             echo '```'
-            cat out/edit.txt
+            cat out/edit.txt || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$(cat out/exit-code)"
