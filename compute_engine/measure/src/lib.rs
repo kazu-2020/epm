@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
@@ -255,18 +256,14 @@ impl Measure {
     ) -> Result<Self, MeasureError> {
         let (axes, layout) = Self::axes(&definition, dimensions)?;
         assert_eq!(keys.len(), values.len(), "one value per key");
-        if let Some(row) = keys.iter().position(|&key| !layout.holds(key)) {
+        if let Some(row) = first_row(&keys, |&key| !layout.holds(key)) {
             return Err(MeasureError::KeyMismatch(row));
         }
         for (position, axis) in axes.iter().enumerate() {
-            if let Some(member) = keys
-                .iter()
-                .map(|&key| layout.member(key, position))
-                .find(|&member| member >= axis.len)
-            {
+            if let Some(row) = first_row(&keys, |&key| layout.member(key, position) >= axis.len) {
                 return Err(MeasureError::MemberOutOfRange {
                     axis: axis.dimension,
-                    member: MemberId(member),
+                    member: MemberId(layout.member(keys[row], position)),
                 });
             }
         }
@@ -307,17 +304,16 @@ impl Measure {
         keys: ScalarBuffer<u64>,
         values: ScalarBuffer<f64>,
     ) -> Result<Self, MeasureError> {
-        for (row, &value) in values.iter().enumerate() {
-            if normalize(value).map(f64::to_bits) != Some(value.to_bits()) {
-                return Err(MeasureError::UnnormalizedValue(row));
-            }
+        if let Some(row) = first_row(&values, |&value| {
+            normalize(value).map(f64::to_bits) != Some(value.to_bits())
+        }) {
+            return Err(MeasureError::UnnormalizedValue(row));
         }
-        for row in 1..keys.len() {
-            match keys[row - 1].cmp(&keys[row]) {
-                Ordering::Less => {}
-                Ordering::Equal => return Err(MeasureError::DuplicateCoordinate(row)),
-                Ordering::Greater => return Err(MeasureError::UnsortedCoordinate(row)),
-            }
+        if let Some(row) = first_unsorted(&keys) {
+            return Err(match keys[row - 1].cmp(&keys[row]) {
+                Ordering::Equal => MeasureError::DuplicateCoordinate(row),
+                _ => MeasureError::UnsortedCoordinate(row),
+            });
         }
         Ok(Measure {
             definition,
@@ -632,4 +628,52 @@ static COORDINATE_HASHER: LazyLock<RandomState> = LazyLock::new(RandomState::def
 
 fn hash_coordinate(coordinate: &[MemberId]) -> u64 {
     COORDINATE_HASHER.hash_one(coordinate)
+}
+
+const CHECKED_ROWS: usize = 1 << 16;
+
+pub fn first_row<T: Sync>(items: &[T], bad: impl Fn(&T) -> bool + Sync) -> Option<usize> {
+    items
+        .par_chunks(CHECKED_ROWS)
+        .enumerate()
+        .filter_map(|(piece, chunk)| {
+            chunk
+                .iter()
+                .position(&bad)
+                .map(|row| piece * CHECKED_ROWS + row)
+        })
+        .min()
+}
+
+pub fn first_unsorted(keys: &[u64]) -> Option<usize> {
+    (1..keys.len())
+        .step_by(CHECKED_ROWS)
+        .collect::<Vec<usize>>()
+        .into_par_iter()
+        .filter_map(|start| {
+            let end = (start + CHECKED_ROWS).min(keys.len());
+            keys[start - 1..end]
+                .windows(2)
+                .position(|pair| pair[0] >= pair[1])
+                .map(|row| start + row)
+        })
+        .min()
+}
+
+#[cfg(test)]
+mod parallel_check_tests {
+    use super::*;
+
+    #[test]
+    fn the_first_bad_row_is_found_across_the_border_of_two_pieces() {
+        let keys: Vec<u64> = (0..=CHECKED_ROWS as u64).chain([0]).collect();
+
+        assert_eq!(first_unsorted(&keys), Some(CHECKED_ROWS + 1));
+        let last_of_the_first_piece: Vec<u64> = (0..CHECKED_ROWS as u64).chain([0]).collect();
+        assert_eq!(first_unsorted(&last_of_the_first_piece), Some(CHECKED_ROWS));
+        assert_eq!(
+            first_row(&keys, |&key| key == CHECKED_ROWS as u64),
+            Some(CHECKED_ROWS)
+        );
+    }
 }
