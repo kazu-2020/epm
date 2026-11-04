@@ -23,6 +23,8 @@ exclude_re = [
     "replace dense_strides -> Option<\\(usize, Vec<usize>\\)> with None",
     "replace <= with > in dense_strides",
     "column_engine/src/columns.rs:[0-9]+:[0-9]+: replace << with >>",
+    # Not tested: with one owner both paths add the same rows in the same order.
+    "replace == with != in Columns::sum",
     # Not tested: these only read more cells than the region needs, and the old and new cells outside it are equal.
     "replace == with != in apply",
     "replace searched -> bool",

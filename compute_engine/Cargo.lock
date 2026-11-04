@@ -398,6 +398,7 @@ dependencies = [
  "formula",
  "measure",
  "rand",
+ "rayon",
  "ulid",
 ]
 

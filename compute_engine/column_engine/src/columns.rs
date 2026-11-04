@@ -6,7 +6,10 @@ use arrow_buffer::ScalarBuffer;
 use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
 use evaluator::EvaluateError;
 use formula::{BinaryOperator, Sign};
-use measure::{KeyLayout, Measure, MeasureDefinition, MeasureError, normalize};
+use measure::{
+    KeyLayout, Measure, MeasureDefinition, MeasureError, first_row, first_unsorted, normalize,
+};
+use rayon::prelude::*;
 
 use crate::region::Region;
 
@@ -15,6 +18,8 @@ const DENSE_LIMIT: usize = 1 << 22;
 const SEARCHED_MEMBERS: usize = 64;
 // Not one range per thread: a single large range would leave the other threads idle.
 const SCANNED_ROWS: usize = 1 << 20;
+// Not smaller pieces: below this many rows the cost of handing out work is larger than the work.
+const PARALLEL_ROWS: usize = 1 << 14;
 
 pub(crate) struct Columns {
     axes: Vec<DimensionUlid>,
@@ -30,7 +35,7 @@ pub(crate) struct ByAxis<'d> {
 }
 
 enum Source<'c> {
-    Cursor(usize),
+    Cursor,
     Indexed(Index<'c>, Vec<usize>),
 }
 
@@ -75,9 +80,9 @@ fn is_normalized(value: f64) -> bool {
 
 fn stable_order(keys: &[u64]) -> Vec<usize> {
     let mut rows: Vec<usize> = (0..keys.len()).collect();
-    if !keys.is_sorted() {
+    if first_unsorted(keys).is_some() {
         // Not sort_unstable: SUM adds each group in coordinate order.
-        rows.sort_by_key(|&row| keys[row]);
+        rows.par_sort_by_key(|&row| keys[row]);
     }
     rows
 }
@@ -85,7 +90,8 @@ fn stable_order(keys: &[u64]) -> Vec<usize> {
 fn reorder(layout: &KeyLayout, keys: &[u64], positions: &[usize]) -> (KeyLayout, Vec<u64>) {
     let reordered = layout.reordered(positions);
     let keys = keys
-        .iter()
+        .par_iter()
+        .with_min_len(PARALLEL_ROWS)
         .map(|&key| {
             reordered.pack(
                 positions
@@ -95,6 +101,13 @@ fn reorder(layout: &KeyLayout, keys: &[u64], positions: &[usize]) -> (KeyLayout,
         })
         .collect();
     (reordered, keys)
+}
+
+fn gather<T: Copy + Send + Sync>(rows: &[usize], from: &[T]) -> Vec<T> {
+    rows.par_iter()
+        .with_min_len(PARALLEL_ROWS)
+        .map(|&row| from[row])
+        .collect()
 }
 
 fn runs<'r>(keys: &[u64], rows: &'r [usize]) -> Vec<&'r [usize]> {
@@ -170,6 +183,8 @@ impl Columns {
         let (axes, members): (Vec<DimensionUlid>, Vec<Vec<u32>>) = by_axis.into_iter().unzip();
         let layout = layout_of(dimensions, &axes)?;
         let keys: Vec<u64> = (0..values.len())
+            .into_par_iter()
+            .with_min_len(PARALLEL_ROWS)
             .map(|row| layout.pack(members.iter().map(|column| column[row])))
             .collect();
         Ok(Columns::from_keys(axes, layout, keys, values))
@@ -181,7 +196,9 @@ impl Columns {
         keys: Vec<u64>,
         values: Vec<f64>,
     ) -> Columns {
-        if keys.is_sorted() && values.iter().all(|&value| is_normalized(value)) {
+        if first_unsorted(&keys).is_none()
+            && first_row(&values, |&value| !is_normalized(value)).is_none()
+        {
             return Columns {
                 axes,
                 layout,
@@ -190,25 +207,30 @@ impl Columns {
             };
         }
         let rows: Vec<usize> = stable_order(&keys)
-            .into_iter()
+            .into_par_iter()
+            .with_min_len(PARALLEL_ROWS)
             .filter(|&row| normalize(values[row]).is_some())
             .collect();
         Columns {
             axes,
             layout,
-            keys: rows.iter().map(|&row| keys[row]).collect(),
+            keys: gather(&rows, &keys).into(),
             values: rows
-                .iter()
+                .par_iter()
+                .with_min_len(PARALLEL_ROWS)
                 .filter_map(|&row| normalize(values[row]))
-                .collect(),
+                .collect::<Vec<f64>>()
+                .into(),
         }
     }
 
     fn normalized(self) -> Columns {
-        if self.values.iter().all(|&value| is_normalized(value)) {
+        if first_row(&self.values, |&value| !is_normalized(value)).is_none() {
             return self;
         }
         let rows: Vec<usize> = (0..self.len())
+            .into_par_iter()
+            .with_min_len(PARALLEL_ROWS)
             .filter(|&row| normalize(self.values[row]).is_some())
             .collect();
         self.take(&rows)
@@ -218,8 +240,8 @@ impl Columns {
         Columns {
             axes: self.axes.clone(),
             layout: self.layout.clone(),
-            keys: rows.iter().map(|&row| self.keys[row]).collect(),
-            values: rows.iter().map(|&row| self.values[row]).collect(),
+            keys: gather(rows, &self.keys).into(),
+            values: gather(rows, &self.values).into(),
         }
     }
 
@@ -380,35 +402,24 @@ impl Columns {
                     .map(move |start| start..(start + SCANNED_ROWS).min(range.end))
             })
             .collect();
-        let threads = std::thread::available_parallelism().map_or(1, usize::from);
-        let scan = |pieces: &[Range<usize>]| -> Vec<usize> {
-            let mut rows = Vec::new();
-            for piece in pieces {
-                for (offset, &key) in self.keys[piece.clone()].iter().enumerate() {
-                    if key & mask == pattern
-                        && checks.iter().all(|(axis, inside)| {
-                            inside
-                                .get(self.layout.member(key, *axis) as usize)
-                                .copied()
-                                .unwrap_or(false)
-                        })
-                    {
-                        rows.push(piece.start + offset);
-                    }
-                }
-            }
-            rows
-        };
-        let mut chunks = pieces.chunks(pieces.len().div_ceil(threads).max(1));
-        let first = chunks.next().unwrap_or_default();
-        let rows: Vec<usize> = std::thread::scope(|scope| {
-            let handles: Vec<_> = chunks.map(|chunk| scope.spawn(|| scan(chunk))).collect();
-            let mut rows = scan(first);
-            for handle in handles {
-                rows.extend(handle.join().expect("a scan does not panic"));
-            }
-            rows
-        });
+        let rows: Vec<usize> = pieces
+            .par_iter()
+            .flat_map_iter(|piece| {
+                self.keys[piece.clone()]
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &key)| {
+                        key & mask == pattern
+                            && checks.iter().all(|(axis, inside)| {
+                                inside
+                                    .get(self.layout.member(key, *axis) as usize)
+                                    .copied()
+                                    .unwrap_or(false)
+                            })
+                    })
+                    .map(move |(offset, _)| piece.start + offset)
+            })
+            .collect();
         if rows.len() == self.len() {
             return self;
         }
@@ -493,7 +504,8 @@ impl Columns {
         let layout = layout_of(dimensions, &axes)?;
         let keys = columns
             .keys
-            .iter()
+            .par_iter()
+            .with_min_len(PARALLEL_ROWS)
             .map(|&key| {
                 layout.pack(
                     columns
@@ -517,9 +529,11 @@ impl Columns {
         Columns {
             values: self
                 .values
-                .iter()
+                .par_iter()
+                .with_min_len(PARALLEL_ROWS)
                 .map(|&value| if value == 0.0 { 0.0 } else { -value })
-                .collect(),
+                .collect::<Vec<f64>>()
+                .into(),
             ..self
         }
     }
@@ -628,7 +642,7 @@ impl Columns {
     fn lookup_product(
         larger: &Columns,
         smaller: &Columns,
-        apply: impl Fn(f64, f64) -> f64,
+        apply: impl Fn(f64, f64) -> f64 + Sync,
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         let positions: Vec<usize> = smaller
@@ -637,34 +651,39 @@ impl Columns {
             .map(|&axis| larger.position(axis))
             .collect();
         let index = Index::new(smaller, dimensions)?;
-        let mut key = vec![0; positions.len()];
-        let mut rows = Vec::new();
-        let mut values = Vec::new();
-        for (row, &larger_key) in larger.keys.iter().enumerate() {
-            for (member, &position) in key.iter_mut().zip(&positions) {
-                *member = larger.layout.member(larger_key, position);
-            }
-            if let Some(other) = index.find(&key)
-                && let Some(value) = normalize(apply(larger.values[row], smaller.values[other]))
-            {
-                rows.push(row);
-                values.push(value);
-            }
-        }
-        if rows.len() == larger.len() {
-            return Ok(Columns {
-                axes: larger.axes.clone(),
-                layout: larger.layout.clone(),
-                keys: larger.keys.clone(),
-                values: values.into(),
-            });
-        }
-        Ok(Columns {
+        let values: Vec<f64> = larger
+            .keys
+            .par_iter()
+            .zip(&larger.values[..])
+            .with_min_len(PARALLEL_ROWS)
+            .map_init(
+                || vec![0; positions.len()],
+                |key, (&larger_key, &value)| {
+                    for (member, &position) in key.iter_mut().zip(&positions) {
+                        *member = larger.layout.member(larger_key, position);
+                    }
+                    index
+                        .find(key)
+                        .and_then(|other| normalize(apply(value, smaller.values[other])))
+                        .unwrap_or(f64::NAN)
+                },
+            )
+            .collect();
+        let columns = Columns {
             axes: larger.axes.clone(),
             layout: larger.layout.clone(),
-            keys: rows.iter().map(|&row| larger.keys[row]).collect(),
+            keys: larger.keys.clone(),
             values: values.into(),
-        })
+        };
+        if !columns.values.par_iter().any(|value| value.is_nan()) {
+            return Ok(columns);
+        }
+        let rows: Vec<usize> = (0..columns.len())
+            .into_par_iter()
+            .with_min_len(PARALLEL_ROWS)
+            .filter(|&row| !columns.values[row].is_nan())
+            .collect();
+        Ok(columns.take(&rows))
     }
 
     pub(crate) fn add(
@@ -702,11 +721,11 @@ impl Columns {
             .fold(first.keys.clone(), |keys, creator| {
                 union(keys, &creator.keys)
             });
-        let mut sources = terms
+        let sources = terms
             .iter()
             .map(|(sign, term)| {
                 let source = if term.axes.len() == axes.len() {
-                    Source::Cursor(0)
+                    Source::Cursor
                 } else {
                     Source::Indexed(
                         Index::new(term, dimensions)?,
@@ -716,15 +735,24 @@ impl Columns {
                 Ok((*sign, term, source))
             })
             .collect::<Result<Vec<_>, EvaluateError>>()?;
-        let mut key = Vec::new();
-        let values: Vec<f64> =
-            keys.iter()
-                .map(|&coordinate| {
-                    let mut total = 0.0;
-                    for (sign, term, source) in &mut sources {
+        let mut values = vec![0.0; keys.len()];
+        values
+            .par_chunks_mut(PARALLEL_ROWS)
+            .zip(keys.par_chunks(PARALLEL_ROWS))
+            .for_each(|(totals, coordinates)| {
+                let mut cursors: Vec<usize> = sources
+                    .iter()
+                    .map(|(_, term, source)| match source {
+                        Source::Cursor => term.keys.partition_point(|&key| key < coordinates[0]),
+                        Source::Indexed(..) => 0,
+                    })
+                    .collect();
+                let mut key = Vec::new();
+                for (total, &coordinate) in totals.iter_mut().zip(coordinates) {
+                    for ((sign, term, source), next) in sources.iter().zip(&mut cursors) {
                         let value =
                             match source {
-                                Source::Cursor(next) => {
+                                Source::Cursor => {
                                     if *next < term.len() && term.keys[*next] == coordinate {
                                         *next += 1;
                                         term.values[*next - 1]
@@ -741,13 +769,12 @@ impl Columns {
                                 }
                             };
                         match sign {
-                            Sign::Plus => total += value,
-                            Sign::Minus => total -= value,
+                            Sign::Plus => *total += value,
+                            Sign::Minus => *total -= value,
                         }
                     }
-                    total
-                })
-                .collect();
+                }
+            });
         Ok(Columns {
             axes: first.axes.clone(),
             layout: first.layout.clone(),
@@ -768,22 +795,68 @@ impl Columns {
         let lengths = lengths(dimensions, &axes)?;
         let layout = layout_of(dimensions, &axes)?;
         if let Some((space, strides)) = dense_strides(&lengths) {
+            let slot_of = |row: usize| -> Option<usize> {
+                outputs
+                    .iter()
+                    .zip(&strides)
+                    .map(|(axis, stride)| Some(stride * axis.member(self, row)? as usize))
+                    .sum()
+            };
+            let share = space.div_ceil(rayon::current_num_threads()).max(1);
+            let owners = space.div_ceil(share);
             let mut totals = vec![0.0; space];
             let mut seen = vec![false; space];
-            'rows: for row in 0..self.len() {
-                let mut slot = 0;
-                for (axis, stride) in outputs.iter().zip(&strides) {
-                    let Some(member) = axis.member(self, row) else {
-                        continue 'rows;
-                    };
-                    slot += stride * member as usize;
+            // Not the handing path with one owner: it would copy every row to the same thread.
+            if owners == 1 {
+                for row in 0..self.len() {
+                    if let Some(slot) = slot_of(row) {
+                        totals[slot] += self.values[row];
+                        seen[slot] = true;
+                    }
                 }
-                totals[slot] += self.values[row];
-                seen[slot] = true;
+            } else {
+                // Not partial totals per piece of rows: one thread adds each slot in row order (ADR 0001), so each piece hands its rows to the thread that owns the slot.
+                let handed: Vec<Vec<(Vec<u32>, Vec<f64>)>> =
+                    (0..self.len())
+                        .step_by(PARALLEL_ROWS)
+                        .collect::<Vec<usize>>()
+                        .into_par_iter()
+                        .map(|start| {
+                            let mut owned = vec![(Vec::new(), Vec::new()); owners];
+                            for row in start..(start + PARALLEL_ROWS).min(self.len()) {
+                                if let Some(slot) = slot_of(row) {
+                                    let (slots, values) = &mut owned[slot / share];
+                                    slots.push(u32::try_from(slot).expect(
+                                        "dense_strides keeps space at or below DENSE_LIMIT",
+                                    ));
+                                    values.push(self.values[row]);
+                                }
+                            }
+                            owned
+                        })
+                        .collect();
+                totals
+                    .par_chunks_mut(share)
+                    .zip(seen.par_chunks_mut(share))
+                    .enumerate()
+                    .for_each(|(owner, (totals, seen))| {
+                        for piece in &handed {
+                            let (slots, values) = &piece[owner];
+                            for (&slot, &value) in slots.iter().zip(values) {
+                                totals[slot as usize - owner * share] += value;
+                                seen[slot as usize - owner * share] = true;
+                            }
+                        }
+                    });
             }
-            let slots: Vec<usize> = (0..space).filter(|&slot| seen[slot]).collect();
+            let slots: Vec<usize> = (0..space)
+                .into_par_iter()
+                .with_min_len(PARALLEL_ROWS)
+                .filter(|&slot| seen[slot])
+                .collect();
             let keys = slots
-                .iter()
+                .par_iter()
+                .with_min_len(PARALLEL_ROWS)
                 .map(|&slot| {
                     layout.pack(
                         strides
@@ -793,10 +866,12 @@ impl Columns {
                     )
                 })
                 .collect();
-            let values = slots.iter().map(|&slot| totals[slot]).collect();
+            let values = gather(&slots, &totals);
             return Ok(Columns::from_keys(axes, layout, keys, values));
         }
         let (kept, group_keys): (Vec<usize>, Vec<u64>) = (0..self.len())
+            .into_par_iter()
+            .with_min_len(PARALLEL_ROWS)
             .filter_map(|row| {
                 let members: Option<Vec<u32>> =
                     outputs.iter().map(|axis| axis.member(self, row)).collect();
@@ -807,7 +882,7 @@ impl Columns {
         let runs = runs(&group_keys, &order);
         let keys = runs.iter().map(|run| group_keys[run[0]]).collect();
         let values = runs
-            .iter()
+            .par_iter()
             .map(|run| {
                 run.iter().fold(0.0, |total, &group_row| {
                     total + self.values[kept[group_row]]
@@ -921,6 +996,17 @@ fn union(mine: ScalarBuffer<u64>, theirs: &ScalarBuffer<u64>) -> ScalarBuffer<u6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sorted_keys_still_drop_values_that_are_not_normalized() {
+        let axis = DimensionUlid(ulid::Ulid(1));
+        let layout = KeyLayout::new(&[8]).expect("3 bits fit in a key");
+
+        let columns = Columns::from_keys(vec![axis], layout, vec![0, 1], vec![f64::NAN, -0.0]);
+
+        assert_eq!(&columns.keys[..], &[1]);
+        assert_eq!(columns.values[0].to_bits(), 0);
+    }
 
     #[test]
     fn adding_terms_on_the_same_coordinates_keeps_their_keys() {
