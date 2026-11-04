@@ -36,6 +36,28 @@ fn wide_model_matches_the_evaluator_on_sparse_paths() {
     );
 }
 
+#[test]
+fn model_larger_than_one_parallel_piece_matches_the_evaluator_on_one_and_four_threads() {
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("a thread pool starts")
+            .install(|| {
+                matches_the_evaluator(
+                    &["SUM('売上', BY '部門', '期間') * SUM('売上', BY '商品', '期間')"],
+                    &Size {
+                        products: 30,
+                        customers: 20,
+                        departments_per_kind: 4,
+                        quantity_cells: 40_000,
+                        account_fill: 0.5,
+                    },
+                );
+            });
+    }
+}
+
 fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
     let mut workspace = representative::generate(size, 7);
     let sales_axes = workspace.formulas[0].result.axes.clone();
