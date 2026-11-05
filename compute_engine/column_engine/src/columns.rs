@@ -849,36 +849,62 @@ impl Columns {
                 }
             } else {
                 // Not partial totals per piece of rows: one thread adds each slot in row order (ADR 0001), so each piece hands its rows to the thread that owns the slot.
-                let handed: Vec<Vec<(Vec<u32>, Vec<f64>)>> =
-                    (0..self.len())
-                        .step_by(PARALLEL_ROWS)
-                        .collect::<Vec<usize>>()
-                        .into_par_iter()
-                        .map(|start| {
-                            let mut owned = vec![(Vec::new(), Vec::new()); owners];
-                            for row in start..(start + PARALLEL_ROWS).min(self.len()) {
-                                if let Some(slot) = slot_of(row) {
-                                    let (slots, values) = &mut owned[slot / share];
-                                    slots.push(u32::try_from(slot).expect(
-                                        "dense_strides keeps space at or below DENSE_LIMIT",
-                                    ));
-                                    values.push(self.values[row]);
-                                }
+                let pieces = pieces(self.len());
+                let counts: Vec<Vec<usize>> = pieces
+                    .par_iter()
+                    .map(|piece| {
+                        let mut counts = vec![0; owners];
+                        for row in piece.clone() {
+                            if let Some(slot) = slot_of(row) {
+                                counts[slot / share] += 1;
                             }
-                            owned
-                        })
-                        .collect();
+                        }
+                        counts
+                    })
+                    .collect();
+                // Not a small Vec per piece and owner: glibc keeps their freed holes, and the RSS of 4 threads stayed 0.26 GB above 1 thread.
+                let mut handed: Vec<(Vec<u32>, Vec<f64>)> = (0..owners)
+                    .map(|owner| {
+                        let total = counts.iter().map(|counts| counts[owner]).sum();
+                        (vec![0; total], vec![0.0; total])
+                    })
+                    .collect();
+                let mut parts: Vec<Vec<(&mut [u32], &mut [f64])>> =
+                    pieces.iter().map(|_| Vec::with_capacity(owners)).collect();
+                for (owner, (slots, values)) in handed.iter_mut().enumerate() {
+                    let (mut slots, mut values) = (slots.as_mut_slice(), values.as_mut_slice());
+                    for (part, counts) in parts.iter_mut().zip(&counts) {
+                        let (piece_slots, rest_slots) = slots.split_at_mut(counts[owner]);
+                        let (piece_values, rest_values) = values.split_at_mut(counts[owner]);
+                        part.push((piece_slots, piece_values));
+                        (slots, values) = (rest_slots, rest_values);
+                    }
+                }
+                parts
+                    .into_par_iter()
+                    .zip(&pieces)
+                    .for_each(|(mut part, piece)| {
+                        let mut written = vec![0; owners];
+                        for row in piece.clone() {
+                            if let Some(slot) = slot_of(row) {
+                                let owner = slot / share;
+                                let (slots, values) = &mut part[owner];
+                                slots[written[owner]] = u32::try_from(slot)
+                                    .expect("dense_strides keeps space at or below DENSE_LIMIT");
+                                values[written[owner]] = self.values[row];
+                                written[owner] += 1;
+                            }
+                        }
+                    });
                 totals
                     .par_chunks_mut(share)
                     .zip(seen.par_chunks_mut(share))
+                    .zip(&handed)
                     .enumerate()
-                    .for_each(|(owner, (totals, seen))| {
-                        for piece in &handed {
-                            let (slots, values) = &piece[owner];
-                            for (&slot, &value) in slots.iter().zip(values) {
-                                totals[slot as usize - owner * share] += value;
-                                seen[slot as usize - owner * share] = true;
-                            }
+                    .for_each(|(owner, ((totals, seen), (slots, values)))| {
+                        for (&slot, &value) in slots.iter().zip(values) {
+                            totals[slot as usize - owner * share] += value;
+                            seen[slot as usize - owner * share] = true;
                         }
                     });
             }
