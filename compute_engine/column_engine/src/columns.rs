@@ -870,7 +870,7 @@ impl Columns {
             let owners = space.div_ceil(share);
             let mut totals = vec![0.0; space];
             let mut seen = vec![false; space];
-            // Not the handing path with one owner: it would copy every row to the same thread.
+            // Not the owner pass with one owner: it would store a slot for every row only to read them all back.
             if owners == 1 {
                 for row in 0..self.len() {
                     if let Some(slot) = slot_of(row) {
@@ -879,63 +879,29 @@ impl Columns {
                     }
                 }
             } else {
-                // Not partial totals per piece of rows: one thread adds each slot in row order (ADR 0001), so each piece hands its rows to the thread that owns the slot.
-                let pieces = pieces(self.len());
-                let counts: Vec<Vec<usize>> = pieces
-                    .par_iter()
-                    .map(|piece| {
-                        let mut counts = vec![0; owners];
-                        for row in piece.clone() {
-                            if let Some(slot) = slot_of(row) {
-                                counts[slot / share] += 1;
-                            }
-                        }
-                        counts
-                    })
-                    .collect();
-                // Not a small Vec per piece and owner: glibc keeps their freed holes, and the RSS of 4 threads stayed 0.26 GB above 1 thread.
-                let mut handed: Vec<(Vec<u32>, Vec<f64>)> = (0..owners)
-                    .map(|owner| {
-                        let total = counts.iter().map(|counts| counts[owner]).sum();
-                        (vec![0; total], vec![0.0; total])
-                    })
-                    .collect();
-                let mut parts: Vec<Vec<(&mut [u32], &mut [f64])>> =
-                    pieces.iter().map(|_| Vec::with_capacity(owners)).collect();
-                for (owner, (slots, values)) in handed.iter_mut().enumerate() {
-                    let (mut slots, mut values) = (slots.as_mut_slice(), values.as_mut_slice());
-                    for (part, counts) in parts.iter_mut().zip(&counts) {
-                        let (piece_slots, rest_slots) = slots.split_at_mut(counts[owner]);
-                        let (piece_values, rest_values) = values.split_at_mut(counts[owner]);
-                        part.push((piece_slots, piece_values));
-                        (slots, values) = (rest_slots, rest_values);
-                    }
-                }
-                parts
+                // Not partial totals per piece of rows: one thread adds each slot in row order (ADR 0001).
+                // shortcut: each owner reads all rows (12 B a row), so this pass does not shrink with more threads; hand rows to owners again if the 32-core run shows it.
+                let slots: Vec<u32> = (0..self.len())
                     .into_par_iter()
-                    .zip(&pieces)
-                    .for_each(|(mut part, piece)| {
-                        let mut written = vec![0; owners];
-                        for row in piece.clone() {
-                            if let Some(slot) = slot_of(row) {
-                                let owner = slot / share;
-                                let (slots, values) = &mut part[owner];
-                                slots[written[owner]] = u32::try_from(slot)
-                                    .expect("dense_strides keeps space at or below DENSE_LIMIT");
-                                values[written[owner]] = self.values[row];
-                                written[owner] += 1;
-                            }
-                        }
-                    });
+                    .with_min_len(PARALLEL_ROWS)
+                    .map(|row| {
+                        slot_of(row).map_or(u32::MAX, |slot| {
+                            u32::try_from(slot)
+                                .expect("dense_strides keeps space at or below DENSE_LIMIT")
+                        })
+                    })
+                    .collect();
                 totals
                     .par_chunks_mut(share)
                     .zip(seen.par_chunks_mut(share))
-                    .zip(&handed)
                     .enumerate()
-                    .for_each(|(owner, ((totals, seen), (slots, values)))| {
-                        for (&slot, &value) in slots.iter().zip(values) {
-                            totals[slot as usize - owner * share] += value;
-                            seen[slot as usize - owner * share] = true;
+                    .for_each(|(owner, (totals, seen))| {
+                        for (&slot, &value) in slots.iter().zip(&self.values[..]) {
+                            let at = (slot as usize).wrapping_sub(owner * share);
+                            if at < totals.len() {
+                                totals[at] += value;
+                                seen[at] = true;
+                            }
                         }
                     });
             }
@@ -1055,32 +1021,78 @@ fn union(mine: ScalarBuffer<u64>, theirs: &ScalarBuffer<u64>) -> ScalarBuffer<u6
     if mine.ptr_eq(theirs) {
         return mine;
     }
-    let mut keys = Vec::with_capacity(mine.len() + theirs.len());
+    // Not always split at `mine`: a short `mine` gives one range, and the merge runs on one thread again.
+    let (mine, theirs): (&[u64], &[u64]) = if mine.len() >= theirs.len() {
+        (&mine[..], &theirs[..])
+    } else {
+        (&theirs[..], &mine[..])
+    };
+    let bounds: Vec<(usize, usize)> = std::iter::once((0, 0))
+        .chain(
+            (PARALLEL_ROWS..mine.len())
+                .step_by(PARALLEL_ROWS)
+                .map(|own| (own, theirs.partition_point(|&key| key < mine[own]))),
+        )
+        .chain(std::iter::once((mine.len(), theirs.len())))
+        .collect();
+    let ranges: Vec<(&[u64], &[u64])> = bounds
+        .windows(2)
+        .map(|pair| (&mine[pair[0].0..pair[1].0], &theirs[pair[0].1..pair[1].1]))
+        .collect();
+    let counts: Vec<usize> = ranges
+        .par_iter()
+        .map(|&(left, right)| {
+            let mut count = 0;
+            merge(left, right, |_| count += 1);
+            count
+        })
+        .collect();
+    let mut keys = vec![0; counts.iter().sum()];
+    let mut parts = Vec::with_capacity(ranges.len());
+    let mut rest = keys.as_mut_slice();
+    for &count in &counts {
+        let (part, after) = rest.split_at_mut(count);
+        parts.push(part);
+        rest = after;
+    }
+    parts
+        .into_par_iter()
+        .zip(&ranges)
+        .for_each(|(part, &(left, right))| {
+            let mut written = 0;
+            merge(left, right, |key| {
+                part[written] = key;
+                written += 1;
+            });
+        });
+    keys.into()
+}
+
+fn merge(left: &[u64], right: &[u64], mut emit: impl FnMut(u64)) {
     let (mut own, mut their) = (0, 0);
-    while own < mine.len() || their < theirs.len() {
-        let next = match (mine.get(own), theirs.get(their)) {
-            (Some(&left), Some(&right)) if left == right => {
+    while own < left.len() || their < right.len() {
+        let next = match (left.get(own), right.get(their)) {
+            (Some(&left_key), Some(&right_key)) if left_key == right_key => {
                 own += 1;
                 their += 1;
-                left
+                left_key
             }
-            (Some(&left), Some(&right)) if left < right => {
+            (Some(&left_key), Some(&right_key)) if left_key < right_key => {
                 own += 1;
-                left
+                left_key
             }
-            (Some(&left), None) => {
+            (Some(&left_key), None) => {
                 own += 1;
-                left
+                left_key
             }
-            (_, Some(&right)) => {
+            (_, Some(&right_key)) => {
                 their += 1;
-                right
+                right_key
             }
             (None, None) => unreachable!("the loop stops when both are done"),
         };
-        keys.push(next);
+        emit(next);
     }
-    keys.into()
 }
 
 #[cfg(test)]
@@ -1096,6 +1108,24 @@ mod tests {
 
         assert_eq!(&columns.keys[..], &[1]);
         assert_eq!(columns.values[0].to_bits(), 0);
+    }
+
+    #[test]
+    fn union_across_many_ranges_equals_the_set_union() {
+        let mine: Vec<u64> = (5..5 + 6 * PARALLEL_ROWS as u64).step_by(2).collect();
+        let theirs: Vec<u64> = (0..5)
+            .chain((5..8 * PARALLEL_ROWS as u64).step_by(4))
+            .collect();
+        let expected: std::collections::BTreeSet<u64> =
+            mine.iter().chain(&theirs).copied().collect();
+
+        let expected: Vec<u64> = expected.into_iter().collect();
+
+        assert_eq!(
+            &union(mine.clone().into(), &theirs.clone().into())[..],
+            expected
+        );
+        assert_eq!(&union(theirs.into(), &mine.into())[..], expected);
     }
 
     #[test]
