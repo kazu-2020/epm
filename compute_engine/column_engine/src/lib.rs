@@ -50,15 +50,13 @@ pub fn edit(
 fn apply(
     measures: &mut [Measure],
     ulid: MeasureUlid,
-    delta: Delta,
+    mut delta: Delta,
     changed: &mut HashMap<MeasureUlid, Region>,
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {
     let index = position(measures, ulid)?;
     let axes = &measures[index].definition().axes;
-    if let Some(mut region) =
-        Region::of_changes(axes, delta.changes().map(|(coordinate, _)| coordinate))
-    {
+    if let Some(mut region) = Region::of_keys(axes, measures[index].layout(), delta.keys()) {
         for &axis in axes {
             if region.members(axis).map(BTreeSet::len)
                 == Some(find_dimension(dimensions, axis)?.len() as usize)
@@ -105,19 +103,25 @@ pub fn recalculate(
         .iter()
         .map(|&axis| new.position(axis))
         .collect();
-    let mut delta = result.delta();
-    for (coordinate, value) in new.changes_from(&old) {
-        let coordinate: Vec<MemberId> = positions
+    let (mut keys, mut changes) = new.changes_from(&old);
+    if !positions.is_sorted() {
+        let layout = new.layout();
+        let mut pairs: Vec<(u64, Option<f64>)> = keys
             .iter()
-            .map(|&position| MemberId(coordinate[position]))
+            .zip(changes)
+            .map(|(&key, change)| {
+                let members = positions
+                    .iter()
+                    .map(|&position| layout.member(key, position));
+                (result.layout().pack(members), change)
+            })
             .collect();
-        match value {
-            Some(value) => delta.set(&coordinate, value),
-            None => delta.delete(&coordinate),
-        }
-        .map_err(EvaluateError::InvalidResult)?;
+        pairs.sort_unstable_by_key(|&(key, _)| key);
+        (keys, changes) = pairs.into_iter().unzip();
     }
-    Ok(delta)
+    result
+        .delta_from_sorted(keys, changes)
+        .map_err(EvaluateError::InvalidResult)
 }
 
 fn evaluate_in(

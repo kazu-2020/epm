@@ -926,8 +926,6 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "dimension",
- "foldhash 0.2.0",
- "hashbrown 0.17.1",
  "rayon",
  "ulid",
 ]

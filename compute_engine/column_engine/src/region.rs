@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dimension::{DimensionUlid, MemberId};
+use measure::KeyLayout;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Region {
@@ -25,6 +26,37 @@ impl Region {
             }
         }
         region.non_empty()
+    }
+
+    pub(crate) fn of_keys(
+        axes: &[DimensionUlid],
+        layout: &KeyLayout,
+        keys: &[u64],
+    ) -> Option<Region> {
+        // Not BTreeSet::insert for each key: a change of hundreds of thousands of cells paid a tree insert per axis per cell.
+        let mut seen: Vec<Vec<bool>> = vec![Vec::new(); axes.len()];
+        for &key in keys {
+            for (axis, members) in seen.iter_mut().enumerate() {
+                let member = layout.member(key, axis) as usize;
+                if member >= members.len() {
+                    members.resize(member + 1, false);
+                }
+                members[member] = true;
+            }
+        }
+        Region {
+            members: axes
+                .iter()
+                .zip(seen)
+                .map(|(&axis, members)| {
+                    let members = (0..members.len() as u32)
+                        .filter(|&member| members[member as usize])
+                        .collect();
+                    (axis, members)
+                })
+                .collect(),
+        }
+        .non_empty()
     }
 
     pub fn members(&self, dimension: DimensionUlid) -> Option<&BTreeSet<u32>> {
@@ -59,5 +91,32 @@ impl Region {
 
     pub(crate) fn non_empty(self) -> Option<Region> {
         (!self.members.values().any(BTreeSet::is_empty)).then_some(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_region_of_keys_holds_only_the_members_that_changed() {
+        let axes = [DimensionUlid(ulid::Ulid(1)), DimensionUlid(ulid::Ulid(2))];
+        let layout = KeyLayout::new(&[8, 8]).expect("6 bits fit in a key");
+        let coordinates = [[MemberId(1), MemberId(5)], [MemberId(3), MemberId(5)]];
+        let keys: Vec<u64> = coordinates
+            .iter()
+            .map(|coordinate| layout.pack(coordinate.iter().map(|member| member.0)))
+            .collect();
+
+        let region = Region::of_keys(&axes, &layout, &keys);
+
+        assert_eq!(
+            region,
+            Region::of_changes(&axes, coordinates.iter().map(|coordinate| &coordinate[..]))
+        );
+        assert_eq!(
+            region.expect("cells changed").members(axes[0]),
+            Some(&BTreeSet::from([1, 3]))
+        );
     }
 }

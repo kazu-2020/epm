@@ -245,8 +245,8 @@ fn delta_overrides_base_and_newer_delta_wins() {
         changes,
         [
             (coordinate(0, 0).to_vec(), Some(11.0)),
-            (coordinate(1, 1).to_vec(), Some(5.0)),
             (coordinate(0, 1).to_vec(), None),
+            (coordinate(1, 1).to_vec(), Some(5.0)),
             (coordinate(1, 1).to_vec(), Some(6.0)),
         ]
     );
@@ -257,8 +257,12 @@ fn later_write_in_one_delta_replaces_the_earlier_one() {
     let measure = sales();
     let mut delta = measure.delta();
     delta.set(&coordinate(1, 0), 1.0).unwrap();
+    delta.set(&coordinate(0, 1), 3.0).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
-    assert_eq!(delta.len(), 1);
+    assert!(!delta.is_empty());
+    assert_eq!(delta.len(), 2);
+    assert_eq!(delta.keys().len(), 2);
+    assert!(delta.keys().is_sorted());
     let measure = measure.apply(delta).unwrap();
     assert_eq!(measure.get(&coordinate(1, 0)).unwrap(), Some(2.0));
 }
@@ -422,8 +426,8 @@ fn delta_lists_each_coordinate_with_its_latest_change() {
     assert_eq!(
         changes,
         vec![
-            (coordinate(1, 0).to_vec(), Some(2.0)),
-            (coordinate(0, 1).to_vec(), None)
+            (coordinate(0, 1).to_vec(), None),
+            (coordinate(1, 0).to_vec(), Some(2.0))
         ]
     );
 }
@@ -448,6 +452,36 @@ fn folding_deltas_leaves_one_layer_over_the_same_base() {
     assert_eq!(folded.get(&coordinate(0, 0)).unwrap(), Some(12.0));
     assert_eq!(folded.get(&coordinate(1, 1)).unwrap(), None);
     assert_eq!(folded.get(&coordinate(0, 1)).unwrap(), Some(20.0));
+}
+
+#[test]
+fn folding_deltas_keeps_the_cells_that_only_one_delta_changes() {
+    let older = [
+        (coordinate(0, 0), 1.0),
+        (coordinate(1, 1), 2.0),
+        (coordinate(2, 1), 3.0),
+    ];
+    let newer = [(coordinate(1, 0), 4.0), (coordinate(2, 0), 5.0)];
+    for (first, second) in [(&older[..], &newer[..]), (&newer[..], &older[..])] {
+        let mut measure = sales();
+        for cells in [first, second] {
+            let mut delta = measure.delta();
+            for (coordinate, value) in cells {
+                delta.set(coordinate, *value).unwrap();
+            }
+            measure = measure.apply(delta).unwrap();
+        }
+
+        let changes: Vec<(Vec<MemberId>, Option<f64>)> = measure.fold_deltas().changes().collect();
+
+        let mut expected: Vec<(Vec<MemberId>, Option<f64>)> = older
+            .iter()
+            .chain(&newer)
+            .map(|(coordinate, value)| (coordinate.to_vec(), Some(*value)))
+            .collect();
+        expected.sort_by_key(|(coordinate, _)| coordinate.clone());
+        assert_eq!(changes, expected);
+    }
 }
 
 #[test]
@@ -643,4 +677,42 @@ fn values_that_fill_their_buffer_are_kept_without_a_copy() {
     )
     .unwrap();
     assert!(empty.is_empty());
+}
+
+#[test]
+fn a_delta_from_sorted_keys_takes_only_sorted_keys_that_fit_the_measure() {
+    let measure = sales();
+    let key = |period, department| measure.layout().pack([period, department]);
+
+    let delta = measure
+        .delta_from_sorted(vec![key(0, 0), key(1, 1)], vec![Some(-0.0), None])
+        .unwrap();
+    let applied = measure.apply(delta).unwrap();
+
+    assert_eq!(
+        applied.get(&coordinate(0, 0)).unwrap().map(f64::to_bits),
+        Some(0.0f64.to_bits())
+    );
+    assert_eq!(applied.get(&coordinate(1, 1)).unwrap(), None);
+    assert_eq!(
+        measure
+            .delta_from_sorted(vec![key(1, 1), key(0, 0)], vec![None, None])
+            .unwrap_err(),
+        MeasureError::UnsortedCoordinate(1)
+    );
+    assert_eq!(
+        measure
+            .delta_from_sorted(vec![key(0, 0), key(0, 0)], vec![None, None])
+            .unwrap_err(),
+        MeasureError::DuplicateCoordinate(1)
+    );
+    assert_eq!(
+        measure
+            .delta_from_sorted(vec![key(3, 0)], vec![None])
+            .unwrap_err(),
+        MeasureError::MemberOutOfRange {
+            axis: PERIOD,
+            member: MemberId(3)
+        }
+    );
 }
