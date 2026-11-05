@@ -33,7 +33,16 @@ exclude_re = [
     # Not tested: the arms are equivalent here. Equal keys take the arm before, and the axes of a key never overlap, so | and ^ give the same key.
     "replace < with <= in union",
     "replace \\| with \\^ in KeyLayout::pack",
-    "replace Evaluator<'a>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
+    # Not tested: these only read more cells than the region needs, and restrict at the end keeps the same cells.
+    "replace Evaluator<[^>]*>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
+    "replace Evaluator<[^>]*>::operand_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
+    "delete match arm CheckedNode::(Filter|Sum).* in Evaluator<[^>]*>::operand_region",
+    # Not tested: these only turn off the cache of shared subexpressions, so each use computes the same cells again.
+    "replace > with (==|<|>=) in evaluate_in",
+    "replace operands -> Vec<&CheckedNode> with vec!\\[\\]",
+    "replace Evaluator<[^>]*>::count_uses -> Result<\\(\\), EvaluateError> with Ok\\(\\(\\)\\)",
+    "replace \\+= with \\*= in Evaluator<[^>]*>::count_uses",
+    "replace > with (<|>=) in Evaluator<[^>]*>::node",
 ]
 # Not mutated: bench, datagen and oracle are tools, not engine code. No test can tell datagen mutants apart, each oracle mutant relinks DuckDB and reruns the property test, and bench only drives the engines.
 exclude_globs = ["bench/**", "datagen/**", "oracle/**"]

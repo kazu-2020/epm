@@ -28,6 +28,6 @@ chmod +x bin/*
 timeout 75m bash -euxo pipefail <<'MEASURE'
 bin/generate data > out/generate.txt
 hyperfine --runs 5 --export-json out/recalculate.json --export-markdown out/recalculate.md 'bin/recalculate data column'
-/usr/bin/time -v bin/recalculate data column 2> out/recalculate-time.txt
+RECALCULATE_HASH=1 /usr/bin/time -v bin/recalculate data column 2> out/recalculate-time.txt
 bin/edit data 100 > out/edit.txt 2> out/edit-log.txt
 MEASURE

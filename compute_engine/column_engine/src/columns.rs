@@ -21,6 +21,7 @@ const SCANNED_ROWS: usize = 1 << 20;
 // Not smaller pieces: below this many rows the cost of handing out work is larger than the work.
 const PARALLEL_ROWS: usize = 1 << 14;
 
+#[derive(Clone)]
 pub(crate) struct Columns {
     axes: Vec<DimensionUlid>,
     layout: KeyLayout,
@@ -101,6 +102,13 @@ fn reorder(layout: &KeyLayout, keys: &[u64], positions: &[usize]) -> (KeyLayout,
         })
         .collect();
     (reordered, keys)
+}
+
+fn pieces(len: usize) -> Vec<Range<usize>> {
+    (0..len)
+        .step_by(PARALLEL_ROWS)
+        .map(|start| start..(start + PARALLEL_ROWS).min(len))
+        .collect()
 }
 
 fn gather<T: Copy + Send + Sync>(rows: &[usize], from: &[T]) -> Vec<T> {
@@ -194,8 +202,9 @@ impl Columns {
         axes: Vec<DimensionUlid>,
         layout: KeyLayout,
         keys: Vec<u64>,
-        values: Vec<f64>,
+        values: impl Into<ScalarBuffer<f64>>,
     ) -> Columns {
+        let values = values.into();
         if first_unsorted(&keys).is_none()
             && first_row(&values, |&value| !is_normalized(value)).is_none()
         {
@@ -203,7 +212,7 @@ impl Columns {
                 axes,
                 layout,
                 keys: keys.into(),
-                values: values.into(),
+                values,
             };
         }
         let rows: Vec<usize> = stable_order(&keys)
@@ -228,20 +237,45 @@ impl Columns {
         if first_row(&self.values, |&value| !is_normalized(value)).is_none() {
             return self;
         }
-        let rows: Vec<usize> = (0..self.len())
-            .into_par_iter()
-            .with_min_len(PARALLEL_ROWS)
-            .filter(|&row| normalize(self.values[row]).is_some())
-            .collect();
-        self.take(&rows)
+        self.select(&pieces(self.len()), |row| {
+            normalize(self.values[row]).is_some()
+        })
     }
 
-    fn take(&self, rows: &[usize]) -> Columns {
+    fn select(&self, pieces: &[Range<usize>], keep: impl Fn(usize) -> bool + Sync) -> Columns {
+        let counts: Vec<usize> = pieces
+            .par_iter()
+            .map(|piece| piece.clone().filter(|&row| keep(row)).count())
+            .collect();
+        let total = counts.iter().sum();
+        if total == self.len() {
+            return self.clone();
+        }
+        let mut keys = vec![0; total];
+        let mut values = vec![0.0; total];
+        let mut outputs = Vec::with_capacity(pieces.len());
+        let (mut keys_left, mut values_left) = (keys.as_mut_slice(), values.as_mut_slice());
+        for &count in &counts {
+            let (piece_keys, rest_keys) = keys_left.split_at_mut(count);
+            let (piece_values, rest_values) = values_left.split_at_mut(count);
+            outputs.push((piece_keys, piece_values));
+            (keys_left, values_left) = (rest_keys, rest_values);
+        }
+        outputs
+            .into_par_iter()
+            .zip(pieces)
+            .for_each(|((piece_keys, piece_values), piece)| {
+                let kept = piece.clone().filter(|&row| keep(row));
+                for ((key, value), row) in piece_keys.iter_mut().zip(piece_values).zip(kept) {
+                    *key = self.keys[row];
+                    *value = self.values[row];
+                }
+            });
         Columns {
             axes: self.axes.clone(),
             layout: self.layout.clone(),
-            keys: gather(rows, &self.keys).into(),
-            values: gather(rows, &self.values).into(),
+            keys: keys.into(),
+            values: values.into(),
         }
     }
 
@@ -402,6 +436,7 @@ impl Columns {
                     .map(move |start| start..(start + SCANNED_ROWS).min(range.end))
             })
             .collect();
+        // Not select: it reads every key twice, and an edit keeps a few rows out of millions, so the second read is the cost.
         let rows: Vec<usize> = pieces
             .par_iter()
             .flat_map_iter(|piece| {
@@ -423,7 +458,12 @@ impl Columns {
         if rows.len() == self.len() {
             return self;
         }
-        self.take(&rows)
+        Columns {
+            axes: self.axes.clone(),
+            layout: self.layout.clone(),
+            keys: gather(&rows, &self.keys).into(),
+            values: gather(&rows, &self.values).into(),
+        }
     }
 
     pub(crate) fn changes_from(&self, old: &Columns) -> Vec<(Vec<u32>, Option<f64>)> {
@@ -474,7 +514,7 @@ impl Columns {
             order.iter().map(|&position| axes[position]).collect(),
             layout,
             keys,
-            measure.values().to_vec(),
+            measure.values().clone(),
         )
     }
 
@@ -517,12 +557,7 @@ impl Columns {
                 )
             })
             .collect();
-        Ok(Columns::from_keys(
-            axes,
-            layout,
-            keys,
-            columns.values.to_vec(),
-        ))
+        Ok(Columns::from_keys(axes, layout, keys, columns.values))
     }
 
     pub(crate) fn negate(self) -> Columns {
@@ -678,12 +713,7 @@ impl Columns {
         if !columns.values.par_iter().any(|value| value.is_nan()) {
             return Ok(columns);
         }
-        let rows: Vec<usize> = (0..columns.len())
-            .into_par_iter()
-            .with_min_len(PARALLEL_ROWS)
-            .filter(|&row| !columns.values[row].is_nan())
-            .collect();
-        Ok(columns.take(&rows))
+        Ok(columns.select(&pieces(columns.len()), |row| !columns.values[row].is_nan()))
     }
 
     pub(crate) fn add(
@@ -748,7 +778,9 @@ impl Columns {
                     })
                     .collect();
                 let mut key = Vec::new();
-                for (total, &coordinate) in totals.iter_mut().zip(coordinates) {
+                for (output, &coordinate) in totals.iter_mut().zip(coordinates) {
+                    // Not `*output += value`: a read of the zeroed page before the write makes the kernel copy the zero page and flush the TLB of every core.
+                    let mut total = 0.0;
                     for ((sign, term, source), next) in sources.iter().zip(&mut cursors) {
                         let value =
                             match source {
@@ -769,10 +801,11 @@ impl Columns {
                                 }
                             };
                         match sign {
-                            Sign::Plus => *total += value,
-                            Sign::Minus => *total -= value,
+                            Sign::Plus => total += value,
+                            Sign::Minus => total -= value,
                         }
                     }
+                    *output = total;
                 }
             });
         Ok(Columns {
@@ -881,7 +914,7 @@ impl Columns {
         let order = stable_order(&group_keys);
         let runs = runs(&group_keys, &order);
         let keys = runs.iter().map(|run| group_keys[run[0]]).collect();
-        let values = runs
+        let values: Vec<f64> = runs
             .par_iter()
             .map(|run| {
                 run.iter().fold(0.0, |total, &group_row| {
@@ -965,7 +998,7 @@ fn union(mine: ScalarBuffer<u64>, theirs: &ScalarBuffer<u64>) -> ScalarBuffer<u6
     if mine.ptr_eq(theirs) {
         return mine;
     }
-    let mut keys = Vec::with_capacity(mine.len().max(theirs.len()));
+    let mut keys = Vec::with_capacity(mine.len() + theirs.len());
     let (mut own, mut their) = (0, 0);
     while own < mine.len() || their < theirs.len() {
         let next = match (mine.get(own), theirs.get(their)) {

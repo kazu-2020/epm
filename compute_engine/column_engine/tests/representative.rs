@@ -37,6 +37,24 @@ fn wide_model_matches_the_evaluator_on_sparse_paths() {
 }
 
 #[test]
+fn repeated_subexpressions_match_the_evaluator() {
+    matches_the_evaluator(
+        &[
+            "SUM('売上' * 2, BY '部門', '期間') / SUM('売上' * 2, BY '期間') + '売上' * 2",
+            "FILTER('売上' * 2, 'バージョン' = '実績') - FILTER('売上' * 2, 'バージョン' = '予算') + '売上' * 2",
+            "FILTER('売上' * 2 + 1, 'バージョン' = '実績') - FILTER('売上' * 2 + 1, 'バージョン' = '予算') + '売上' * 2",
+        ],
+        &Size {
+            products: 30,
+            customers: 20,
+            departments_per_kind: 4,
+            quantity_cells: 3_000,
+            account_fill: 0.5,
+        },
+    );
+}
+
+#[test]
 fn model_larger_than_one_parallel_piece_matches_the_evaluator_on_one_and_four_threads() {
     for threads in [1, 4] {
         rayon::ThreadPoolBuilder::new()
@@ -86,6 +104,12 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
     let mut measures: Vec<Measure> = workspace.inputs.clone();
     for formula in &workspace.formulas {
         let parsed = formula::parse(&formula.text);
+        assert!(
+            parsed.errors.is_empty(),
+            "{}: {:?}",
+            formula.text,
+            parsed.errors
+        );
         let resolved = formula::resolve(&parsed.expression, &definitions, &dimensions);
         let checked = formula::check_axes(&resolved.expression, &formula.result.axes)
             .checked
