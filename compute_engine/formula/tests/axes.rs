@@ -328,8 +328,17 @@ fn render(node: &CheckedNode) -> String {
             let axes: Vec<_> = axes.iter().copied().map(common::dimension_name).collect();
             format!("[{}]", axes.join(" "))
         }
-        CheckedNode::Negate(operand) => format!("(Negate {})", render(operand)),
-        CheckedNode::Binary {
+        CheckedNode::Terms(terms) => {
+            let terms: Vec<_> = terms
+                .iter()
+                .map(|(sign, term)| match sign {
+                    Sign::Plus => format!("+{}", render(term)),
+                    Sign::Minus => format!("-{}", render(term)),
+                })
+                .collect();
+            format!("(Terms {})", terms.join(" "))
+        }
+        CheckedNode::Product {
             operator,
             left,
             right,
@@ -372,7 +381,7 @@ fn a_passing_check_keeps_the_resolved_tree_without_spans() {
     assert_eq!(check.errors, []);
     assert_eq!(
         render(check.checked.expect("the check passes").root()),
-        "(Subtract (Negate (Sum (Divide [部門 期間] 2) BY 部門->事業部 期間)) 1)"
+        "(Terms -(Sum (Divide [部門 期間] 2) BY 部門->事業部 期間) -1)"
     );
 }
 
@@ -385,20 +394,9 @@ fn a_chain_of_additions_and_subtractions_splits_into_signed_terms_through_parent
     );
     assert_eq!(check.errors, []);
     let checked = check.checked.expect("the check passes");
-    let terms: Vec<(Sign, String)> = checked
-        .root()
-        .terms()
-        .into_iter()
-        .map(|(sign, term)| (sign, render(term)))
-        .collect();
     assert_eq!(
-        terms,
-        [
-            (Sign::Plus, "[部門 期間]".to_string()),
-            (Sign::Minus, "2".to_string()),
-            (Sign::Minus, "[部門 期間]".to_string()),
-            (Sign::Plus, "(Multiply 1 3)".to_string()),
-        ]
+        render(checked.root()),
+        "(Terms +[部門 期間] -2 -[部門 期間] +(Multiply 1 3))"
     );
 }
 
@@ -423,7 +421,7 @@ fn a_bracket_removes_its_axis_and_filter_keeps_it() {
     );
     assert_eq!(
         render(check.checked.expect("the check passes").root()),
-        "(Add (Filter [部門 期間] 部門: [MemberId(1)] keeps_axis=false) (Filter (Filter [部門 期間] 期間: [MemberId(0)] keeps_axis=false) 部門: [MemberId(0), MemberId(1)] keeps_axis=true))"
+        "(Terms +(Filter [部門 期間] 部門: [MemberId(1)] keeps_axis=false) +(Filter (Filter [部門 期間] 期間: [MemberId(0)] keeps_axis=false) 部門: [MemberId(0), MemberId(1)] keeps_axis=true))"
     );
 }
 

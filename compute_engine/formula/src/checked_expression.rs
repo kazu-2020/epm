@@ -17,9 +17,9 @@ pub enum CheckedNode {
         ulid: MeasureUlid,
         axes: Vec<DimensionUlid>,
     },
-    Negate(Box<CheckedNode>),
-    Binary {
-        operator: BinaryOperator,
+    Terms(Vec<(Sign, CheckedNode)>),
+    Product {
+        operator: ProductOperator,
         left: Box<CheckedNode>,
         right: Box<CheckedNode>,
     },
@@ -36,6 +36,12 @@ pub enum CheckedNode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductOperator {
+    Multiply,
+    Divide,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sign {
     Plus,
     Minus,
@@ -46,35 +52,6 @@ impl Sign {
         match self {
             Sign::Plus => Sign::Minus,
             Sign::Minus => Sign::Plus,
-        }
-    }
-}
-
-impl CheckedNode {
-    #[must_use]
-    pub fn terms(&self) -> Vec<(Sign, &CheckedNode)> {
-        let mut terms = Vec::new();
-        self.push_terms(Sign::Plus, &mut terms);
-        terms
-    }
-
-    fn push_terms<'n>(&'n self, sign: Sign, terms: &mut Vec<(Sign, &'n CheckedNode)>) {
-        match self {
-            CheckedNode::Binary {
-                operator: operator @ (BinaryOperator::Add | BinaryOperator::Subtract),
-                left,
-                right,
-            } => {
-                left.push_terms(sign, terms);
-                let right_sign = if *operator == BinaryOperator::Add {
-                    sign
-                } else {
-                    sign.flipped()
-                };
-                right.push_terms(right_sign, terms);
-            }
-            CheckedNode::Negate(operand) => operand.push_terms(sign.flipped(), terms),
-            _ => terms.push((sign, self)),
         }
     }
 }
@@ -118,16 +95,25 @@ fn node(expression: &ResolvedExpression) -> Option<CheckedNode> {
             ulid: *ulid,
             axes: axes.clone(),
         },
-        ResolvedExpressionKind::Negate(operand) => CheckedNode::Negate(Box::new(node(operand)?)),
+        ResolvedExpressionKind::Negate(_)
+        | ResolvedExpressionKind::Binary {
+            operator: BinaryOperator::Add | BinaryOperator::Subtract,
+            ..
+        } => {
+            let mut terms = Vec::new();
+            push_terms(expression, Sign::Plus, &mut terms)?;
+            CheckedNode::Terms(terms)
+        }
         ResolvedExpressionKind::Binary {
-            operator,
+            operator: BinaryOperator::Multiply,
             left,
             right,
-        } => CheckedNode::Binary {
-            operator: *operator,
-            left: Box::new(node(left)?),
-            right: Box::new(node(right)?),
-        },
+        } => product(ProductOperator::Multiply, left, right)?,
+        ResolvedExpressionKind::Binary {
+            operator: BinaryOperator::Divide,
+            left,
+            right,
+        } => product(ProductOperator::Divide, left, right)?,
         ResolvedExpressionKind::Sum { value, by } => CheckedNode::Sum {
             value: Box::new(node(value)?),
             by: by
@@ -162,4 +148,41 @@ fn node(expression: &ResolvedExpression) -> Option<CheckedNode> {
         },
         ResolvedExpressionKind::Error => return None,
     })
+}
+
+fn product(
+    operator: ProductOperator,
+    left: &ResolvedExpression,
+    right: &ResolvedExpression,
+) -> Option<CheckedNode> {
+    Some(CheckedNode::Product {
+        operator,
+        left: Box::new(node(left)?),
+        right: Box::new(node(right)?),
+    })
+}
+
+fn push_terms(
+    expression: &ResolvedExpression,
+    sign: Sign,
+    terms: &mut Vec<(Sign, CheckedNode)>,
+) -> Option<()> {
+    match &expression.kind {
+        ResolvedExpressionKind::Binary {
+            operator: operator @ (BinaryOperator::Add | BinaryOperator::Subtract),
+            left,
+            right,
+        } => {
+            push_terms(left, sign, terms)?;
+            let right_sign = if *operator == BinaryOperator::Add {
+                sign
+            } else {
+                sign.flipped()
+            };
+            push_terms(right, right_sign, terms)?;
+        }
+        ResolvedExpressionKind::Negate(operand) => push_terms(operand, sign.flipped(), terms)?,
+        _ => terms.push((sign, node(expression)?)),
+    }
+    Some(())
 }
