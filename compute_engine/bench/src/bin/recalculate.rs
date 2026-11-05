@@ -61,6 +61,12 @@ fn main() -> std::io::Result<()> {
         cells += result.len();
         measures.push(result);
     }
+    println!(
+        "cells {cells}, recalculated in {:.3}s",
+        started.elapsed().as_secs_f64()
+    );
+    // Not always: one thread hashes every cell in about 0.35 s, and hyperfine would time it.
+    let hash = std::env::var_os("RECALCULATE_HASH").is_some();
     let mut seen = std::collections::HashMap::new();
     for measure in &measures {
         let mut fresh = |buffer: &arrow_buffer::Buffer| {
@@ -75,22 +81,22 @@ fn main() -> std::io::Result<()> {
         };
         let keys = fresh(measure.keys().inner());
         let values = fresh(measure.values().inner());
-        let mut hasher = std::hash::DefaultHasher::new();
-        std::hash::Hash::hash_slice(measure.keys(), &mut hasher);
-        for value in measure.values().iter() {
-            std::hash::Hash::hash(&value.to_bits(), &mut hasher);
-        }
+        let hash = if hash {
+            let mut hasher = std::hash::DefaultHasher::new();
+            std::hash::Hash::hash_slice(measure.keys(), &mut hasher);
+            for value in measure.values().iter() {
+                std::hash::Hash::hash(&value.to_bits(), &mut hasher);
+            }
+            format!("\thash {:016x}", std::hash::Hasher::finish(&hasher))
+        } else {
+            String::new()
+        };
         eprintln!(
-            "unique\t{}\t{}\tkeys {keys}\tvalues {values}\thash {:016x}",
+            "unique\t{}\t{}\tkeys {keys}\tvalues {values}{hash}",
             measure.definition().name,
             measure.len(),
-            std::hash::Hasher::finish(&hasher)
         );
     }
-    println!(
-        "cells {cells}, recalculated in {:.3}s",
-        started.elapsed().as_secs_f64()
-    );
     Ok(())
 }
 
