@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use dimension::{AttributeUlid, Dimension, DimensionKind, DimensionUlid, MemberId};
 use duckdb::Connection;
-use formula::{CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign, Term};
 use measure::{Measure, MeasureUlid};
 
 pub struct Oracle {
@@ -169,10 +169,10 @@ fn expanded(query: &Query, axes: &[DimensionUlid]) -> String {
     )
 }
 
-fn sum_of_terms(terms: &[(Sign, CheckedNode)], key_orders: &KeyOrders) -> Query {
+fn sum_of_terms(terms: &[Term], key_orders: &KeyOrders) -> Query {
     let terms: Vec<(Sign, Query)> = terms
         .iter()
-        .map(|(sign, term)| (*sign, query(term, key_orders)))
+        .map(|term| (term.sign, query(&term.node, key_orders)))
         .collect();
     let axes: BTreeSet<DimensionUlid> = terms
         .iter()

@@ -55,7 +55,7 @@ impl<'a> Evaluator<'a> {
             CheckedNode::Terms(terms) => Cells::add(
                 terms
                     .iter()
-                    .map(|(sign, term)| Ok((*sign, self.node(term)?)))
+                    .map(|term| Ok((term.sign, self.node(&term.node)?)))
                     .collect::<Result<Vec<_>, EvaluateError>>()?,
                 self.dimensions,
             ),
