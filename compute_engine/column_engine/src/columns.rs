@@ -869,26 +869,26 @@ impl Columns {
                         (vec![0; total], vec![0.0; total])
                     })
                     .collect();
-                let mut outputs: Vec<Vec<(&mut [u32], &mut [f64])>> =
+                let mut parts: Vec<Vec<(&mut [u32], &mut [f64])>> =
                     pieces.iter().map(|_| Vec::with_capacity(owners)).collect();
                 for (owner, (slots, values)) in handed.iter_mut().enumerate() {
                     let (mut slots, mut values) = (slots.as_mut_slice(), values.as_mut_slice());
-                    for (output, counts) in outputs.iter_mut().zip(&counts) {
+                    for (part, counts) in parts.iter_mut().zip(&counts) {
                         let (piece_slots, rest_slots) = slots.split_at_mut(counts[owner]);
                         let (piece_values, rest_values) = values.split_at_mut(counts[owner]);
-                        output.push((piece_slots, piece_values));
+                        part.push((piece_slots, piece_values));
                         (slots, values) = (rest_slots, rest_values);
                     }
                 }
-                outputs
+                parts
                     .into_par_iter()
                     .zip(&pieces)
-                    .for_each(|(mut output, piece)| {
+                    .for_each(|(mut part, piece)| {
                         let mut written = vec![0; owners];
                         for row in piece.clone() {
                             if let Some(slot) = slot_of(row) {
                                 let owner = slot / share;
-                                let (slots, values) = &mut output[owner];
+                                let (slots, values) = &mut part[owner];
                                 slots[written[owner]] = u32::try_from(slot)
                                     .expect("dense_strides keeps space at or below DENSE_LIMIT");
                                 values[written[owner]] = self.values[row];
