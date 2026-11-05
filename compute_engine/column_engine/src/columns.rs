@@ -51,6 +51,22 @@ pub(crate) fn find_dimension<'d>(
         .ok_or(EvaluateError::MissingDimension(ulid))
 }
 
+pub(crate) fn sort_in_key_order<T>(
+    items: &mut [T],
+    axis: impl Fn(&T) -> DimensionUlid,
+    dimensions: &[&Dimension],
+) -> Result<(), EvaluateError> {
+    for item in items.iter() {
+        find_dimension(dimensions, axis(item))?;
+    }
+    items.sort_by_cached_key(|item| {
+        find_dimension(dimensions, axis(item))
+            .expect("every axis was found above")
+            .key_order()
+    });
+    Ok(())
+}
+
 fn lengths(dimensions: &[&Dimension], axes: &[DimensionUlid]) -> Result<Vec<u32>, EvaluateError> {
     axes.iter()
         .map(|&axis| find_dimension(dimensions, axis).map(Dimension::len))
@@ -187,7 +203,7 @@ impl Columns {
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         let mut by_axis: Vec<(DimensionUlid, Vec<u32>)> = axes.into_iter().zip(members).collect();
-        by_axis.sort_by_key(|&(axis, _)| axis);
+        sort_in_key_order(&mut by_axis, |&(axis, _)| axis, dimensions)?;
         let (axes, members): (Vec<DimensionUlid>, Vec<Vec<u32>>) = by_axis.into_iter().unzip();
         let layout = layout_of(dimensions, &axes)?;
         let keys: Vec<u64> = (0..values.len())
@@ -292,12 +308,19 @@ impl Columns {
         )
     }
 
-    pub(crate) fn from_measure(measure: &Measure) -> Columns {
-        Columns::from_base(&measure.compact())
+    pub(crate) fn from_measure(
+        measure: &Measure,
+        dimensions: &[&Dimension],
+    ) -> Result<Columns, EvaluateError> {
+        Columns::from_base(&measure.compact(), dimensions)
     }
 
-    pub(crate) fn from_measure_in(measure: &Measure, region: &Region) -> Columns {
-        let base = Columns::from_base(measure).restrict(region);
+    pub(crate) fn from_measure_in(
+        measure: &Measure,
+        region: &Region,
+        dimensions: &[&Dimension],
+    ) -> Result<Columns, EvaluateError> {
+        let base = Columns::from_base(measure, dimensions)?.restrict(region);
         let definition = &measure.definition().axes;
         let positions: Vec<usize> = base
             .axes
@@ -324,7 +347,7 @@ impl Columns {
                 changes.insert(base.layout.pack(key), value);
             }
         }
-        base.with_changes(changes)
+        Ok(base.with_changes(changes))
     }
 
     fn with_changes(self, changes: BTreeMap<u64, Option<f64>>) -> Columns {
@@ -496,26 +519,26 @@ impl Columns {
         changes
     }
 
-    fn from_base(measure: &Measure) -> Columns {
+    fn from_base(measure: &Measure, dimensions: &[&Dimension]) -> Result<Columns, EvaluateError> {
         let axes = measure.definition().axes.clone();
-        if axes.is_sorted() {
+        let mut order: Vec<usize> = (0..axes.len()).collect();
+        sort_in_key_order(&mut order, |&position| axes[position], dimensions)?;
+        if order.is_sorted() {
             // Not Columns::from_keys: Measure already rejects unsorted or unnormalized cells.
-            return Columns {
+            return Ok(Columns {
                 axes,
                 layout: measure.layout().clone(),
                 keys: measure.keys().clone(),
                 values: measure.values().clone(),
-            };
+            });
         }
-        let mut order: Vec<usize> = (0..axes.len()).collect();
-        order.sort_by_key(|&position| axes[position]);
         let (layout, keys) = reorder(measure.layout(), measure.keys(), &order);
-        Columns::from_keys(
+        Ok(Columns::from_keys(
             order.iter().map(|&position| axes[position]).collect(),
             layout,
             keys,
             measure.values().clone(),
-        )
+        ))
     }
 
     pub(crate) fn position(&self, dimension: DimensionUlid) -> usize {
@@ -724,7 +747,7 @@ impl Columns {
             .iter()
             .flat_map(|(_, term)| term.axes.iter().copied())
             .collect();
-        axes.sort_unstable();
+        sort_in_key_order(&mut axes, |&axis| axis, dimensions)?;
         axes.dedup();
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
         // Not an empty result when no term is full: ADR 0002 spreads every term, so '人数' + SUM('売上', BY '期間') has a cell on every pair.
@@ -823,7 +846,7 @@ impl Columns {
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         let mut outputs: Vec<&ByAxis<'_>> = by.iter().collect();
-        outputs.sort_by_key(|axis| axis.output);
+        sort_in_key_order(&mut outputs, |axis| axis.output, dimensions)?;
         let axes: Vec<DimensionUlid> = outputs.iter().map(|axis| axis.output).collect();
         let lengths = lengths(dimensions, &axes)?;
         let layout = layout_of(dimensions, &axes)?;
@@ -1069,12 +1092,14 @@ mod tests {
 
     #[test]
     fn adding_terms_on_the_same_coordinates_keeps_their_keys() {
-        let axis = DimensionUlid(ulid::Ulid(1));
-        let layout = KeyLayout::new(&[8]).expect("3 bits fit in a key");
+        let fixture = datagen::cases::Fixture::default();
+        let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
+        let axis = dimensions[1].ulid();
+        let layout = KeyLayout::new(&[3]).expect("2 bits fit in a key");
         let sales = Columns::from_keys(
             vec![axis],
             layout.clone(),
-            vec![0, 2, 5],
+            vec![0, 1, 2],
             vec![3.0, 4.0, 5.0],
         );
         let cost = Columns {
@@ -1085,7 +1110,7 @@ mod tests {
         };
         let keys = sales.keys.clone();
 
-        let profit = Columns::add(vec![(Sign::Plus, sales), (Sign::Minus, cost)], &[])
+        let profit = Columns::add(vec![(Sign::Plus, sales), (Sign::Minus, cost)], &dimensions)
             .expect("both terms have every axis");
 
         assert!(profit.keys.ptr_eq(&keys));

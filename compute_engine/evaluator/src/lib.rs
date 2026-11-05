@@ -84,7 +84,7 @@ impl<'a> Evaluator<'a> {
                     .iter()
                     .map(|axis| self.by_axis(axis, &value.axes))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(value.sum(&by))
+                value.sum(&by, self.dimensions)
             }
         }
     }

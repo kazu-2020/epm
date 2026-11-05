@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionUlid, KeyKind,
-    MemberId,
+    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionKind,
+    DimensionUlid, KeyKind, MemberId,
 };
 use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::rngs::StdRng;
@@ -112,6 +112,12 @@ impl Generator<'_> {
         let definition = DimensionDefinition {
             ulid,
             name: format!("D{index}"),
+            // Not the ULID order: the last dimensions lead the cell key, so the tests meet keys in the other order.
+            kind: match self.configuration.dimension_count - index {
+                1 => DimensionKind::Calendar,
+                2 => DimensionKind::Version,
+                _ => DimensionKind::Ordinary,
+            },
             key_kind: KeyKind::Name,
             attributes,
         };

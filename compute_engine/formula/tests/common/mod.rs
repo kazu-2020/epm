@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionUlid, KeyKind,
+    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionKind,
+    DimensionUlid, KeyKind,
 };
 use measure::{MeasureDefinition, MeasureUlid};
 use ulid::Ulid;
@@ -17,6 +18,7 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
     let dimension = |ulid, name: &str, attributes| DimensionDefinition {
         ulid,
         name: name.into(),
+        kind: DimensionKind::Ordinary,
         key_kind: KeyKind::Name,
         attributes,
     };

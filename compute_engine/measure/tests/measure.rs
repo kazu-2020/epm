@@ -5,7 +5,7 @@ use arrow_array::{
     cast::AsArray, types::Float64Type,
 };
 use arrow_schema::{Field, Schema};
-use dimension::{Dimension, DimensionDefinition, DimensionUlid, KeyKind, MemberId};
+use dimension::{Dimension, DimensionDefinition, DimensionKind, DimensionUlid, KeyKind, MemberId};
 use measure::{KeyLayout, Measure, MeasureDefinition, MeasureError, MeasureUlid, normalize};
 use ulid::Ulid;
 
@@ -18,6 +18,7 @@ fn dimension(ulid: DimensionUlid, names: &[&str]) -> Dimension {
     let definition = DimensionDefinition {
         ulid,
         name: "ディメンション".into(),
+        kind: DimensionKind::Ordinary,
         key_kind: KeyKind::Name,
         attributes: Vec::new(),
     };

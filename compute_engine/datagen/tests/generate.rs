@@ -119,3 +119,36 @@ fn a_few_members_hold_most_cells() {
         "the busiest tenth of {members} members holds {busiest} of {cells} cells"
     );
 }
+
+#[test]
+fn the_representative_model_declares_its_axes_in_key_order() {
+    let size = datagen::representative::Size {
+        products: 4,
+        customers: 3,
+        departments_per_kind: 2,
+        quantity_cells: 20,
+        account_fill: 0.5,
+    };
+    let workspace = datagen::representative::generate(&size, 1);
+    let key_order = |axis| {
+        workspace
+            .dimensions
+            .iter()
+            .find(|dimension| dimension.ulid() == axis)
+            .expect("every axis is a dimension")
+            .key_order()
+    };
+    let declared = workspace
+        .inputs
+        .iter()
+        .map(|input| input.definition())
+        .chain(workspace.formulas.iter().map(|formula| &formula.result));
+
+    for definition in declared {
+        assert!(
+            definition.axes.is_sorted_by_key(|&axis| key_order(axis)),
+            "{}",
+            definition.name
+        );
+    }
+}

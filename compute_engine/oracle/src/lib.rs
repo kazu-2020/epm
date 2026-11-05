@@ -1,13 +1,16 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-use dimension::{AttributeUlid, Dimension, DimensionUlid, MemberId};
+use dimension::{AttributeUlid, Dimension, DimensionKind, DimensionUlid, MemberId};
 use duckdb::Connection;
 use formula::{BinaryOperator, CheckedAxis, CheckedExpression, CheckedNode, Sign};
 use measure::{Measure, MeasureUlid};
 
 pub struct Oracle {
     connection: Connection,
+    key_orders: KeyOrders,
 }
+
+type KeyOrders = HashMap<DimensionUlid, (DimensionKind, DimensionUlid)>;
 
 struct Query {
     sql: String,
@@ -50,7 +53,13 @@ impl Oracle {
             appender.append_record_batch(measure.compact().to_record_batch())?;
             appender.flush()?;
         }
-        Ok(Oracle { connection })
+        Ok(Oracle {
+            connection,
+            key_orders: dimensions
+                .iter()
+                .map(|dimension| (dimension.ulid(), dimension.key_order()))
+                .collect(),
+        })
     }
 
     pub fn evaluate(
@@ -61,7 +70,10 @@ impl Oracle {
         let table = measure_table(result);
         self.connection.execute_batch(&format!(
             "CREATE TABLE {table} AS {}",
-            expanded(&query(expression.root()), expression.result_axes())
+            expanded(
+                &query(expression.root(), &self.key_orders),
+                expression.result_axes()
+            )
         ))?;
         let mut statement = self
             .connection
@@ -93,7 +105,7 @@ fn column(dimension: DimensionUlid) -> String {
     format!("axis_{}", dimension.0.0)
 }
 
-fn query(node: &CheckedNode) -> Query {
+fn query(node: &CheckedNode, key_orders: &KeyOrders) -> Query {
     let query = match node {
         CheckedNode::Number(value) => Query {
             sql: format!("SELECT CAST('{value:?}' AS DOUBLE) AS value"),
@@ -108,7 +120,7 @@ fn query(node: &CheckedNode) -> Query {
             }
         }
         CheckedNode::Negate(operand) => {
-            let operand = query(operand);
+            let operand = query(operand, key_orders);
             let mut items: Vec<String> = operand.axes.iter().map(|&axis| column(axis)).collect();
             items.push("-value AS value".into());
             Query {
@@ -119,19 +131,23 @@ fn query(node: &CheckedNode) -> Query {
         CheckedNode::Binary {
             operator: BinaryOperator::Add | BinaryOperator::Subtract,
             ..
-        } => sum_of_terms(&node.terms()),
+        } => sum_of_terms(&node.terms(), key_orders),
         CheckedNode::Binary {
             operator,
             left,
             right,
-        } => product(*operator, &query(left), &query(right)),
-        CheckedNode::Sum { value, by } => sum(&query(value), by),
+        } => product(
+            *operator,
+            &query(left, key_orders),
+            &query(right, key_orders),
+        ),
+        CheckedNode::Sum { value, by } => sum(&query(value, key_orders), by, key_orders),
         CheckedNode::Filter {
             value,
             dimension,
             members,
             keeps_axis,
-        } => filter(&query(value), *dimension, members, *keeps_axis),
+        } => filter(&query(value, key_orders), *dimension, members, *keeps_axis),
     };
     let mut items: Vec<String> = query.axes.iter().map(|&axis| column(axis)).collect();
     items.push("CASE WHEN node.value = 0 THEN 0::DOUBLE ELSE node.value END AS value".into());
@@ -165,10 +181,10 @@ fn expanded(query: &Query, axes: &[DimensionUlid]) -> String {
     )
 }
 
-fn sum_of_terms(terms: &[(Sign, &CheckedNode)]) -> Query {
+fn sum_of_terms(terms: &[(Sign, &CheckedNode)], key_orders: &KeyOrders) -> Query {
     let terms: Vec<(Sign, Query)> = terms
         .iter()
-        .map(|&(sign, term)| (sign, query(term)))
+        .map(|&(sign, term)| (sign, query(term, key_orders)))
         .collect();
     let axes: BTreeSet<DimensionUlid> = terms
         .iter()
@@ -290,7 +306,7 @@ fn filter(
     }
 }
 
-fn sum(value: &Query, by: &[CheckedAxis]) -> Query {
+fn sum(value: &Query, by: &[CheckedAxis], key_orders: &KeyOrders) -> Query {
     let mut axes = BTreeSet::new();
     let mut groups = Vec::new();
     let mut items = Vec::new();
@@ -319,8 +335,9 @@ fn sum(value: &Query, by: &[CheckedAxis]) -> Query {
             }
         }
     }
-    let order: Vec<String> = value
-        .axes
+    let mut ordered: Vec<DimensionUlid> = value.axes.iter().copied().collect();
+    ordered.sort_by_key(|axis| key_orders[axis]);
+    let order: Vec<String> = ordered
         .iter()
         .map(|&axis| format!("node.{}", column(axis)))
         .collect();
