@@ -9,8 +9,8 @@
 | ファイル | 中身 |
 | --- | --- |
 | `change_log.qnt` | 抽象の仕様。ワークスペースごとに追記だけの列が1本あり、1つの Request ID は高々1回だけ足され、ACK するのは列に入ったものだけ |
-| `storage.qnt` | 実装のモデル。担当サーバー、配置コントローラー(エポックを渡す)、セグメント、マニフェスト、クライアントの再送。`Backend` で S3 と PostgreSQL を切り替える |
-| `mutations.qnt` | 守りを1つずつ外したモデル。検査が実際に落ちることを示す |
+| `storage.qnt` | 実装のモデル。担当サーバー、配置コントローラー(エポックを渡す)、セグメント、マニフェスト、クライアントの再送。S3 と PostgreSQL の違い3つ(セグメントをコミットの前に書くか中で書くか、コミットでリースを検査するか、新しい担当がフェンスを書くか)を `design` モジュールの `S3` と `PostgreSQL` に、守りを `allGuards` に置く。サーバー数などの上限もここに1か所だけ書く |
+| `mutations.qnt` | 守りを1つずつ外したモデル(`{ ...allGuards, deduplication: false }` など)。検査が実際に落ちることを示す。`check.sh` は、ここのモジュールがすべて `breaks`、`holds`、`scenarios` のどれかに入っているかを確かめる |
 | `check.sh` | すべての検査をまとめて実行する |
 | `../rustfs/conditional_write.py` | S3 互換サーバーで条件付き書き込みの応答を実測する |
 
@@ -53,28 +53,21 @@ storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少な�
 
 守りを外したときに破れる性質を書く。`check.sh` はこの性質だけを指定して実行し、破れることを確かめる。ほかの性質も破れている場合がある。「破れず」はすべての性質を指定して5万回で反例が見つからなかったという意味。
 
-| 外した守り | S3 案 | PostgreSQL 案 |
+| 外した守り(モジュール名の後半、変える値) | S3 案 | PostgreSQL 案 |
 | --- | --- | --- |
 | なし(設計どおり) | 破れず | 破れず |
-| マニフェストの If-Match、PostgreSQL では先頭の Commit Sequence の検査(`blind_write`) | `refinesChangeLog` | `refinesChangeLog`(固定の手順で確認) |
-| 結果不明を成功とみなさない(`unknown_as_success`) | `refinesChangeLog` | `refinesChangeLog` |
-| Request ID による重複排除(`no_deduplication`) | `refinesChangeLog` | `refinesChangeLog` |
-| セグメントのキーにエポックを入れる(`segment_key_without_epoch`) | `refinesChangeLog` | 対象外(行はコミットと同じトランザクションで入る) |
-| 新しい担当がまずマニフェストを1回書く(`no_fence`) | `newestOwnerSeesAcknowledged` | 対象外(フェンスの書き込みがもともとない) |
-| 読んだマニフェストのエポックが自分より新しければ止まる(`no_epoch_check`) | `staleEpochNeverCommits` | 破れず |
+| マニフェストの If-Match、PostgreSQL では先頭の Commit Sequence の検査(`blind_write`、`manifestCondition`) | `refinesChangeLog` | `refinesChangeLog`(固定の手順で確認) |
+| 結果不明を成功とみなさない(`unknown_as_success`、`readsBackUnknown`) | `refinesChangeLog` | `refinesChangeLog` |
+| Request ID による重複排除(`no_deduplication`、`deduplication`) | `refinesChangeLog` | `refinesChangeLog` |
+| セグメントのキーにエポックを入れる(`segment_key_without_epoch`、`epochInSegmentKey`) | `refinesChangeLog`(固定の手順で確認) | 対象外(行はコミットと同じトランザクションで入る) |
+| 新しい担当がまずマニフェストを1回書く(`no_fence`、`S3` の `newOwnerWritesFence`) | `newestOwnerSeesAcknowledged` | 対象外(フェンスの書き込みがもともとない) |
+| 読んだマニフェストのエポックが自分より新しければ止まる(`no_epoch_check`、`epochCheck`) | `staleEpochNeverCommits` | 破れず |
 
-到達確認の4つは、両方の案で届いた。PostgreSQL 案の `blind_write` は、ランダムシミュレーションでは seed によって届いたり届かなかったりしたので、`mutations.qnt` の固定の手順(`lateResendRollsBackTest`)で確かめる。
+到達確認の4つは、両方の案で届いた。PostgreSQL 案の `blind_write` と S3 案の `segment_key_without_epoch` は、ランダムシミュレーションでは seed やモデルの書き方によって届いたり届かなかったりしたので、`mutations.qnt` の固定の手順(`lateResendRollsBackTest`、`oldOwnerOverwritesTest`)で確かめる。
 
 ## 分かったこと
 
-1. **S3 案のログの安全性は、マニフェストの If-Match だけで成り立つ。** 新しい担当のフェンスの書き込み(`no_fence`)とエポックの検査(`no_epoch_check`)を外しても、`refinesChangeLog` は破れなかった。マニフェストへの書き込みがすべて条件付きなので、古い担当の書き込みは、新しい担当が1回でも書いたあとは必ず 412 になる。
-2. **それでもフェンスの書き込みは要る。** 外すと、新しい担当が受け付けを始めたあとも、古い担当がコミットして ACK を返し続けられる。新しい担当はそのコミットを見ていないので、古い値を読ませる(`newestOwnerSeesAcknowledged`)。エポックの検査を外すと、古い担当が新しいエポックのあとに確定できる(`staleEpochNeverCommits`)。これは「担当は1台」という前提を崩すが、ログそのものは壊さない。フェンスの書き込みがあっても、交代を知らない古い担当は、手元の状態から古い値を読ませうる。読み取りはモデルにないので、これを防ぐ仕組み(リースの期限など)はスナップショットと一緒に検討する。
-3. **セグメントのキーには、エポック(書いた担当を区別できるもの)が要る。** キーが Commit Sequence だけだと、交代を知らない古い担当が、確定済みのセグメントを同じキーで上書きできる。マニフェストは変わらないまま、確定した中身が変わる。ただしエポックで防げるのは別の担当との衝突だけで、同じ担当が同じキーに別の中身を書く場合は防げない。モデルの担当は1つのキーを1回しか使わず(結果が分からなければ待ち続ける)、`segmentsNeverChange` でそれを確かめた。セグメントの PUT もモデルでは1回で届く。このため「同じキーに別の中身を書かない」は設計の約束になる。実装でこの約束が破れたとき(遅れて届く PUT、諦めて同じ位置に書き直す担当)に気づく手段として、セグメントを `If-None-Match: *` で書いてもよい。
-4. **結果不明の書き込みは、マニフェストを読み直して判定する。** 成功とみなすと、確定していないコミットに ACK を返す。失敗(412)を「フェンスされた」と決めつけるのも誤りで、412 は自分の再送が先に適用された結果でもありうる。モデルは、読み直したマニフェストが自分の書いた中身と一致すれば成功として扱う。
-5. **重複排除には、確定したログから作った Request ID の集合を使う。** ACK が失われたクライアントの再送は、担当の交代をまたいで届く。新しい担当はマニフェストからログを読み直して集合を作るので、交代をまたいでも二重に入らない。
-6. **PostgreSQL 案では、リースのエポックをコミットと同じトランザクションで検査するだけで、2、3 の問題が起きない。** 配置コントローラーがリースを書いた時点で、古い担当のコミットは失敗する。フェンスの書き込みも孤児のセグメントもない。結果不明の判定(4)と重複排除(5)は、どちらの案でも同じように要る。
-7. **PostgreSQL 案でも、先頭の Commit Sequence の検査は要る。** リースの検査で書き手は1台に絞られるが、その1台の古い再送が遅れて届くと、確定したログと違う状態になる。モデルはマニフェストの置き換えで表すのでログが戻るが、実際の PostgreSQL では同じコミットの行が重複する。担当が r1 を書き、結果が分からないので再送する。最初の分が通り、続けて r2 も通る。そのあとで r1 の再送が通ると、マニフェストは r1 だけの状態に戻る。一意制約(ワークスペース、Commit Sequence)で防ぐ。
-8. **PostgreSQL 案の古い担当は、書き込みに失敗したらリースを読んで止まる。** 読まないと、結果不明の判定と再送をいつまでも繰り返す。
+モデルから決めた守りと、その理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` に置く。
 
 ## 入れていないもの
 
