@@ -22,6 +22,8 @@ exclude_re = [
     "column_engine/src/columns.rs:[0-9]+:[0-9]+: replace << with >>",
     # Not tested: with one owner both paths add the same rows in the same order.
     "replace == with != in Columns::sum",
+    # Not tested: the count per owner only sets the capacity of its row list, so a wrong count builds the same rows.
+    "column_engine/src/columns.rs:[0-9]+:59: replace \\+= with \\*= in Columns::sum",
     # Not tested: these only read more cells than the region needs, and the old and new cells outside it are equal.
     "replace == with != in apply",
     "replace searched -> bool",
