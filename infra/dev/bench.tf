@@ -1,16 +1,18 @@
 data "aws_region" "current" {}
 
 data "aws_ec2_instance_type_offerings" "bench" {
+  for_each      = toset(local.bench_instances)
   location_type = "availability-zone"
   filter {
     name   = "instance-type"
-    values = [local.bench_instance]
+    values = [each.value]
   }
 }
 
 locals {
   bench_tags           = { Purpose = "bench" }
   bench_instance       = "r7i.2xlarge"
+  bench_instances      = [local.bench_instance, "r7i.16xlarge"]
   bench_ami            = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
   github_owner_id      = "64774307"
   github_repository_id = "1438427453"
@@ -31,7 +33,7 @@ resource "aws_internet_gateway" "bench" {
 resource "aws_subnet" "bench" {
   vpc_id            = aws_vpc.bench.id
   cidr_block        = aws_vpc.bench.cidr_block
-  availability_zone = sort(data.aws_ec2_instance_type_offerings.bench.locations)[0]
+  availability_zone = sort(setintersection([for offering in data.aws_ec2_instance_type_offerings.bench : offering.locations]...))[0]
   tags              = merge(local.bench_tags, { Name = "bench" })
 }
 
@@ -216,7 +218,7 @@ resource "aws_iam_role_policy" "bench_github" {
         Resource = "${local.ec2_arn}:instance/*"
         Condition = {
           ArnEquals    = { "ec2:LaunchTemplate" = aws_launch_template.bench.arn }
-          StringEquals = { "ec2:InstanceType" = local.bench_instance }
+          StringEquals = { "ec2:InstanceType" = local.bench_instances }
         }
       },
       {
