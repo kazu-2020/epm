@@ -6,6 +6,15 @@ use dimension::Dimension;
 use measure::MeasureDefinition;
 
 fn main() -> std::io::Result<()> {
+    if std::env::var_os("GLIBC_TUNABLES").is_none() {
+        use std::os::unix::process::CommandExt;
+        let mut arguments = std::env::args_os();
+        let program = arguments.next().expect("a program name");
+        return Err(std::process::Command::new(program)
+            .args(arguments)
+            .env("GLIBC_TUNABLES", "glibc.malloc.hugetlb=1")
+            .exec());
+    }
     let mut arguments = std::env::args().skip(1);
     let usage = "usage: recalculate <directory> <column|evaluator>";
     let directory = PathBuf::from(arguments.next().expect(usage));
