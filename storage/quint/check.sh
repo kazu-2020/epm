@@ -7,19 +7,29 @@ invariants=(refinesChangeLog epochNeverDecreases segmentsNeverChange staleEpochN
 witnesses=(witnessNotTwoAcknowledged witnessNoCommitAfterHandover witnessNoOwnResendRejected witnessNoOldOwnerStopped)
 breaks=(
   s3_blind_write:refinesChangeLog s3_unknown_as_success:refinesChangeLog s3_no_deduplication:refinesChangeLog
-  s3_segment_key_without_epoch:refinesChangeLog s3_no_fence:newestOwnerSeesAcknowledged
+  s3_no_fence:newestOwnerSeesAcknowledged
   s3_no_epoch_check:staleEpochNeverCommits
   postgres_unknown_as_success:refinesChangeLog postgres_no_deduplication:refinesChangeLog
 )
 # On PostgreSQL the lease check in the commit transaction does the work of these guards.
 holds=(postgres_segment_key_without_epoch postgres_no_epoch_check)
 log_safe_without_guard=(s3_no_fence s3_no_epoch_check)
-# postgres_blind_write is checked by its fixed scenario (quint test), not here.
+scenarios=(postgres_blind_write s3_segment_key_without_epoch)
+
+listed=$(printf '%s\n' "${breaks[@]%%:*}" "${holds[@]}" "${scenarios[@]}" | sort -u)
+defined=$(sed -n 's/^module \([a-z0-9_]*\).*/\1/p' mutations.qnt | sort)
+if [[ "$listed" != "$defined" ]]; then
+  echo "check.sh does not list the same modules as mutations.qnt:"
+  diff <(echo "$listed") <(echo "$defined") || true
+  exit 1
+fi
 
 quint typecheck change_log.qnt
 quint typecheck storage.qnt
 quint typecheck mutations.qnt
-quint test mutations.qnt --main postgres_blind_write
+for module in "${scenarios[@]}"; do
+  quint test mutations.qnt --main "$module"
+done
 
 run() {
   quint run "$1" --main "$2" --invariants "${@:3}" --max-samples "$samples" --max-steps 30 --seed 1 2>&1 || true
