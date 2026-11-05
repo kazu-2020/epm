@@ -486,7 +486,6 @@ impl Representative {
             (self.size.quantity_cells as u64) < possible / 2,
             "the quantity cells fit sparsely into the sales departments"
         );
-        // Not one set for all cells: each period and version draws apart, in parallel and into a smaller set that misses the cache less (#45).
         let pairs = periods * versions;
         let seeds: Vec<u64> = (0..pairs).map(|_| self.random.random()).collect();
         let [department_zipf, product_zipf, customer_zipf] =
