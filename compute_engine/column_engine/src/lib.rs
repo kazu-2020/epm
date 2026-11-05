@@ -18,9 +18,11 @@ pub fn evaluate(
     measures: &[&Measure],
     dimensions: &[&Dimension],
 ) -> Result<Measure, EvaluateError> {
-    evaluate_in(expression, result, measures, dimensions, &Region::default())?
-        .into_measure(result.clone(), dimensions)
-        .map_err(EvaluateError::InvalidResult)
+    let columns = evaluate_in(expression, result, measures, dimensions, &Region::default())?;
+    let started = std::time::Instant::now();
+    let out = columns.into_measure(result.clone(), dimensions).map_err(EvaluateError::InvalidResult);
+    if true { eprintln!("  into_measure {:.3}s {}", started.elapsed().as_secs_f64(), stat()); }
+    out
 }
 
 pub fn edit(
@@ -349,6 +351,16 @@ impl<'a, 'e> Evaluator<'a, 'e> {
     }
 
     fn compute(&self, node: &'e CheckedNode, region: &Region) -> Result<Columns, EvaluateError> {
+        let started = std::time::Instant::now();
+        let out = self.compute_inner(node, region);
+        if true {
+            let kind = match node { CheckedNode::Number(_) => "number", CheckedNode::Measure{..} => "measure", CheckedNode::Terms(_) => "add", CheckedNode::Product{..} => "product", CheckedNode::Filter{..} => "filter", CheckedNode::Sum{..} => "sum" };
+            eprintln!("  op {kind} rows {} total {:.3}s {}", out.as_ref().map(|c| c.keys.len()).unwrap_or(0), started.elapsed().as_secs_f64(), stat());
+        }
+        out
+    }
+
+    fn compute_inner(&self, node: &'e CheckedNode, region: &Region) -> Result<Columns, EvaluateError> {
         match node {
             CheckedNode::Number(value) => Ok(Columns::number(*value)),
             CheckedNode::Measure { ulid, axes } => {
@@ -453,4 +465,10 @@ impl<'a, 'e> Evaluator<'a, 'e> {
             }),
         }
     }
+}
+
+pub(crate) fn stat() -> String {
+    let s = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let f: Vec<&str> = s.rsplit_once(") ").unwrap().1.split(' ').collect();
+    format!("minflt {} utime {} stime {}", f[7], f[11], f[12])
 }

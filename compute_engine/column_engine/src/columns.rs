@@ -29,7 +29,7 @@ const _: () = assert!(
 pub(crate) struct Columns {
     axes: Vec<DimensionUlid>,
     layout: KeyLayout,
-    keys: ScalarBuffer<u64>,
+    pub(crate) keys: ScalarBuffer<u64>,
     values: ScalarBuffer<f64>,
 }
 
@@ -465,6 +465,7 @@ impl Columns {
             })
             .collect();
         // Not select: it reads every key twice, and an edit keeps a few rows out of millions, so the second read is the cost.
+        let t0 = std::time::Instant::now();
         let rows: Vec<usize> = pieces
             .par_iter()
             .flat_map_iter(|piece| {
@@ -486,12 +487,15 @@ impl Columns {
         if rows.len() == self.len() {
             return self;
         }
-        Columns {
+        let t1 = t0.elapsed().as_secs_f64();
+        let out = Columns {
             axes: self.axes.clone(),
             layout: self.layout.clone(),
             keys: gather(&rows, &self.keys).into(),
             values: gather(&rows, &self.values).into(),
-        }
+        };
+        if true { eprintln!("    restrict pieces {} rows {:.3}s gather {:.3}s {}", pieces.len(), t1, t0.elapsed().as_secs_f64()-t1, crate::stat()); }
+        out
     }
 
     pub(crate) fn changes_from(&self, old: &Columns) -> (Vec<u64>, Vec<Option<f64>>) {
