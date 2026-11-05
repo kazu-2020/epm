@@ -6,7 +6,7 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use dimension::{
     AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionError,
-    DimensionUlid, KeyKind, MemberId, MemberUlid,
+    DimensionKind, DimensionUlid, KeyKind, MemberId, MemberUlid,
 };
 use ulid::Ulid;
 
@@ -18,6 +18,7 @@ fn definition(key_kind: KeyKind, attributes: Vec<AttributeDefinition>) -> Dimens
     DimensionDefinition {
         ulid: DEPARTMENT,
         name: "部門".into(),
+        kind: DimensionKind::Ordinary,
         key_kind,
         attributes,
     }
@@ -80,6 +81,7 @@ fn definition_without_attributes(ulid: DimensionUlid) -> DimensionDefinition {
     DimensionDefinition {
         ulid,
         name: "事業部".into(),
+        kind: DimensionKind::Ordinary,
         key_kind: KeyKind::Name,
         attributes: vec![],
     }
@@ -367,4 +369,30 @@ fn column_with_the_right_name_but_wrong_type_is_rejected() {
     let wrong_type = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
     let err = Dimension::try_new(definition, wrong_type, &[]).unwrap_err();
     assert!(matches!(err, DimensionError::SchemaMismatch { .. }));
+}
+
+#[test]
+fn key_order_puts_the_calendar_then_the_version_then_the_rest_by_ulid() {
+    let dimension = |ulid: u128, kind| {
+        let definition = DimensionDefinition {
+            kind,
+            ..definition_without_attributes(DimensionUlid(Ulid(ulid)))
+        };
+        let columns = vec![ulids(&[Some(ulid)]), strings(&[Some("メンバー")])];
+        Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap()
+    };
+    let mut dimensions = [
+        dimension(1, DimensionKind::Ordinary),
+        dimension(2, DimensionKind::Version),
+        dimension(3, DimensionKind::Calendar),
+        dimension(4, DimensionKind::Ordinary),
+    ];
+
+    dimensions.sort_by_key(Dimension::key_order);
+
+    let ulids: Vec<u128> = dimensions
+        .iter()
+        .map(|dimension| dimension.ulid().0.0)
+        .collect();
+    assert_eq!(ulids, [3, 2, 1, 4]);
 }

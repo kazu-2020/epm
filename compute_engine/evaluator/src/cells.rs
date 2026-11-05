@@ -203,9 +203,18 @@ impl Cells {
         }
     }
 
-    pub(crate) fn sum(&self, by: &[ByAxis<'_>]) -> Cells {
+    pub(crate) fn sum(
+        &self,
+        by: &[ByAxis<'_>],
+        dimensions: &[&Dimension],
+    ) -> Result<Cells, EvaluateError> {
+        let orders = self
+            .axes
+            .iter()
+            .map(|&axis| Ok(find_dimension(dimensions, axis)?.key_order()))
+            .collect::<Result<Vec<_>, EvaluateError>>()?;
         let mut order: Vec<usize> = (0..self.axes.len()).collect();
-        order.sort_by_key(|&axis| self.axes[axis]);
+        order.sort_by_key(|&axis| orders[axis]);
         let mut cells: Vec<(&Vec<MemberId>, &f64)> = self.values.iter().collect();
         // Not the map's order: f64 addition depends on order, and the map's changes from run to run.
         cells.sort_unstable_by(|(left, _), (right, _)| {
@@ -231,10 +240,10 @@ impl Cells {
                 *groups.entry(group).or_insert(0.0) += value;
             }
         }
-        Cells {
+        Ok(Cells {
             axes: by.iter().map(|axis| axis.output).collect(),
             values: normalized(groups),
-        }
+        })
     }
 
     pub(crate) fn broadcast(

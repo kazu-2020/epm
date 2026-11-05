@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionUlid, KeyKind,
-    MemberId,
+    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionKind,
+    DimensionUlid, KeyKind, MemberId,
 };
 use formula::{CheckedExpression, ResolvedExpression};
 use measure::{Measure, MeasureDefinition, MeasureUlid};
@@ -376,6 +376,11 @@ fn dimension(
     let definition = DimensionDefinition {
         ulid,
         name: name.into(),
+        kind: if ulid == PERIOD {
+            DimensionKind::Calendar
+        } else {
+            DimensionKind::Ordinary
+        },
         key_kind: KeyKind::Name,
         attributes,
     };

@@ -99,7 +99,7 @@ pub fn recalculate(
     let definition = result.definition();
     check_layout(result, dimensions)?;
     let new = evaluate_in(expression, definition, measures, dimensions, region)?;
-    let old = Columns::from_measure_in(result, region);
+    let old = Columns::from_measure_in(result, region, dimensions)?;
     let positions: Vec<usize> = definition
         .axes
         .iter()
@@ -360,9 +360,9 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 }
                 check_layout(measure, self.dimensions)?;
                 if axes.iter().any(|&axis| region.members(axis).is_some()) {
-                    Ok(Columns::from_measure_in(measure, region))
+                    Columns::from_measure_in(measure, region, self.dimensions)
                 } else {
-                    Ok(Columns::from_measure(measure))
+                    Columns::from_measure(measure, self.dimensions)
                 }
             }
             CheckedNode::Negate(operand) => Ok(self.node(operand, region)?.negate()),

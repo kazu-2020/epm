@@ -5,7 +5,8 @@ use arrow_array::{
     ArrayRef, FixedSizeBinaryArray, Float64Array, RecordBatch, StringArray, UInt32Array,
 };
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionUlid, KeyKind,
+    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionKind,
+    DimensionUlid, KeyKind,
 };
 use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::rngs::StdRng;
@@ -101,17 +102,17 @@ const DEPARTMENT_KINDS: [DepartmentKind; 3] = [
 const FORMULAS: [(&str, &[DimensionUlid], &str); 15] = [
     (
         "売上",
-        &[DEPARTMENT, PRODUCT, CUSTOMER, PERIOD, VERSION],
+        &[PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER],
         "'数量' * '単価'",
     ),
     (
         "グループ別金額",
-        &[GROUP, DEPARTMENT, PERIOD, VERSION],
+        &[PERIOD, VERSION, GROUP, DEPARTMENT],
         "SUM('科目別金額', BY '勘定科目'.'グループ', '部門', '期間', 'バージョン')",
     ),
     (
         "カテゴリ別金額",
-        &[CATEGORY, DEPARTMENT, PERIOD, VERSION],
+        &[PERIOD, VERSION, CATEGORY, DEPARTMENT],
         "SUM('グループ別金額', BY '勘定科目グループ'.'カテゴリ', '部門', '期間', 'バージョン')",
     ),
     (
@@ -121,57 +122,57 @@ const FORMULAS: [(&str, &[DimensionUlid], &str); 15] = [
     ),
     (
         "材料費構成比",
-        &[PRODUCT, PERIOD, VERSION],
+        &[PERIOD, VERSION, PRODUCT],
         "SUM('数量' * '単位材料費' / '歩留率', BY '商品', '期間', 'バージョン') / SUM('数量' * '単位材料費' / '歩留率', BY '期間', 'バージョン')",
     ),
     (
         "単位間接費",
-        &[PRODUCT, PERIOD, VERSION],
+        &[PERIOD, VERSION, PRODUCT],
         "'製造間接費' * '材料費構成比' / SUM('数量', BY '商品', '期間', 'バージョン')",
     ),
     (
         "原価",
-        &[DEPARTMENT, PRODUCT, CUSTOMER, PERIOD, VERSION],
+        &[PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER],
         "'数量' * ('単位材料費' / '歩留率' + '単位間接費')",
     ),
     (
         "粗利",
-        &[DEPARTMENT, PRODUCT, CUSTOMER, PERIOD, VERSION],
+        &[PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER],
         "'売上' - '原価'",
     ),
     (
         "部門別粗利",
-        &[DEPARTMENT, PERIOD, VERSION],
+        &[PERIOD, VERSION, DEPARTMENT],
         "SUM('粗利', BY '部門', '期間', 'バージョン')",
     ),
     (
         "営業利益",
-        &[DEPARTMENT, PERIOD, VERSION],
+        &[PERIOD, VERSION, DEPARTMENT],
         "'部門別粗利' - 'カテゴリ別金額'['勘定科目カテゴリ': '販売費及び一般管理費']",
     ),
     (
         "経常利益",
-        &[DEPARTMENT, PERIOD, VERSION],
+        &[PERIOD, VERSION, DEPARTMENT],
         "'営業利益' + 'カテゴリ別金額'['勘定科目カテゴリ': '営業外収益'] - 'カテゴリ別金額'['勘定科目カテゴリ': '営業外費用']",
     ),
     (
         "税引前利益",
-        &[DEPARTMENT, PERIOD, VERSION],
+        &[PERIOD, VERSION, DEPARTMENT],
         "'経常利益' + 'カテゴリ別金額'['勘定科目カテゴリ': '特別利益'] - 'カテゴリ別金額'['勘定科目カテゴリ': '特別損失']",
     ),
     (
         "粗利予実差",
-        &[DEPARTMENT, PRODUCT, CUSTOMER, PERIOD],
+        &[PERIOD, DEPARTMENT, PRODUCT, CUSTOMER],
         "'粗利'['バージョン': '実績'] - '粗利'['バージョン': '予算']",
     ),
     (
         "営業利益予実差",
-        &[DEPARTMENT, PERIOD],
+        &[PERIOD, DEPARTMENT],
         "'営業利益'['バージョン': '実績'] - '営業利益'['バージョン': '予算']",
     ),
     (
         "商品構成比",
-        &[DEPARTMENT, PRODUCT, CUSTOMER, PERIOD, VERSION],
+        &[PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER],
         "'売上' / SUM('売上', BY '期間', 'バージョン')",
     ),
 ];
@@ -238,6 +239,11 @@ fn dimension(
     let definition = DimensionDefinition {
         ulid,
         name: name.into(),
+        kind: match ulid {
+            PERIOD => DimensionKind::Calendar,
+            VERSION => DimensionKind::Version,
+            _ => DimensionKind::Ordinary,
+        },
         key_kind: KeyKind::Name,
         attributes: attributes.into_iter().collect(),
     };
@@ -384,7 +390,7 @@ impl Representative {
     }
 
     fn inputs(&mut self, dimensions: &[Dimension], references: &[&Dimension]) -> Vec<Measure> {
-        let product_axes = [PRODUCT, PERIOD, VERSION];
+        let product_axes = [PERIOD, VERSION, PRODUCT];
         let prices = self.dense(&product_axes, |random| {
             cents(random.random_range(10_000..=5_000_000))
         });
@@ -467,28 +473,31 @@ impl Representative {
     }
 
     fn quantities(&mut self, references: &[&Dimension]) -> Measure {
-        let axes = [DEPARTMENT, PRODUCT, CUSTOMER, PERIOD, VERSION];
+        let axes = [PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER];
         let lengths = self.lengths(&axes);
         let sales_departments = self.size.departments_per_kind;
-        let possible = u64::from(sales_departments)
-            * lengths[1..]
-                .iter()
-                .map(|&len| u64::from(len))
-                .product::<u64>();
+        let [periods, versions, _, products, customers] = lengths[..] else {
+            unreachable!("five axes have five lengths")
+        };
+        let possible = [sales_departments, periods, versions, products, customers]
+            .iter()
+            .map(|&len| u64::from(len))
+            .product::<u64>();
         assert!(
             (self.size.quantity_cells as u64) < possible / 2,
             "the quantity cells fit sparsely into the sales departments"
         );
         let mut seen: HashSet<u64> = HashSet::with_capacity(self.size.quantity_cells);
         while seen.len() < self.size.quantity_cells {
-            let coordinate = [
-                sales_departments + self.skewed(sales_departments),
-                self.skewed(lengths[1]),
-                self.skewed(lengths[2]),
-                self.random.random_range(0..lengths[3]),
-                self.random.random_range(0..lengths[4]),
-            ];
-            seen.insert(pack(&coordinate, &lengths));
+            let department = sales_departments + self.skewed(sales_departments);
+            let product = self.skewed(products);
+            let customer = self.skewed(customers);
+            let period = self.random.random_range(0..periods);
+            let version = self.random.random_range(0..versions);
+            seen.insert(pack(
+                &[period, version, department, product, customer],
+                &lengths,
+            ));
         }
         let mut packed: Vec<u64> = seen.into_iter().collect();
         packed.sort_unstable();
@@ -501,8 +510,11 @@ impl Representative {
         let values = (0..packed.len())
             .map(|_| f64::from(self.skewed(500) + 1))
             .collect();
+        let [_, _, departments, _, _] = &columns[..] else {
+            unreachable!("five axes have five columns")
+        };
         debug_assert!(
-            columns[0]
+            departments
                 .iter()
                 .all(|&department| { self.department_kind(department) == DepartmentKind::Sales })
         );
@@ -559,15 +571,15 @@ impl Representative {
                 }
             }
         }
-        let axes = [ACCOUNT, DEPARTMENT, PERIOD, VERSION];
+        let axes = [PERIOD, VERSION, ACCOUNT, DEPARTMENT];
         let mut columns = vec![Vec::new(); axes.len()];
         let mut values = Vec::new();
-        for &(account, department) in &pairs {
-            for period in 0..PERIODS {
-                for version in 0..VERSIONS.len() as u32 {
+        for period in 0..PERIODS {
+            for version in 0..VERSIONS.len() as u32 {
+                for &(account, department) in &pairs {
                     for (column, member) in columns
                         .iter_mut()
-                        .zip([account, department, period, version])
+                        .zip([period, version, account, department])
                     {
                         column.push(member);
                     }

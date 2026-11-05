@@ -33,6 +33,13 @@ pub enum KeyKind {
     Code,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DimensionKind {
+    Calendar,
+    Version,
+    Ordinary,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttributeDefinition {
     pub ulid: AttributeUlid,
@@ -44,6 +51,7 @@ pub struct AttributeDefinition {
 pub struct DimensionDefinition {
     pub ulid: DimensionUlid,
     pub name: String,
+    pub kind: DimensionKind,
     pub key_kind: KeyKind,
     pub attributes: Vec<AttributeDefinition>,
 }
@@ -256,6 +264,11 @@ impl Dimension {
 
     pub fn key_kind(&self) -> KeyKind {
         self.definition.key_kind
+    }
+
+    // Not the ULID alone: with the calendar and the version first, one period or version is one range of sorted keys.
+    pub fn key_order(&self) -> (DimensionKind, DimensionUlid) {
+        (self.definition.kind, self.definition.ulid)
     }
 
     pub fn len(&self) -> u32 {
