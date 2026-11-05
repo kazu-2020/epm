@@ -10,13 +10,14 @@ exclude_re = [
     "replace / with % in Columns::row_of",
     "replace - with \\+ in Columns::row_of",
     # Not tested: these keep a cursor at 0, so the merge loop never ends and grows its key buffer until the CI runner runs out of memory.
-    "replace \\+= with \\*= in (union|merge_changes|(Columns::)?changes_from)",
+    "replace \\+= with \\*= in (merge|merge_changes|(Columns::)?changes_from)",
     # Not tested: these only choose a slower path (sort, filter or binary search) that builds the same cells.
     "replace in_order -> bool with false",
     "replace != with == in in_order",
     "replace is_normalized -> bool with false",
     "replace == with != in is_normalized",
     "replace dense_strides -> Option<\\(usize, Vec<usize>\\)> with None",
+    "replace >= with < in union",
     "replace <= with > in dense_strides",
     "column_engine/src/columns.rs:[0-9]+:[0-9]+: replace << with >>",
     # Not tested: with one owner both paths add the same rows in the same order.
@@ -27,7 +28,7 @@ exclude_re = [
     "replace <= with > in searched",
     "replace match guard searched\\(members\\) with (true|false) in (Columns::)?narrow",
     # Not tested: the arms are equivalent here. Equal keys take the arm before, and the axes of a key never overlap, so | and ^ give the same key.
-    "replace < with <= in union",
+    "replace < with <= in merge",
     "replace \\| with \\^ in KeyLayout::pack",
     # Not tested: these only read more cells than the region needs, and restrict at the end keeps the same cells.
     "replace Evaluator<[^>]*>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
