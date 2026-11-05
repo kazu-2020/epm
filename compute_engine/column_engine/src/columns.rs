@@ -21,7 +21,7 @@ const SCANNED_ROWS: usize = 1 << 20;
 // Not smaller pieces: below this many rows the cost of handing out work is larger than the work.
 const PARALLEL_ROWS: usize = 1 << 14;
 const _: () = assert!(
-    PARALLEL_ROWS <= 1 << 16,
+    PARALLEL_ROWS < 1 << 16,
     "the owner pass keeps a row of a piece in u16"
 );
 
@@ -880,21 +880,26 @@ impl Columns {
                     .collect();
                 // Not every owner reading all rows: that read does not shrink with more threads (#39).
                 // Not a copy of slot and value per row: 12 B of new pages a row costs more than it saves on four threads.
-                let handed: Vec<Vec<Vec<u16>>> = slots
+                let handed: Vec<(Vec<usize>, Vec<u16>)> = slots
                     .par_chunks(PARALLEL_ROWS)
                     .map(|piece| {
-                        let mut counts = vec![0; owners];
+                        let mut starts = vec![0; owners + 1];
                         for &slot in piece.iter().filter(|&&slot| slot != u32::MAX) {
-                            counts[slot as usize / share] += 1;
+                            starts[slot as usize / share + 1] += 1;
                         }
-                        let mut rows: Vec<Vec<u16>> =
-                            counts.into_iter().map(Vec::with_capacity).collect();
+                        for owner in 0..owners {
+                            starts[owner + 1] += starts[owner];
+                        }
+                        let mut next = starts.clone();
+                        let mut rows = vec![0_u16; starts[owners]];
                         for (row, &slot) in (0_u16..).zip(piece) {
                             if slot != u32::MAX {
-                                rows[slot as usize / share].push(row);
+                                let at = &mut next[slot as usize / share];
+                                rows[*at] = row;
+                                *at += 1;
                             }
                         }
-                        rows
+                        (starts, rows)
                     })
                     .collect();
                 totals
@@ -903,8 +908,8 @@ impl Columns {
                     .enumerate()
                     .for_each(|(owner, (totals, seen))| {
                         let base = owner * share;
-                        for (start, rows) in (0..).step_by(PARALLEL_ROWS).zip(&handed) {
-                            for &row in &rows[owner] {
+                        for (start, (starts, rows)) in (0..).step_by(PARALLEL_ROWS).zip(&handed) {
+                            for &row in &rows[starts[owner]..starts[owner + 1]] {
                                 let row = start + usize::from(row);
                                 let at = slots[row] as usize - base;
                                 totals[at] += self.values[row];
