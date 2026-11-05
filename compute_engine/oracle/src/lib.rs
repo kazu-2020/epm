@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use dimension::{AttributeUlid, Dimension, DimensionKind, DimensionUlid, MemberId};
 use duckdb::Connection;
-use formula::{BinaryOperator, CheckedAxis, CheckedExpression, CheckedNode, Sign};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign};
 use measure::{Measure, MeasureUlid};
 
 pub struct Oracle {
@@ -119,20 +119,8 @@ fn query(node: &CheckedNode, key_orders: &KeyOrders) -> Query {
                 axes: axes.iter().copied().collect(),
             }
         }
-        CheckedNode::Negate(operand) => {
-            let operand = query(operand, key_orders);
-            let mut items: Vec<String> = operand.axes.iter().map(|&axis| column(axis)).collect();
-            items.push("-value AS value".into());
-            Query {
-                sql: format!("SELECT {} FROM ({})", items.join(", "), operand.sql),
-                axes: operand.axes,
-            }
-        }
-        CheckedNode::Binary {
-            operator: BinaryOperator::Add | BinaryOperator::Subtract,
-            ..
-        } => sum_of_terms(&node.terms(), key_orders),
-        CheckedNode::Binary {
+        CheckedNode::Terms(terms) => sum_of_terms(terms, key_orders),
+        CheckedNode::Product {
             operator,
             left,
             right,
@@ -181,10 +169,10 @@ fn expanded(query: &Query, axes: &[DimensionUlid]) -> String {
     )
 }
 
-fn sum_of_terms(terms: &[(Sign, &CheckedNode)], key_orders: &KeyOrders) -> Query {
+fn sum_of_terms(terms: &[(Sign, CheckedNode)], key_orders: &KeyOrders) -> Query {
     let terms: Vec<(Sign, Query)> = terms
         .iter()
-        .map(|&(sign, term)| (sign, query(term, key_orders)))
+        .map(|(sign, term)| (*sign, query(term, key_orders)))
         .collect();
     let axes: BTreeSet<DimensionUlid> = terms
         .iter()
@@ -247,7 +235,7 @@ fn sum_of_terms(terms: &[(Sign, &CheckedNode)], key_orders: &KeyOrders) -> Query
     }
 }
 
-fn product(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
+fn product(operator: ProductOperator, left: &Query, right: &Query) -> Query {
     let axes: Vec<DimensionUlid> = left.axes.union(&right.axes).copied().collect();
     let condition = if axes.is_empty() {
         "TRUE".to_string()
@@ -261,15 +249,13 @@ fn product(operator: BinaryOperator, left: &Query, right: &Query) -> Query {
         .iter()
         .map(|&axis| format!("left_side.{}", column(axis)))
         .collect();
-    items.push(format!(
-        "left_side.value {} right_side.value AS value",
-        operator.symbol()
-    ));
-    let filter = if operator == BinaryOperator::Divide {
-        " WHERE right_side.value <> 0"
-    } else {
-        ""
+    let (symbol, filter) = match operator {
+        ProductOperator::Multiply => ("*", ""),
+        ProductOperator::Divide => ("/", " WHERE right_side.value <> 0"),
     };
+    items.push(format!(
+        "left_side.value {symbol} right_side.value AS value"
+    ));
     Query {
         sql: format!(
             "SELECT {} FROM ({}) AS left_side JOIN ({}) AS right_side ON {condition}{filter}",

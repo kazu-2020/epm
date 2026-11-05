@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
-use formula::{BinaryOperator, Sign};
+use formula::{ProductOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
 use crate::evaluate_error::EvaluateError;
@@ -93,26 +93,12 @@ impl Cells {
         }
     }
 
-    pub(crate) fn negate(self) -> Cells {
-        Cells {
-            axes: self.axes,
-            values: normalized(
-                self.values
-                    .into_iter()
-                    .map(|(coordinate, value)| (coordinate, -value)),
-            ),
-        }
-    }
-
-    pub(crate) fn product(operator: BinaryOperator, left: Cells, right: Cells) -> Cells {
+    pub(crate) fn product(operator: ProductOperator, left: Cells, right: Cells) -> Cells {
         let mut axes = left.axes.clone();
         axes.extend(right.axes.iter().filter(|axis| !left.axes.contains(axis)));
         let apply: fn(f64, f64) -> f64 = match operator {
-            BinaryOperator::Multiply => |left, right| left * right,
-            BinaryOperator::Divide => |left, right| left / right,
-            BinaryOperator::Add | BinaryOperator::Subtract => {
-                unreachable!("+ and - are evaluated as a sum of terms")
-            }
+            ProductOperator::Multiply => |left, right| left * right,
+            ProductOperator::Divide => |left, right| left / right,
         };
         // Not broadcast: only cells present on both sides survive, so spreading a sparse side over every member would build cells the join discards.
         Cells {

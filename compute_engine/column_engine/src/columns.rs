@@ -5,7 +5,7 @@ use std::ops::Range;
 use arrow_buffer::ScalarBuffer;
 use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
 use evaluator::EvaluateError;
-use formula::{BinaryOperator, Sign};
+use formula::{ProductOperator, Sign};
 use measure::{
     KeyLayout, Measure, MeasureDefinition, MeasureError, first_row, first_unsorted, normalize,
 };
@@ -591,31 +591,15 @@ impl Columns {
         Ok(Columns::from_keys(axes, layout, keys, columns.values))
     }
 
-    pub(crate) fn negate(self) -> Columns {
-        Columns {
-            values: self
-                .values
-                .par_iter()
-                .with_min_len(PARALLEL_ROWS)
-                .map(|&value| if value == 0.0 { 0.0 } else { -value })
-                .collect::<Vec<f64>>()
-                .into(),
-            ..self
-        }
-    }
-
     pub(crate) fn product(
-        operator: BinaryOperator,
+        operator: ProductOperator,
         left: &Columns,
         right: &Columns,
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         let apply: fn(f64, f64) -> f64 = match operator {
-            BinaryOperator::Multiply => |left, right| left * right,
-            BinaryOperator::Divide => |left, right| left / right,
-            BinaryOperator::Add | BinaryOperator::Subtract => {
-                unreachable!("+ and - are evaluated as a sum of terms")
-            }
+            ProductOperator::Multiply => |left, right| left * right,
+            ProductOperator::Divide => |left, right| left / right,
         };
         if right.axes.iter().all(|axis| left.axes.contains(axis)) {
             return Columns::lookup_product(left, right, apply, dimensions);

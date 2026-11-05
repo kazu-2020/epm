@@ -11,7 +11,7 @@ mod syntax_error;
 
 pub use axis_check::{AxisCheck, check_axes};
 pub use axis_error::{AxisError, AxisErrorKind};
-pub use checked_expression::{CheckedAxis, CheckedExpression, CheckedNode, Sign};
+pub use checked_expression::{CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign};
 pub use expression::{Axis, BinaryOperator, Expression, ExpressionKind, QuotedName};
 pub use parser::{MAXIMUM_DEPTH, Parsed, parse};
 pub use resolve::{Resolved, resolve};

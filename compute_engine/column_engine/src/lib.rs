@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use dimension::{Attribute, Dimension, MemberId};
 use evaluator::EvaluateError;
-use formula::{BinaryOperator, CheckedAxis, CheckedExpression, CheckedNode};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode};
 use measure::{Delta, Measure, MeasureDefinition, MeasureUlid};
 
 use crate::columns::{ByAxis, Columns, find_dimension, layout_of};
@@ -167,14 +167,16 @@ fn changed_in(
     Ok(match node {
         CheckedNode::Number(_) => None,
         CheckedNode::Measure { ulid, .. } => changed.get(ulid).cloned(),
-        CheckedNode::Negate(operand) => changed_in(operand, changed, dimensions)?,
-        CheckedNode::Binary { left, right, .. } => match (
-            changed_in(left, changed, dimensions)?,
-            changed_in(right, changed, dimensions)?,
-        ) {
-            (Some(left), Some(right)) => Some(left.union(&right)),
-            (left, right) => left.or(right),
-        },
+        CheckedNode::Terms(_) | CheckedNode::Product { .. } => {
+            let mut union: Option<Region> = None;
+            for operand in operands(node) {
+                union = match (union, changed_in(operand, changed, dimensions)?) {
+                    (Some(left), Some(right)) => Some(left.union(&right)),
+                    (left, right) => left.or(right),
+                };
+            }
+            union
+        }
         CheckedNode::Filter {
             value,
             dimension,
@@ -259,12 +261,8 @@ struct Shared<'e> {
 fn operands(node: &CheckedNode) -> Vec<&CheckedNode> {
     match node {
         CheckedNode::Number(_) | CheckedNode::Measure { .. } => Vec::new(),
-        CheckedNode::Negate(operand) => vec![operand],
-        CheckedNode::Binary {
-            operator: BinaryOperator::Add | BinaryOperator::Subtract,
-            ..
-        } => node.terms().into_iter().map(|(_, term)| term).collect(),
-        CheckedNode::Binary { left, right, .. } => vec![left, right],
+        CheckedNode::Terms(terms) => terms.iter().map(|(_, term)| term).collect(),
+        CheckedNode::Product { left, right, .. } => vec![left, right],
         CheckedNode::Filter { value, .. } | CheckedNode::Sum { value, .. } => vec![value],
     }
 }
@@ -369,18 +367,14 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                     Columns::from_measure(measure, self.dimensions)
                 }
             }
-            CheckedNode::Negate(operand) => Ok(self.node(operand, region)?.negate()),
-            CheckedNode::Binary {
-                operator: BinaryOperator::Add | BinaryOperator::Subtract,
-                ..
-            } => Columns::add(
-                node.terms()
-                    .into_iter()
-                    .map(|(sign, term)| Ok((sign, self.node(term, region)?)))
+            CheckedNode::Terms(terms) => Columns::add(
+                terms
+                    .iter()
+                    .map(|(sign, term)| Ok((*sign, self.node(term, region)?)))
                     .collect::<Result<Vec<_>, EvaluateError>>()?,
                 self.dimensions,
             ),
-            CheckedNode::Binary {
+            CheckedNode::Product {
                 operator,
                 left,
                 right,
