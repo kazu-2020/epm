@@ -10,4 +10,5 @@ formula = { path = "../formula" }
 measure = { path = "../measure" }
 rand = "0.10.3"
 rand_distr = "0.6.0"
+rayon = "1.12.0"
 ulid = "3.0.0"

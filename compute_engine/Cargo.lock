@@ -503,6 +503,7 @@ dependencies = [
  "measure",
  "rand",
  "rand_distr",
+ "rayon",
  "ulid",
 ]
 
