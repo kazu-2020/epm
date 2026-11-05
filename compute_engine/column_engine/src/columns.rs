@@ -1037,7 +1037,10 @@ fn union(mine: ScalarBuffer<u64>, theirs: &ScalarBuffer<u64>) -> ScalarBuffer<u6
         .collect();
     let ranges: Vec<(&[u64], &[u64])> = bounds
         .windows(2)
-        .map(|pair| (&mine[pair[0].0..pair[1].0], &theirs[pair[0].1..pair[1].1]))
+        .map(|pair| {
+            let [(own_start, their_start), (own_end, their_end)] = [pair[0], pair[1]];
+            (&mine[own_start..own_end], &theirs[their_start..their_end])
+        })
         .collect();
     let counts: Vec<usize> = ranges
         .par_iter()
