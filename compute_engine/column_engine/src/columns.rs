@@ -436,16 +436,34 @@ impl Columns {
                     .map(move |start| start..(start + SCANNED_ROWS).min(range.end))
             })
             .collect();
-        self.select(&pieces, |row| {
-            let key = self.keys[row];
-            key & mask == pattern
-                && checks.iter().all(|(axis, inside)| {
-                    inside
-                        .get(self.layout.member(key, *axis) as usize)
-                        .copied()
-                        .unwrap_or(false)
-                })
-        })
+        // Not select: it reads every key twice, and an edit keeps a few rows out of millions, so the second read is the cost.
+        let rows: Vec<usize> = pieces
+            .par_iter()
+            .flat_map_iter(|piece| {
+                self.keys[piece.clone()]
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &key)| {
+                        key & mask == pattern
+                            && checks.iter().all(|(axis, inside)| {
+                                inside
+                                    .get(self.layout.member(key, *axis) as usize)
+                                    .copied()
+                                    .unwrap_or(false)
+                            })
+                    })
+                    .map(move |(offset, _)| piece.start + offset)
+            })
+            .collect();
+        if rows.len() == self.len() {
+            return self;
+        }
+        Columns {
+            axes: self.axes.clone(),
+            layout: self.layout.clone(),
+            keys: gather(&rows, &self.keys).into(),
+            values: gather(&rows, &self.values).into(),
+        }
     }
 
     pub(crate) fn changes_from(&self, old: &Columns) -> Vec<(Vec<u32>, Option<f64>)> {
