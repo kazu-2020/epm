@@ -519,8 +519,8 @@ impl Representative {
                 (packed, values)
             })
             .unzip();
-        let packed = packed.concat();
-        let values: Vec<f64> = values.concat();
+        let packed: Vec<u64> = packed.into_iter().flatten().collect();
+        let values: Vec<f64> = values.into_iter().flatten().collect();
         debug_assert!(packed.is_sorted());
         let mut columns = vec![Vec::with_capacity(packed.len()); axes.len()];
         for &key in &packed {
