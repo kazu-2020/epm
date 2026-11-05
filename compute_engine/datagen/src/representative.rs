@@ -12,6 +12,7 @@ use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use rand_distr::Zipf;
+use rayon::prelude::*;
 use ulid::Ulid;
 
 use crate::{Formula, Workspace};
@@ -213,6 +214,10 @@ pub fn formulas() -> Vec<Formula> {
             text: text.into(),
         })
         .collect()
+}
+
+fn zipf(len: u32) -> Zipf<f64> {
+    Zipf::new(f64::from(len), 1.1).expect("a non-empty range makes a Zipf distribution")
 }
 
 struct Representative {
@@ -466,12 +471,6 @@ impl Representative {
         (0..cells).map(|_| value(&mut self.random)).collect()
     }
 
-    fn skewed(&mut self, len: u32) -> u32 {
-        let zipf =
-            Zipf::new(f64::from(len), 1.1).expect("a non-empty range makes a Zipf distribution");
-        self.random.sample(zipf) as u32 - 1
-    }
-
     fn quantities(&mut self, references: &[&Dimension]) -> Measure {
         let axes = [PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER];
         let lengths = self.lengths(&axes);
@@ -487,29 +486,47 @@ impl Representative {
             (self.size.quantity_cells as u64) < possible / 2,
             "the quantity cells fit sparsely into the sales departments"
         );
-        let mut seen: HashSet<u64> = HashSet::with_capacity(self.size.quantity_cells);
-        while seen.len() < self.size.quantity_cells {
-            let department = sales_departments + self.skewed(sales_departments);
-            let product = self.skewed(products);
-            let customer = self.skewed(customers);
-            let period = self.random.random_range(0..periods);
-            let version = self.random.random_range(0..versions);
-            seen.insert(pack(
-                &[period, version, department, product, customer],
-                &lengths,
-            ));
-        }
-        let mut packed: Vec<u64> = seen.into_iter().collect();
-        packed.sort_unstable();
+        let pairs = periods * versions;
+        let seeds: Vec<u64> = (0..pairs).map(|_| self.random.random()).collect();
+        let [department_zipf, product_zipf, customer_zipf] =
+            [sales_departments, products, customers].map(zipf);
+        let value_zipf = zipf(500);
+        let (packed, values): (Vec<Vec<u64>>, Vec<Vec<f64>>) = seeds
+            .into_par_iter()
+            .enumerate()
+            .map(|(pair, seed)| {
+                let mut random = StdRng::seed_from_u64(seed);
+                let pair = pair as u32;
+                let (period, version) = (pair / versions, pair % versions);
+                let cells = self.size.quantity_cells / pairs as usize
+                    + usize::from((pair as usize) < self.size.quantity_cells % pairs as usize);
+                let mut seen: HashSet<u64> = HashSet::with_capacity(cells);
+                while seen.len() < cells {
+                    let department = sales_departments + random.sample(department_zipf) as u32 - 1;
+                    let product = random.sample(product_zipf) as u32 - 1;
+                    let customer = random.sample(customer_zipf) as u32 - 1;
+                    seen.insert(pack(
+                        &[period, version, department, product, customer],
+                        &lengths,
+                    ));
+                }
+                let mut packed: Vec<u64> = seen.into_iter().collect();
+                packed.sort_unstable();
+                let values = (0..packed.len())
+                    .map(|_| random.sample(value_zipf))
+                    .collect();
+                (packed, values)
+            })
+            .unzip();
+        let packed: Vec<u64> = packed.into_iter().flatten().collect();
+        let values: Vec<f64> = values.into_iter().flatten().collect();
+        debug_assert!(packed.is_sorted());
         let mut columns = vec![Vec::with_capacity(packed.len()); axes.len()];
         for &key in &packed {
             for (column, member) in columns.iter_mut().zip(unpack(key, &lengths)) {
                 column.push(member);
             }
         }
-        let values = (0..packed.len())
-            .map(|_| f64::from(self.skewed(500) + 1))
-            .collect();
         let [_, _, departments, _, _] = &columns[..] else {
             unreachable!("five axes have five columns")
         };
