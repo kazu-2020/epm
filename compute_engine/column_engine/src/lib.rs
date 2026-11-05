@@ -261,7 +261,7 @@ struct Shared<'e> {
 fn operands(node: &CheckedNode) -> Vec<&CheckedNode> {
     match node {
         CheckedNode::Number(_) | CheckedNode::Measure { .. } => Vec::new(),
-        CheckedNode::Terms(terms) => terms.iter().map(|(_, term)| term).collect(),
+        CheckedNode::Terms(terms) => terms.iter().map(|term| &term.node).collect(),
         CheckedNode::Product { left, right, .. } => vec![left, right],
         CheckedNode::Filter { value, .. } | CheckedNode::Sum { value, .. } => vec![value],
     }
@@ -370,7 +370,7 @@ impl<'a, 'e> Evaluator<'a, 'e> {
             CheckedNode::Terms(terms) => Columns::add(
                 terms
                     .iter()
-                    .map(|(sign, term)| Ok((*sign, self.node(term, region)?)))
+                    .map(|term| Ok((term.sign, self.node(&term.node, region)?)))
                     .collect::<Result<Vec<_>, EvaluateError>>()?,
                 self.dimensions,
             ),

@@ -331,9 +331,9 @@ fn render(node: &CheckedNode) -> String {
         CheckedNode::Terms(terms) => {
             let terms: Vec<_> = terms
                 .iter()
-                .map(|(sign, term)| match sign {
-                    Sign::Plus => format!("+{}", render(term)),
-                    Sign::Minus => format!("-{}", render(term)),
+                .map(|term| match term.sign {
+                    Sign::Plus => format!("+{}", render(&term.node)),
+                    Sign::Minus => format!("-{}", render(&term.node)),
                 })
                 .collect();
             format!("(Terms {})", terms.join(" "))

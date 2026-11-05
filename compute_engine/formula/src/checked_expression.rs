@@ -17,7 +17,7 @@ pub enum CheckedNode {
         ulid: MeasureUlid,
         axes: Vec<DimensionUlid>,
     },
-    Terms(Vec<(Sign, CheckedNode)>),
+    Terms(Vec<Term>),
     Product {
         operator: ProductOperator,
         left: Box<CheckedNode>,
@@ -33,6 +33,12 @@ pub enum CheckedNode {
         members: Vec<MemberId>,
         keeps_axis: bool,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Term {
+    pub sign: Sign,
+    pub node: CheckedNode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,11 +168,7 @@ fn product(
     })
 }
 
-fn push_terms(
-    expression: &ResolvedExpression,
-    sign: Sign,
-    terms: &mut Vec<(Sign, CheckedNode)>,
-) -> Option<()> {
+fn push_terms(expression: &ResolvedExpression, sign: Sign, terms: &mut Vec<Term>) -> Option<()> {
     match &expression.kind {
         ResolvedExpressionKind::Binary {
             operator: operator @ (BinaryOperator::Add | BinaryOperator::Subtract),
@@ -182,7 +184,10 @@ fn push_terms(
             push_terms(right, right_sign, terms)?;
         }
         ResolvedExpressionKind::Negate(operand) => push_terms(operand, sign.flipped(), terms)?,
-        _ => terms.push((sign, node(expression)?)),
+        _ => terms.push(Term {
+            sign,
+            node: node(expression)?,
+        }),
     }
     Some(())
 }
