@@ -20,6 +20,10 @@ const SEARCHED_MEMBERS: usize = 64;
 const SCANNED_ROWS: usize = 1 << 20;
 // Not smaller pieces: below this many rows the cost of handing out work is larger than the work.
 const PARALLEL_ROWS: usize = 1 << 14;
+const _: () = assert!(
+    PARALLEL_ROWS < 1 << 16,
+    "the owner pass keeps a row of a piece in u16"
+);
 
 #[derive(Clone)]
 pub(crate) struct Columns {
@@ -864,7 +868,6 @@ impl Columns {
                 }
             } else {
                 // Not partial totals per piece of rows: one thread adds each slot in row order (ADR 0001).
-                // shortcut: each owner reads all rows (12 B a row), so this pass does not shrink with more threads; hand rows to owners again if the 32-core run shows it.
                 let slots: Vec<u32> = (0..self.len())
                     .into_par_iter()
                     .with_min_len(PARALLEL_ROWS)
@@ -875,15 +878,41 @@ impl Columns {
                         })
                     })
                     .collect();
+                // Not every owner reading all rows: that read does not shrink with more threads (#39).
+                // Not a copy of slot and value per row: 12 B of new pages a row costs more than it saves on four threads.
+                let handed: Vec<(Vec<usize>, Vec<u16>)> = slots
+                    .par_chunks(PARALLEL_ROWS)
+                    .map(|piece| {
+                        let mut starts = vec![0; owners + 1];
+                        for &slot in piece.iter().filter(|&&slot| slot != u32::MAX) {
+                            starts[slot as usize / share + 1] += 1;
+                        }
+                        for owner in 0..owners {
+                            starts[owner + 1] += starts[owner];
+                        }
+                        let mut next = starts.clone();
+                        let mut rows = vec![0_u16; starts[owners]];
+                        for (row, &slot) in (0_u16..).zip(piece) {
+                            if slot != u32::MAX {
+                                let at = &mut next[slot as usize / share];
+                                rows[*at] = row;
+                                *at += 1;
+                            }
+                        }
+                        (starts, rows)
+                    })
+                    .collect();
                 totals
                     .par_chunks_mut(share)
                     .zip(seen.par_chunks_mut(share))
                     .enumerate()
                     .for_each(|(owner, (totals, seen))| {
-                        for (&slot, &value) in slots.iter().zip(&self.values[..]) {
-                            let at = (slot as usize).wrapping_sub(owner * share);
-                            if at < totals.len() {
-                                totals[at] += value;
+                        let base = owner * share;
+                        for (start, (starts, rows)) in (0..).step_by(PARALLEL_ROWS).zip(&handed) {
+                            for &row in &rows[starts[owner]..starts[owner + 1]] {
+                                let row = start + usize::from(row);
+                                let at = slots[row] as usize - base;
+                                totals[at] += self.values[row];
                                 seen[at] = true;
                             }
                         }
