@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::iter;
 use std::ops::Range;
 
@@ -332,25 +332,34 @@ impl Columns {
                     .expect("the columns keep the measure's axes")
             })
             .collect();
-        let mut changes = BTreeMap::new();
-        for (coordinate, value) in measure.changes() {
-            let key: Vec<u32> = positions
-                .iter()
-                .map(|&position| coordinate[position].0)
-                .collect();
-            let inside = base.axes.iter().zip(&key).all(|(&axis, member)| {
-                region
-                    .members(axis)
-                    .is_none_or(|members| members.contains(member))
-            });
-            if inside {
-                changes.insert(base.layout.pack(key), value);
+        let layout = measure.layout();
+        let (keys, changes) = measure.merged_changes();
+        let mut inside: Vec<(u64, Option<f64>)> = keys
+            .iter()
+            .zip(changes)
+            .filter(|&(&key, _)| {
+                base.axes.iter().zip(&positions).all(|(&axis, &position)| {
+                    region
+                        .members(axis)
+                        .is_none_or(|members| members.contains(&layout.member(key, position)))
+                })
+            })
+            .map(|(&key, change)| (key, change))
+            .collect();
+        if !positions.is_sorted() {
+            for (key, _) in &mut inside {
+                *key = base.layout.pack(
+                    positions
+                        .iter()
+                        .map(|&position| layout.member(*key, position)),
+                );
             }
+            inside.sort_unstable_by_key(|&(key, _)| key);
         }
-        Ok(base.with_changes(changes))
+        Ok(base.with_changes(inside))
     }
 
-    fn with_changes(self, changes: BTreeMap<u64, Option<f64>>) -> Columns {
+    fn with_changes(self, changes: Vec<(u64, Option<f64>)>) -> Columns {
         if changes.is_empty() {
             return self;
         }
@@ -387,14 +396,6 @@ impl Columns {
     fn entry(&self, row: Option<usize>) -> (u64, Option<f64>) {
         let row = row.expect("peeked above");
         (self.keys[row], Some(self.values[row]))
-    }
-
-    fn cell(&self, row: Option<usize>) -> (Vec<u32>, Option<f64>) {
-        let row = row.expect("peeked above");
-        (
-            self.layout.members(self.keys[row]).collect(),
-            Some(self.values[row]),
-        )
     }
 
     fn narrow(
@@ -489,34 +490,37 @@ impl Columns {
         }
     }
 
-    pub(crate) fn changes_from(&self, old: &Columns) -> Vec<(Vec<u32>, Option<f64>)> {
-        let mut changes = Vec::new();
-        let (mut new, mut old_rows) = ((0..self.len()).peekable(), (0..old.len()).peekable());
-        loop {
-            match (new.peek(), old_rows.peek()) {
-                (None, None) => break,
-                (Some(_), None) => changes.push(self.cell(new.next())),
-                (None, Some(_)) => {
-                    let (coordinate, _) = old.cell(old_rows.next());
-                    changes.push((coordinate, None));
+    pub(crate) fn changes_from(&self, old: &Columns) -> (Vec<u64>, Vec<Option<f64>>) {
+        let (mut keys, mut changes) = (Vec::new(), Vec::new());
+        let (mut new, mut old_row) = (0, 0);
+        while new < self.len() || old_row < old.len() {
+            let order = match (new < self.len(), old_row < old.len()) {
+                (true, true) => self.keys[new].cmp(&old.keys[old_row]),
+                (true, false) => std::cmp::Ordering::Less,
+                _ => std::cmp::Ordering::Greater,
+            };
+            match order {
+                std::cmp::Ordering::Less => {
+                    keys.push(self.keys[new]);
+                    changes.push(Some(self.values[new]));
+                    new += 1;
                 }
-                (Some(&row), Some(&old_row)) => match self.keys[row].cmp(&old.keys[old_row]) {
-                    std::cmp::Ordering::Less => changes.push(self.cell(new.next())),
-                    std::cmp::Ordering::Greater => {
-                        let (coordinate, _) = old.cell(old_rows.next());
-                        changes.push((coordinate, None));
+                std::cmp::Ordering::Greater => {
+                    keys.push(old.keys[old_row]);
+                    changes.push(None);
+                    old_row += 1;
+                }
+                std::cmp::Ordering::Equal => {
+                    if self.values[new].to_bits() != old.values[old_row].to_bits() {
+                        keys.push(self.keys[new]);
+                        changes.push(Some(self.values[new]));
                     }
-                    std::cmp::Ordering::Equal => {
-                        old_rows.next();
-                        let (coordinate, value) = self.cell(new.next());
-                        if value.map(f64::to_bits) != Some(old.values[old_row].to_bits()) {
-                            changes.push((coordinate, value));
-                        }
-                    }
-                },
+                    new += 1;
+                    old_row += 1;
+                }
             }
         }
-        changes
+        (keys, changes)
     }
 
     fn from_base(measure: &Measure, dimensions: &[&Dimension]) -> Result<Columns, EvaluateError> {
@@ -539,6 +543,10 @@ impl Columns {
             keys,
             measure.values().clone(),
         ))
+    }
+
+    pub(crate) fn layout(&self) -> &KeyLayout {
+        &self.layout
     }
 
     pub(crate) fn position(&self, dimension: DimensionUlid) -> usize {

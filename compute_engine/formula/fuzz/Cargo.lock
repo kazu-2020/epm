@@ -423,8 +423,6 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "dimension",
- "foldhash",
- "hashbrown",
  "rayon",
  "ulid",
 ]

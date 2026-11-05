@@ -35,7 +35,16 @@ struct Model {
 
 impl Model {
     fn new() -> Model {
-        let workspace = representative::generate(&SMALL, 7);
+        Model::with_results_reversed(false)
+    }
+
+    fn with_results_reversed(reversed: bool) -> Model {
+        let mut workspace = representative::generate(&SMALL, 7);
+        if reversed {
+            for formula in &mut workspace.formulas {
+                formula.result.axes.reverse();
+            }
+        }
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let definitions: Vec<MeasureDefinition> = workspace
             .inputs
@@ -263,7 +272,15 @@ fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
 
 #[test]
 fn edits_recalculate_to_the_same_cells_as_a_full_recalculation() {
-    let model = Model::new();
+    edit_and_compare(&Model::new());
+}
+
+#[test]
+fn edits_match_a_full_recalculation_when_results_declare_axes_out_of_key_order() {
+    edit_and_compare(&Model::with_results_reversed(true));
+}
+
+fn edit_and_compare(model: &Model) {
     let dimensions = model.dimensions();
     let formulas: Vec<(MeasureUlid, &CheckedExpression)> = model
         .checked

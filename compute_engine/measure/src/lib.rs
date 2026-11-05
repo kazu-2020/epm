@@ -2,8 +2,7 @@ use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
-use std::hash::BuildHasher;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, UInt32Type};
@@ -11,9 +10,6 @@ use arrow_array::{Array, ArrayRef, Float64Array, RecordBatch, UInt32Array};
 use arrow_buffer::ScalarBuffer;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use dimension::{Dimension, DimensionUlid, MemberId};
-use foldhash::fast::RandomState;
-use hashbrown::HashTable;
-use hashbrown::hash_table::Entry;
 use ulid::Ulid;
 
 const VALUE_COLUMN: &str = "value";
@@ -409,12 +405,25 @@ impl Measure {
             .expect("the unpacked columns follow the measure schema")
     }
 
-    pub fn changes(&self) -> impl Iterator<Item = (&[MemberId], Option<f64>)> {
-        self.deltas.iter().flat_map(|delta| delta.changes())
+    pub fn changes(&self) -> impl Iterator<Item = (Vec<MemberId>, Option<f64>)> + '_ {
+        self.deltas.iter().flat_map(|delta| delta.listed())
+    }
+
+    pub fn merged_changes(&self) -> (Vec<u64>, Vec<Option<f64>>) {
+        match &self.deltas[..] {
+            [] => (Vec::new(), Vec::new()),
+            [delta] => (delta.keys.clone(), delta.changes.clone()),
+            [first, rest @ ..] => rest.iter().fold(
+                (first.keys.clone(), first.changes.clone()),
+                |(keys, changes), delta| {
+                    merge_changes(&keys, &changes, &delta.keys, &delta.changes)
+                },
+            ),
+        }
     }
 
     pub fn delta_len(&self) -> usize {
-        self.deltas.iter().map(|delta| delta.len()).sum()
+        self.deltas.iter().map(|delta| delta.keys.len()).sum()
     }
 
     pub fn get(&self, coordinate: &[MemberId]) -> Result<Option<f64>, MeasureError> {
@@ -424,12 +433,6 @@ impl Measure {
                 found: coordinate.len(),
             });
         }
-        let hash = hash_coordinate(coordinate);
-        for delta in self.deltas.iter().rev() {
-            if let Some(change) = delta.change(hash, coordinate) {
-                return Ok(change);
-            }
-        }
         if self
             .axes
             .iter()
@@ -438,37 +441,90 @@ impl Measure {
         {
             return Ok(None);
         }
-        Ok(self.search(0, coordinate).ok().map(|row| self.values[row]))
+        let key = self.layout.pack(coordinate.iter().map(|member| member.0));
+        for delta in self.deltas.iter().rev() {
+            if let Ok(change) = delta.keys.binary_search(&key) {
+                return Ok(delta.changes[change]);
+            }
+        }
+        Ok(self
+            .keys
+            .binary_search(&key)
+            .ok()
+            .map(|row| self.values[row]))
     }
 
     pub fn delta(&self) -> Delta {
         Delta {
             measure: self.definition.ulid,
             axes: self.axes.clone(),
-            coordinates: Vec::new(),
+            layout: self.layout.clone(),
+            keys: Vec::new(),
             changes: Vec::new(),
-            index: HashTable::new(),
         }
     }
 
+    pub fn delta_from_sorted(
+        &self,
+        keys: Vec<u64>,
+        changes: Vec<Option<f64>>,
+    ) -> Result<Delta, MeasureError> {
+        assert_eq!(keys.len(), changes.len(), "one change per key");
+        if let Some(row) = first_unsorted(&keys) {
+            return Err(match keys[row - 1].cmp(&keys[row]) {
+                Ordering::Equal => MeasureError::DuplicateCoordinate(row),
+                _ => MeasureError::UnsortedCoordinate(row),
+            });
+        }
+        if let Some(row) = first_row(&keys, |&key| !self.layout.holds(key)) {
+            return Err(MeasureError::KeyMismatch(row));
+        }
+        for (position, axis) in self.axes.iter().enumerate() {
+            if let Some(row) =
+                first_row(&keys, |&key| self.layout.member(key, position) >= axis.len)
+            {
+                return Err(MeasureError::MemberOutOfRange {
+                    axis: axis.dimension,
+                    member: MemberId(self.layout.member(keys[row], position)),
+                });
+            }
+        }
+        Ok(Delta {
+            changes: changes
+                .into_iter()
+                .map(|change| change.and_then(normalize))
+                .collect(),
+            keys,
+            ..self.delta()
+        })
+    }
+
     pub fn apply(&self, delta: impl Into<Arc<Delta>>) -> Result<Measure, MeasureError> {
-        let delta = delta.into();
+        let mut delta = delta.into();
         if delta.measure != self.definition.ulid {
             return Err(MeasureError::ForeignDelta(delta.measure));
         }
         if delta.axes != self.axes {
             return Err(MeasureError::DeltaAxesMismatch);
         }
+        if first_unsorted(&delta.keys).is_some() {
+            Arc::make_mut(&mut delta).settle();
+        }
         let mut measure = self.clone();
-        if !delta.is_empty() {
+        if !delta.keys.is_empty() {
             measure.deltas.push(delta);
         }
         Ok(measure)
     }
 
     pub fn fold_deltas(&self) -> Measure {
+        let (keys, changes) = self.merged_changes();
         let mut measure = self.clone();
-        measure.deltas = vec![Arc::new(self.merged_delta())];
+        measure.deltas = vec![Arc::new(Delta {
+            keys,
+            changes,
+            ..self.delta()
+        })];
         measure
     }
 
@@ -476,28 +532,22 @@ impl Measure {
         if self.deltas.is_empty() {
             return self.clone();
         }
-        let merged = self.merged_delta();
-        let mut order: Vec<usize> = (0..merged.changes.len()).collect();
-        order.sort_unstable_by(|&left, &right| {
-            merged.coordinate(left).cmp(merged.coordinate(right))
-        });
-
+        let (change_keys, changes) = self.merged_changes();
         // Not `+`: a capacity hint is invisible to tests, so cargo-mutants would report its `*` mutant as surviving.
-        let capacity = self.values.len().saturating_add(merged.changes.len());
+        let capacity = self.values.len().saturating_add(changes.len());
         let mut keys = Vec::with_capacity(capacity);
         let mut values = Vec::with_capacity(capacity);
         let mut start = 0;
-        for change in order {
-            let coordinate = merged.coordinate(change);
-            let (end, next) = match self.search(start, coordinate) {
-                Ok(row) => (row, row + 1),
-                Err(row) => (row, row),
+        for (&key, &change) in change_keys.iter().zip(&changes) {
+            let (end, next) = match self.keys[start..].binary_search(&key) {
+                Ok(row) => (start + row, start + row + 1),
+                Err(row) => (start + row, start + row),
             };
             keys.extend_from_slice(&self.keys[start..end]);
             values.extend_from_slice(&self.values[start..end]);
             start = next;
-            if let Some(value) = merged.changes[change] {
-                keys.push(self.layout.pack(coordinate.iter().map(|member| member.0)));
+            if let Some(value) = change {
+                keys.push(key);
                 values.push(value);
             }
         }
@@ -512,34 +562,44 @@ impl Measure {
             deltas: Vec::new(),
         }
     }
-
-    fn merged_delta(&self) -> Delta {
-        let mut merged = self.delta();
-        for delta in &self.deltas {
-            for change in 0..delta.changes.len() {
-                merged.write(delta.coordinate(change), delta.changes[change]);
-            }
-        }
-        merged
-    }
-
-    fn search(&self, from: usize, coordinate: &[MemberId]) -> Result<usize, usize> {
-        let key = self.layout.pack(coordinate.iter().map(|member| member.0));
-        self.keys[from..]
-            .binary_search(&key)
-            .map(|row| from + row)
-            .map_err(|row| from + row)
-    }
 }
 
-#[derive(Debug)]
+fn merge_changes(
+    old_keys: &[u64],
+    old_changes: &[Option<f64>],
+    new_keys: &[u64],
+    new_changes: &[Option<f64>],
+) -> (Vec<u64>, Vec<Option<f64>>) {
+    let mut keys = Vec::with_capacity(old_keys.len() + new_keys.len());
+    let mut changes = Vec::with_capacity(keys.capacity());
+    let (mut old, mut new) = (0, 0);
+    while old < old_keys.len() || new < new_keys.len() {
+        let take_new =
+            new < new_keys.len() && (old == old_keys.len() || new_keys[new] <= old_keys[old]);
+        if take_new {
+            if old < old_keys.len() && old_keys[old] == new_keys[new] {
+                old += 1;
+            }
+            keys.push(new_keys[new]);
+            changes.push(new_changes[new]);
+            new += 1;
+        } else {
+            keys.push(old_keys[old]);
+            changes.push(old_changes[old]);
+            old += 1;
+        }
+    }
+    (keys, changes)
+}
+
+#[derive(Debug, Clone)]
 pub struct Delta {
     measure: MeasureUlid,
     axes: Vec<Axis>,
-    coordinates: Vec<MemberId>,
+    layout: KeyLayout,
+    // Not a hash table on coordinates: sorted keys merge with the measure's keys in one pass, with no allocation for each change.
+    keys: Vec<u64>,
     changes: Vec<Option<f64>>,
-    // Not HashMap<Vec<MemberId>, _>: one allocation per coordinate would dominate the delta's memory.
-    index: HashTable<u32>,
 }
 
 impl Delta {
@@ -555,16 +615,30 @@ impl Delta {
         Ok(())
     }
 
-    pub fn len(&self) -> usize {
-        self.changes.len()
+    pub fn len(&mut self) -> usize {
+        self.settle();
+        self.keys.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.changes.is_empty()
+        self.keys.is_empty()
     }
 
-    pub fn changes(&self) -> impl ExactSizeIterator<Item = (&[MemberId], Option<f64>)> {
-        (0..self.changes.len()).map(|change| (self.coordinate(change), self.changes[change]))
+    pub fn keys(&mut self) -> &[u64] {
+        self.settle();
+        &self.keys
+    }
+
+    pub fn changes(&mut self) -> impl ExactSizeIterator<Item = (Vec<MemberId>, Option<f64>)> + '_ {
+        self.settle();
+        self.listed()
+    }
+
+    fn listed(&self) -> impl ExactSizeIterator<Item = (Vec<MemberId>, Option<f64>)> + '_ {
+        self.keys
+            .iter()
+            .zip(&self.changes)
+            .map(|(&key, &change)| (self.layout.members(key).map(MemberId).collect(), change))
     }
 
     fn check(&self, coordinate: &[MemberId]) -> Result<(), MeasureError> {
@@ -588,46 +662,30 @@ impl Delta {
         Ok(())
     }
 
-    fn coordinate(&self, change: usize) -> &[MemberId] {
-        let width = self.axes.len();
-        &self.coordinates[change * width..(change + 1) * width]
-    }
-
-    fn change(&self, hash: u64, coordinate: &[MemberId]) -> Option<Option<f64>> {
-        let change = self.index.find(hash, |&change| {
-            self.coordinate(change as usize) == coordinate
-        })?;
-        Some(self.changes[*change as usize])
-    }
-
+    // Not a sorted insert: a paste of a million cells in random order took 97 seconds.
     fn write(&mut self, coordinate: &[MemberId], change: Option<f64>) {
-        let width = self.axes.len();
-        let coordinates = &self.coordinates;
-        let coordinate_at =
-            |change: u32| &coordinates[change as usize * width..(change as usize + 1) * width];
-        match self.index.entry(
-            hash_coordinate(coordinate),
-            |&other| coordinate_at(other) == coordinate,
-            |&other| hash_coordinate(coordinate_at(other)),
-        ) {
-            Entry::Occupied(slot) => self.changes[*slot.get() as usize] = change,
-            Entry::Vacant(slot) => {
-                let position = u32::try_from(self.changes.len())
-                    .expect("a delta holds fewer than 2^32 changes");
-                slot.insert(position);
-                self.coordinates.extend_from_slice(coordinate);
-                self.changes.push(change);
+        self.keys
+            .push(self.layout.pack(coordinate.iter().map(|member| member.0)));
+        self.changes.push(change);
+    }
+
+    fn settle(&mut self) {
+        if first_unsorted(&self.keys).is_none() {
+            return;
+        }
+        let mut writes: Vec<(u64, Option<f64>)> =
+            self.keys.drain(..).zip(self.changes.drain(..)).collect();
+        writes.sort_by_key(|&(key, _)| key);
+        for (key, change) in writes {
+            match self.changes.last_mut() {
+                Some(last) if self.keys.last() == Some(&key) => *last = change,
+                _ => {
+                    self.keys.push(key);
+                    self.changes.push(change);
+                }
             }
         }
     }
-}
-
-// Not a per-delta RandomState: every layer must agree on a coordinate's hash so a read hashes it once.
-// Not FixedState: foldhash and this repository are public, so a fixed seed lets anyone search colliding coordinates offline.
-static COORDINATE_HASHER: LazyLock<RandomState> = LazyLock::new(RandomState::default);
-
-fn hash_coordinate(coordinate: &[MemberId]) -> u64 {
-    COORDINATE_HASHER.hash_one(coordinate)
 }
 
 const CHECKED_ROWS: usize = 1 << 16;
