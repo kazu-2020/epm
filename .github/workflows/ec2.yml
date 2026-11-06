@@ -1,0 +1,151 @@
+name: ec2
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: Name of the measurement, at the start of the S3 run ID and the artifact name
+        type: string
+        required: true
+      script:
+        description: Script that runs on the instance after .github/ec2/prelude.sh
+        type: string
+        required: true
+      summary:
+        description: Script that writes the job summary from out/
+        type: string
+        required: true
+      variables:
+        description: Shell assignments for the script, one on each line
+        type: string
+        default: ""
+      artifact:
+        description: Artifact of the caller to put in bin/ on the instance
+        type: string
+        default: ""
+      files:
+        description: Repository files to put in bin/ on the instance, separated by spaces
+        type: string
+        default: ""
+      instance:
+        type: string
+        required: true
+      volume:
+        description: Disk size in GB (empty means the size of the launch template)
+        type: string
+        default: ""
+      minutes:
+        description: Minutes before the instance stops itself
+        type: string
+        required: true
+      wait-minutes:
+        type: number
+        required: true
+      job-minutes:
+        type: number
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    environment: bench
+    timeout-minutes: ${{ inputs.job-minutes }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-1
+      BUCKET: ${{ vars.BENCH_BUCKET }}
+      RUN: ${{ inputs.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+      INSTANCE_TYPE: ${{ inputs.instance }}
+      VOLUME: ${{ inputs.volume }}
+      MINUTES: ${{ inputs.minutes }}
+      WAIT_MINUTES: ${{ inputs.wait-minutes }}
+      JOB_MINUTES: ${{ inputs.job-minutes }}
+    steps:
+      # The order of the time limits in infra/dev/README.md. The role session is 180 minutes.
+      - name: Check the time limits
+        run: |
+          [[ "$MINUTES" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [ "$MINUTES" -ge 30 ] && [ "$MINUTES" -le $((WAIT_MINUTES - 10)) ] || exit 1
+          [ "$WAIT_MINUTES" -lt "$JOB_MINUTES" ] && [ "$JOB_MINUTES" -lt 180 ] || exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: inputs.artifact != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact }}
+          path: bin
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 10800
+      - name: Upload the files
+        env:
+          PATHS: ${{ inputs.files }}
+        run: |
+          mkdir -p bin
+          read -ra files <<< "$PATHS"
+          if [ "${#files[@]}" -gt 0 ]; then cp "${files[@]}" bin/; fi
+          aws s3 cp --recursive bin/ "s3://$BUCKET/bin/$RUN/"
+      - name: Start the instance
+        env:
+          SCRIPT: ${{ inputs.script }}
+          VARIABLES: ${{ inputs.variables }}
+        run: |
+          prelude=.github/ec2/prelude.sh
+          {
+            head -n 1 "$prelude"
+            echo "BUCKET=$BUCKET"
+            echo "RUN=$RUN"
+            echo "MINUTES=$MINUTES"
+            echo "$VARIABLES"
+            tail -n +2 "$prelude"
+            tail -n +2 "$SCRIPT"
+          } > user-data.sh
+          disk=()
+          if [ -n "$VOLUME" ]; then
+            disk=(--block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=$VOLUME,VolumeType=gp3,DeleteOnTermination=true,Encrypted=true}")
+          fi
+          aws ec2 run-instances \
+            --launch-template 'LaunchTemplateName=bench,Version=$Latest' \
+            --instance-type "$INSTANCE_TYPE" \
+            "${disk[@]}" \
+            --user-data file://user-data.sh \
+            --query 'Instances[0].[InstanceId,ImageId,InstanceType]' --output text > instance.txt
+          read -r instance image type < instance.txt
+          echo "INSTANCE=$instance" >> "$GITHUB_ENV"
+          echo "Instance $instance, $type, AMI $image" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Wait for the results
+        timeout-minutes: ${{ inputs.wait-minutes }}
+        run: |
+          done_key="results/$RUN/exit-code"
+          until aws s3api head-object --bucket "$BUCKET" --key "$done_key" > /dev/null 2>&1; do
+            state=$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].State.Name' --output text || true)
+            if [ "$state" = terminated ] && ! aws s3api head-object --bucket "$BUCKET" --key "$done_key" > /dev/null 2>&1; then
+              echo "::error::The instance ended without results"
+              exit 1
+            fi
+            sleep 30
+          done
+          aws s3 cp --recursive "s3://$BUCKET/results/$RUN/" out/
+      - name: Write the summary
+        env:
+          SUMMARY: ${{ inputs.summary }}
+        run: |
+          bash "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+          exit "$(cat out/exit-code)"
+      - if: always() && env.INSTANCE != ''
+        name: Terminate the instance
+        run: aws ec2 terminate-instances --instance-ids "$INSTANCE" > /dev/null
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.RUN }}
+          path: out/
+          if-no-files-found: ignore
