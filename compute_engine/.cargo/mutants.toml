@@ -17,7 +17,7 @@ exclude_re = [
     "replace is_normalized -> bool with false",
     "replace == with != in is_normalized",
     "replace dense_strides -> Option<\\(usize, Vec<usize>\\)> with None",
-    "replace >= with < in union",
+    "replace >= with < in union$",
     "replace <= with > in dense_strides",
     "column_engine/src/columns.rs:[0-9]+:[0-9]+: replace << with >>",
     # Not tested: with one owner both paths add the same rows in the same order.
@@ -28,7 +28,7 @@ exclude_re = [
     "replace <= with > in searched",
     "replace match guard searched\\(members\\) with (true|false) in (Columns::)?narrow",
     # Not tested: the arms are equivalent here. Equal keys take the arm before, and the axes of a key never overlap, so | and ^ give the same key.
-    "replace < with <= in merge",
+    "replace < with <= in merge$",
     "replace \\| with \\^ in KeyLayout::pack",
     # Not tested: these only read more cells than the region needs, and restrict at the end keeps the same cells.
     "replace Evaluator<[^>]*>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",

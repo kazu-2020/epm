@@ -147,3 +147,22 @@ fn errors_name_what_the_evaluation_could_not_find() {
         EvaluateError::InvalidResult(MeasureError::NoAxes)
     );
 }
+
+#[test]
+fn a_sum_that_overflows_on_every_cell_leaves_no_cell() {
+    let fixture = Fixture::default();
+    let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
+    let measures: Vec<&Measure> = fixture.inputs.iter().collect();
+
+    let huge = format!("1{}", "0".repeat(308));
+
+    let measure = column_engine::evaluate(
+        &fixture.check(&format!("'売上' + {huge} + {huge}"), "結果"),
+        fixture.definition("結果"),
+        &measures,
+        &dimensions,
+    )
+    .expect("the formula evaluates");
+
+    assert_eq!(measure.cells().count(), 0);
+}
