@@ -9,7 +9,6 @@ module seqlog_design {
   }
 }
 
-// The change log as numbered slots on S3: each commit takes the next slot with If-None-Match. No manifest.
 module seqlog {
   import change_log.* from "./change_log"
   import seqlog_design.*
@@ -23,7 +22,7 @@ module seqlog {
   pure val MaxInFlight = 2
 
   // The epoch is in the object metadata, not in the key: the slot number alone is what two owners fight for.
-  // A fence is a slot with no requests. One epoch has one owner, so the epoch also tells whose write it is.
+  // One epoch has one owner, so the epoch also tells whose write it is.
   type Slot = { epoch: int, requests: List[str] }
   type Write = { server: str, slot: int, epoch: int, requests: List[str], attempt: int }
   type Reply = { write: Write, succeeded: bool }
@@ -45,13 +44,11 @@ module seqlog {
   var clients: Clients
   var previous: { slots: int -> Slot, acknowledged: Set[str] }
 
-  // The log is the slots from 0 up to the first missing one. A slot after a hole is not committed yet.
   pure def replay(slots: int -> Slot): List[str] =
     range(0, slots.keys().size()).foldl({ commits: List(), open: true }, (state, i) =>
       if (state.open and slots.keys().contains(i)) { commits: state.commits.concat(slots.get(i).requests), open: true }
       else { ...state, open: false }).commits
 
-  // LIST with start-after: the highest slot, or -1.
   pure def lastSlot(slots: int -> Slot): int = slots.keys().fold(-1, (highest, i) => if (i > highest) i else highest)
 
   action init = all {
@@ -128,7 +125,6 @@ module seqlog {
     }
   }
 
-  // Group commit: the whole batch goes into one slot with one PUT.
   action flush(server: str): bool = {
     val self = servers.get(server)
     val write = { server: server, slot: self.next, epoch: self.epoch, requests: self.batch, attempt: 0 }
@@ -196,8 +192,6 @@ module seqlog {
     }
   }
 
-  // HEAD the slot. Own write: success. Newer epoch: fenced, so stop and drop the batch. Older epoch: possible only
-  // for a fence, because the old owner wrote the slot after the LIST; take the next slot.
   action resolve(server: str): bool = {
     val self = servers.get(server)
     nondet p = self.pending.filter(p => p.unknown).oneOf()
@@ -207,10 +201,11 @@ module seqlog {
     val again = { ...write, attempt: write.attempt + 1 }
     val refence = { ...write, slot: write.slot + 1, attempt: 0 }
     val resend = not(taken) and write.attempt < MaxResends
+    val oldOwnerTookFenceSlot = taken and found != slotOf(write) and found.epoch < self.epoch and isFence(write)
     all {
       if (not(taken)) replace(server, self, write, { write: if (resend) again else write, unknown: false })
       else if (found == slotOf(write)) succeed(server, self, write)
-      else if (found.epoch < self.epoch and isFence(write)) all {
+      else if (oldOwnerTookFenceSlot) all {
         servers' = servers.set(server, {
           ...self, next: refence.slot + 1, view: self.view.concat(found.requests), pending: Set({ write: refence, unknown: false }),
         }),
@@ -219,8 +214,7 @@ module seqlog {
       else stop(server),
       store' =
         if (resend) { ...store, writesInFlight: store.writesInFlight.union(Set(again)) }
-        else if (taken and found != slotOf(write) and found.epoch < self.epoch and isFence(write))
-          { ...store, writesInFlight: store.writesInFlight.union(Set(refence)) }
+        else if (oldOwnerTookFenceSlot) { ...store, writesInFlight: store.writesInFlight.union(Set(refence)) }
         else store,
       grantedEpoch' = grantedEpoch,
     }
@@ -244,7 +238,6 @@ module seqlog {
   val segmentsNeverChange: bool = previous.slots.keys().forall(i =>
     store.slots.keys().contains(i) and store.slots.get(i) == previous.slots.get(i))
 
-  // An old owner never commits after a newer one: epochs do not go down along the slots.
   val staleEpochNeverCommits: bool = store.slots.keys().forall(i =>
     store.slots.keys().forall(j => i < j implies store.slots.get(i).epoch <= store.slots.get(j).epoch))
 
@@ -263,8 +256,6 @@ module seqlog {
   action applyOne: bool = nondet write = store.writesInFlight.oneOf() all { ghost, apply(write, false) }
   action replyOne: bool = nondet reply = store.replies.oneOf() all { ghost, receiveReply(reply) }
 
-  // The old owner's late PUT takes the slot that the new owner's LIST said was free. The new owner sees an older
-  // epoch with HEAD, takes in the old owner's commit, and fences the next slot.
   run oldOwnerTakesSlotFirstTest =
     init
       .then(all { ghost, grant("A") })

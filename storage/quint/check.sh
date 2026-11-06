@@ -22,7 +22,6 @@ seqlog_breaks=(
   seqlog_no_fence:newestOwnerSeesAcknowledged
   seqlog_no_epoch_check:staleEpochNeverCommits seqlog_two_in_flight:staleEpochNeverCommits
 )
-# Stopping at a 412 without HEAD gives up commits but never breaks the log.
 seqlog_holds=(seqlog_rejected_as_fenced)
 seqlog_log_safe_without_guard=(seqlog_no_fence seqlog_no_epoch_check seqlog_two_in_flight)
 
