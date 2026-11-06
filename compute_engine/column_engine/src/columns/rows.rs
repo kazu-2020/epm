@@ -34,11 +34,11 @@ pub(super) fn copy_rows<Rows: Iterator<Item = usize>>(
         .zip(split_by_counts(&mut values, counts))
         .enumerate()
         .for_each(|(piece, (piece_keys, piece_values))| {
-            for ((key, value), row) in piece_keys
+            let cells = piece_keys
                 .iter_mut()
                 .zip(piece_values)
-                .zip(piece_rows(piece))
-            {
+                .zip(piece_rows(piece));
+            for ((key, value), row) in cells {
                 *key = from_keys[row];
                 *value = from_values[row];
             }

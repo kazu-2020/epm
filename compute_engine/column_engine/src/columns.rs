@@ -15,8 +15,6 @@ use crate::region::Region;
 
 mod rows;
 
-use rows::{gather, pieces, union};
-
 const DENSE_LIMIT: usize = 1 << 22;
 // Not one binary search per member above this many: walking the runs is faster.
 const SEARCHED_MEMBERS: usize = 64;
@@ -229,7 +227,7 @@ impl Columns {
         Columns {
             axes,
             layout,
-            keys: gather(&rows, &keys).into(),
+            keys: rows::gather(&rows, &keys).into(),
             values: rows
                 .par_iter()
                 .with_min_len(PARALLEL_ROWS)
@@ -243,7 +241,7 @@ impl Columns {
         if first_row(&self.values, |&value| !is_normalized(value)).is_none() {
             return self;
         }
-        self.select(&pieces(self.len()), |row| {
+        self.select(&rows::pieces(self.len()), |row| {
             normalize(self.values[row]).is_some()
         })
     }
@@ -705,7 +703,9 @@ impl Columns {
         if !columns.values.par_iter().any(|value| value.is_nan()) {
             return Ok(columns);
         }
-        Ok(columns.select(&pieces(columns.len()), |row| !columns.values[row].is_nan()))
+        Ok(columns.select(&rows::pieces(columns.len()), |row| {
+            !columns.values[row].is_nan()
+        }))
     }
 
     pub(crate) fn add(
@@ -741,7 +741,7 @@ impl Columns {
         let keys = creators[1..]
             .iter()
             .fold(first.keys.clone(), |keys, creator| {
-                union(keys, &creator.keys)
+                rows::union(keys, &creator.keys)
             });
         let sources = terms
             .iter()
@@ -888,7 +888,7 @@ impl Columns {
                     )
                 })
                 .collect();
-            let values = gather(&slots, &totals);
+            let values = rows::gather(&slots, &totals);
             return Ok(Columns::from_keys(axes, layout, keys, values));
         }
         let (kept, group_keys): (Vec<usize>, Vec<u64>) = (0..self.len())
