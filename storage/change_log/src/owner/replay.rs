@@ -86,13 +86,13 @@ impl From<ModelServer> for Server {
             phase: model.phase,
             epoch: model.epoch,
             next: model.next,
-            view_length: model.view.len() as u64,
+            view_length: u64::try_from(model.view.len()).expect("a short view"),
             view: model.view.into_iter().collect(),
             batch: model.batch,
             pending: model
                 .pending
                 .into_iter()
-                .map(|p| (p.write.slot, p.write.requests, p.unknown))
+                .map(|entry| (entry.write.slot, entry.write.requests, entry.unknown))
                 .collect(),
         }
     }
@@ -235,7 +235,7 @@ struct Replay {
 impl Driver for Replay {
     type State = ModelState;
 
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     fn step(&mut self, step: &Step) -> anyhow::Result<()> {
         switch!(step {
             init => *self = Replay::default(),
