@@ -348,7 +348,9 @@ impl Cluster {
     }
 
     fn crash(&mut self, server: usize) {
-        if let Some(owner) = self.owners[server].take() {
+        if let Some(owner) = self.owners[server].take()
+            && !owner.is_finished()
+        {
             owner.abort();
             record(&self.history, Record::Crashed { server });
         }
@@ -689,7 +691,15 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let mut seen = BTreeSet::new();
     let mut sent: BTreeMap<&str, Vec<&Bytes>> = BTreeMap::new();
     let mut epochs: BTreeMap<usize, u64> = BTreeMap::new();
-    let mut unreplied: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
+    let mut applied: BTreeSet<(u64, u64)> = BTreeSet::new();
+    let passed_on: BTreeSet<(u64, u64)> = outcome
+        .history
+        .iter()
+        .filter_map(|record| match record {
+            Record::PassedOn { epoch, commit } => Some((*epoch, commit.sequence)),
+            _ => None,
+        })
+        .collect();
     for record in &outcome.history {
         match record {
             Record::Sent { key, body } => sent.entry(key).or_default().push(body),
@@ -699,23 +709,15 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
             Record::Applied { body, .. } => {
                 let segment = decode(body);
                 if let Some(first) = segment.commits.first() {
-                    unreplied
-                        .entry(segment.epoch.0)
-                        .or_default()
-                        .insert(first.sequence);
-                }
-            }
-            Record::PassedOn { epoch, commit } => {
-                if let Some(sequences) = unreplied.get_mut(epoch) {
-                    sequences.remove(&commit.sequence);
+                    applied.insert((segment.epoch.0, first.sequence));
                 }
             }
             Record::Crashed { server } => {
-                let epoch = epochs.get(server);
-                if epoch
-                    .and_then(|epoch| unreplied.get(epoch))
-                    .is_some_and(|sequences| !sequences.is_empty())
-                {
+                if epochs.get(server).is_some_and(|epoch| {
+                    applied
+                        .iter()
+                        .any(|written| written.0 == *epoch && !passed_on.contains(written))
+                }) {
                     seen.insert("crashAfterApplyBeforeReply");
                 }
             }
