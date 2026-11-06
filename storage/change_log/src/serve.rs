@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::error;
+use std::iter;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -120,7 +122,7 @@ async fn put(
         Ok(_) => return Ok(Event::PutSucceeded { slot }),
         Err(object_store::Error::AlreadyExists { .. }) => PutFailure::AlreadyExists,
         Err(error) => {
-            permanent(&error, &path)?;
+            permanent(&error, &path, PERMANENT)?;
             PutFailure::Unknown
         }
     };
@@ -138,7 +140,7 @@ async fn load(store: Arc<dyn ObjectStore>, log: Path) -> Result<Event, Alarm> {
         match store.list(Some(&log)).try_collect::<Vec<_>>().await {
             Ok(listed) => break listed,
             Err(error) => {
-                permanent(&error, &log)?;
+                permanent(&error, &log, PERMANENT_FOR_LIST)?;
                 attempt += 1;
                 tokio::time::sleep(backoff(attempt)).await;
             }
@@ -177,7 +179,7 @@ async fn read(store: &dyn ObjectStore, path: &Path, slot: Slot) -> Result<Option
             }
             Err(object_store::Error::NotFound { .. }) => return Ok(None),
             Err(error) => {
-                permanent(&error, path)?;
+                permanent(&error, path, PERMANENT)?;
                 attempt += 1;
                 tokio::time::sleep(backoff(attempt)).await;
             }
@@ -185,14 +187,17 @@ async fn read(store: &dyn ObjectStore, path: &Path, slot: Slot) -> Result<Option
     }
 }
 
-fn permanent(error: &object_store::Error, path: &Path) -> Result<(), Alarm> {
+const PERMANENT: &[u16] = &[401, 403, 501];
+// Not 404 for PUT and GET: a missing key gets 404 too. A LIST gets 404 only for a missing bucket.
+const PERMANENT_FOR_LIST: &[u16] = &[401, 403, 404, 501];
+
+fn permanent(error: &object_store::Error, path: &Path, statuses: &[u16]) -> Result<(), Alarm> {
     let status = match error {
-        object_store::Error::Unauthenticated { .. } => Some(401),
-        object_store::Error::PermissionDenied { .. } => Some(403),
+        object_store::Error::NotImplemented { .. } => Some(501),
         _ => status(error),
     };
     match status {
-        Some(status @ (401 | 403 | 501)) => Err(Alarm::PermanentStoreError {
+        Some(status) if statuses.contains(&status) => Err(Alarm::PermanentStoreError {
             key: path.to_string(),
             status,
         }),
@@ -202,13 +207,10 @@ fn permanent(error: &object_store::Error, path: &Path) -> Result<(), Alarm> {
 
 // Not a downcast: object_store 0.14 keeps RetryError private and wraps a failed S3 LIST in Generic.
 fn status(error: &object_store::Error) -> Option<u16> {
-    std::iter::successors(Some(error as &dyn std::error::Error), |error| {
-        error.source()
-    })
-    .find_map(|error| {
+    iter::successors(Some(error as &dyn error::Error), |error| error.source()).find_map(|error| {
         let text = error.to_string();
         let rest = text.strip_prefix("Server returned non-2xx status code: ")?;
-        rest.get(..3)?.parse().ok()
+        rest.get(..3)?.parse::<u16>().ok()
     })
 }
 
