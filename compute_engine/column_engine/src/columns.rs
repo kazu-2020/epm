@@ -13,6 +13,10 @@ use rayon::prelude::*;
 
 use crate::region::Region;
 
+mod rows;
+
+use rows::{gather, pieces, union};
+
 const DENSE_LIMIT: usize = 1 << 22;
 // Not one binary search per member above this many: walking the runs is faster.
 const SEARCHED_MEMBERS: usize = 64;
@@ -118,20 +122,6 @@ fn reorder(layout: &KeyLayout, keys: &[u64], positions: &[usize]) -> (KeyLayout,
         })
         .collect();
     (reordered, keys)
-}
-
-fn pieces(len: usize) -> Vec<Range<usize>> {
-    (0..len)
-        .step_by(PARALLEL_ROWS)
-        .map(|start| start..(start + PARALLEL_ROWS).min(len))
-        .collect()
-}
-
-fn gather<T: Copy + Send + Sync>(rows: &[usize], from: &[T]) -> Vec<T> {
-    rows.par_iter()
-        .with_min_len(PARALLEL_ROWS)
-        .map(|&row| from[row])
-        .collect()
 }
 
 fn runs<'r>(keys: &[u64], rows: &'r [usize]) -> Vec<&'r [usize]> {
@@ -274,29 +264,9 @@ impl Columns {
     fn copy_rows<Rows: Iterator<Item = usize>>(
         &self,
         counts: &[usize],
-        rows: impl Fn(usize) -> Rows + Sync,
+        piece_rows: impl Fn(usize) -> Rows + Sync,
     ) -> Columns {
-        let total = counts.iter().sum();
-        let mut keys = vec![0; total];
-        let mut values = vec![0.0; total];
-        let mut outputs = Vec::with_capacity(counts.len());
-        let (mut keys_left, mut values_left) = (keys.as_mut_slice(), values.as_mut_slice());
-        for &count in counts {
-            let (piece_keys, rest_keys) = keys_left.split_at_mut(count);
-            let (piece_values, rest_values) = values_left.split_at_mut(count);
-            outputs.push((piece_keys, piece_values));
-            (keys_left, values_left) = (rest_keys, rest_values);
-        }
-        outputs
-            .into_par_iter()
-            .enumerate()
-            .for_each(|(piece, (piece_keys, piece_values))| {
-                for ((key, value), row) in piece_keys.iter_mut().zip(piece_values).zip(rows(piece))
-                {
-                    *key = self.keys[row];
-                    *value = self.values[row];
-                }
-            });
+        let (keys, values) = rows::copy_rows(&self.keys, &self.values, counts, piece_rows);
         Columns {
             axes: self.axes.clone(),
             layout: self.layout.clone(),
@@ -1013,87 +983,6 @@ impl Columns {
     }
 }
 
-fn union(mine: ScalarBuffer<u64>, theirs: &ScalarBuffer<u64>) -> ScalarBuffer<u64> {
-    if mine.ptr_eq(theirs) {
-        return mine;
-    }
-    // Not always split at `mine`: a short `mine` gives one range, and the merge runs on one thread again.
-    let (mine, theirs): (&[u64], &[u64]) = if mine.len() >= theirs.len() {
-        (&mine[..], &theirs[..])
-    } else {
-        (&theirs[..], &mine[..])
-    };
-    let bounds: Vec<(usize, usize)> = std::iter::once((0, 0))
-        .chain(
-            (PARALLEL_ROWS..mine.len())
-                .step_by(PARALLEL_ROWS)
-                .map(|own| (own, theirs.partition_point(|&key| key < mine[own]))),
-        )
-        .chain(std::iter::once((mine.len(), theirs.len())))
-        .collect();
-    let ranges: Vec<(&[u64], &[u64])> = bounds
-        .windows(2)
-        .map(|pair| {
-            let [(own_start, their_start), (own_end, their_end)] = [pair[0], pair[1]];
-            (&mine[own_start..own_end], &theirs[their_start..their_end])
-        })
-        .collect();
-    let counts: Vec<usize> = ranges
-        .par_iter()
-        .map(|&(left, right)| {
-            let mut count = 0;
-            merge(left, right, |_| count += 1);
-            count
-        })
-        .collect();
-    let mut keys = vec![0; counts.iter().sum()];
-    let mut parts = Vec::with_capacity(ranges.len());
-    let mut rest = keys.as_mut_slice();
-    for &count in &counts {
-        let (part, after) = rest.split_at_mut(count);
-        parts.push(part);
-        rest = after;
-    }
-    parts
-        .into_par_iter()
-        .zip(&ranges)
-        .for_each(|(part, &(left, right))| {
-            let mut written = 0;
-            merge(left, right, |key| {
-                part[written] = key;
-                written += 1;
-            });
-        });
-    keys.into()
-}
-
-fn merge(left: &[u64], right: &[u64], mut emit: impl FnMut(u64)) {
-    let (mut own, mut their) = (0, 0);
-    while own < left.len() || their < right.len() {
-        let next = match (left.get(own), right.get(their)) {
-            (Some(&left_key), Some(&right_key)) if left_key == right_key => {
-                own += 1;
-                their += 1;
-                left_key
-            }
-            (Some(&left_key), Some(&right_key)) if left_key < right_key => {
-                own += 1;
-                left_key
-            }
-            (Some(&left_key), None) => {
-                own += 1;
-                left_key
-            }
-            (_, Some(&right_key)) => {
-                their += 1;
-                right_key
-            }
-            (None, None) => unreachable!("the loop stops when both are done"),
-        };
-        emit(next);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1107,24 +996,6 @@ mod tests {
 
         assert_eq!(&columns.keys[..], &[1]);
         assert_eq!(columns.values[0].to_bits(), 0);
-    }
-
-    #[test]
-    fn union_across_many_ranges_equals_the_set_union() {
-        let mine: Vec<u64> = (5..5 + 6 * PARALLEL_ROWS as u64).step_by(2).collect();
-        let theirs: Vec<u64> = (0..5)
-            .chain((5..8 * PARALLEL_ROWS as u64).step_by(4))
-            .collect();
-        let expected: std::collections::BTreeSet<u64> =
-            mine.iter().chain(&theirs).copied().collect();
-
-        let expected: Vec<u64> = expected.into_iter().collect();
-
-        assert_eq!(
-            &union(mine.clone().into(), &theirs.clone().into())[..],
-            expected
-        );
-        assert_eq!(&union(theirs.into(), &mine.into())[..], expected);
     }
 
     #[test]
