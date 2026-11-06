@@ -3,9 +3,9 @@ name: shellcheck
 on:
   push:
     branches: [main]
-    paths: [".github/ec2/**", "storage/s3/*.sh", "compute_engine/bench/ec2/*.sh", ".github/workflows/shellcheck.yml"]
+    paths: ["**/*.sh", ".github/workflows/shellcheck.yml"]
   pull_request:
-    paths: [".github/ec2/**", "storage/s3/*.sh", "compute_engine/bench/ec2/*.sh", ".github/workflows/shellcheck.yml"]
+    paths: ["**/*.sh", ".github/workflows/shellcheck.yml"]
 
 permissions:
   contents: read
@@ -15,4 +15,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: shellcheck .github/ec2/*.sh storage/s3/*.sh compute_engine/bench/ec2/*.sh
+      - run: git ls-files -z '*.sh' | xargs -0 shellcheck

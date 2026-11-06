@@ -4,14 +4,14 @@ cd "$(dirname "$0")"
 export DST_SEEDS="${1:-2000}"
 
 declare -A quint_violations=(
-  [blind_put]=refinesChangeLog,segmentsNeverChange
-  [unknown_as_success]=refinesChangeLog
-  [no_deduplication]=refinesChangeLog
-  [no_inflight_deduplication]=refinesChangeLog
-  [no_fence]=newestOwnerSeesAcknowledged
-  [no_epoch_check]=staleEpochNeverCommits
-  [two_in_flight]=refinesChangeLog,staleEpochNeverCommits,slotsContiguous
-  [rejected_as_fenced]=
+  [blind_put]="refinesChangeLog,segmentsNeverChange"
+  [unknown_as_success]="refinesChangeLog"
+  [no_deduplication]="refinesChangeLog"
+  [no_inflight_deduplication]="refinesChangeLog"
+  [no_fence]="newestOwnerSeesAcknowledged"
+  [no_epoch_check]="staleEpochNeverCommits"
+  [two_in_flight]="refinesChangeLog,staleEpochNeverCommits,slotsContiguous"
+  [rejected_as_fenced]=""
 )
 breaks=(blind_put unknown_as_success no_deduplication no_inflight_deduplication no_fence no_epoch_check two_in_flight)
 holds=(rejected_as_fenced)
@@ -41,8 +41,8 @@ output=$(run "")
 report designed "$(outcome "$output")" "$(broken "$output")" hold holds
 for mutation in "${breaks[@]}" "${holds[@]}"; do
   output=$(run "$mutation")
-  expected=break
-  [[ " ${holds[*]} " == *" $mutation "* ]] && expected=hold
+  expected="break"
+  [[ " ${holds[*]} " == *" $mutation "* ]] && expected="hold"
   report "$mutation" "$(outcome "$output")" "$(broken "$output")" "$expected" "${quint_violations[$mutation]:-holds}"
   if [[ " ${log_safe_without_guard[*]} " == *" $mutation "* && ",$(broken "$output")" == *",refinesChangeLog:"* ]]; then
     echo "  expected: refinesChangeLog holds"
