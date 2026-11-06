@@ -214,8 +214,8 @@ impl State<Replay> for ModelState {
     }
 }
 
-fn sequence_index(sequence: u64) -> usize {
-    usize::try_from(sequence).expect("a short log")
+fn sequence_index(sequence: Sequence) -> usize {
+    usize::try_from(sequence.0).expect("a short log")
 }
 
 fn names(segment: &Segment) -> Vec<String> {
@@ -318,7 +318,7 @@ impl Replay {
                         .passed_on
                         .get_mut(server)
                         .context("a granted owner counts its commits")?;
-                    if commit.sequence != *passed_on || !logged {
+                    if commit.sequence.0 != *passed_on || !logged {
                         bail!("{server} passed on {commit:?} after {passed_on} commits");
                     }
                     *passed_on += 1;
@@ -332,9 +332,9 @@ impl Replay {
                         .get(sequence_index(sequence))
                         .map(|commit| &commit.request_id);
                     let passed_on = self.passed_on.get(server).copied().unwrap_or(0);
-                    if logged != Some(&request_id) || sequence >= passed_on {
+                    if logged != Some(&request_id) || sequence.0 >= passed_on {
                         bail!(
-                            "{server} acknowledged {request_id:?} as {sequence} after {passed_on} commits"
+                            "{server} acknowledged {request_id:?} as {sequence:?} after {passed_on} commits"
                         );
                     }
                     self.acknowledged.insert(name(&request_id));

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use bytes::Bytes;
 
-use crate::segment::{self, Commit, DecodeError, Epoch, RequestId, Segment, Slot};
+use crate::segment::{self, Commit, DecodeError, Epoch, RequestId, Segment, Sequence, Slot};
 
 const MAX_IN_FLIGHT: usize = if cfg!(feature = "two_in_flight") {
     2
@@ -46,7 +46,7 @@ pub enum Effect {
     Committed(Commit),
     Ack {
         request_id: RequestId,
-        sequence: u64,
+        sequence: Sequence,
     },
     Stop,
     Alarm(Alarm),
@@ -91,7 +91,7 @@ struct Ready {
 
 #[derive(Debug, Default)]
 struct View {
-    sequences: HashMap<RequestId, u64>,
+    sequences: HashMap<RequestId, Sequence>,
     next_sequence: u64,
 }
 
@@ -367,7 +367,7 @@ impl Ready {
             .zip(self.view.next_sequence..)
             .map(|(request, sequence)| Commit {
                 request_id: request.request_id,
-                sequence,
+                sequence: Sequence(sequence),
                 payload: request.payload,
             })
             .collect();
@@ -447,7 +447,7 @@ mod tests {
     fn commit(name: &'static str, sequence: u64) -> Commit {
         Commit {
             request_id: id(name),
-            sequence,
+            sequence: Sequence(sequence),
             payload: Bytes::from_static(b"payload"),
         }
     }
@@ -459,7 +459,7 @@ mod tests {
     fn ack(name: &'static str, sequence: u64) -> Effect {
         Effect::Ack {
             request_id: id(name),
-            sequence,
+            sequence: Sequence(sequence),
         }
     }
 
@@ -571,7 +571,7 @@ mod tests {
         let (slot, segment, _) = put(&owner.step_and_flush(request("r1")));
         assert_eq!(slot, Slot(1));
         assert_eq!(segment.epoch, Epoch(1));
-        assert_eq!(segment.commits[0].sequence, 0);
+        assert_eq!(segment.commits[0].sequence, Sequence(0));
         assert_eq!(
             acks(&owner.step_and_flush(store.put(slot, segment))),
             vec![id("r1")]
@@ -596,7 +596,7 @@ mod tests {
                 .iter()
                 .map(|commit| commit.sequence)
                 .collect::<Vec<_>>(),
-            vec![1, 2]
+            vec![Sequence(1), Sequence(2)]
         );
     }
 
@@ -630,7 +630,7 @@ mod tests {
                 epoch: Epoch(1),
                 commits: vec![Commit {
                     request_id: id("r1"),
-                    sequence: 0,
+                    sequence: Sequence(0),
                     payload: Bytes::new(),
                 }],
             },
@@ -643,7 +643,7 @@ mod tests {
         assert_eq!(acks(&effects), vec![id("r1")]);
         let (slot, segment, _) = put(&effects);
         assert_eq!((slot, request_ids(&segment)), (Slot(2), vec![id("r2")]));
-        assert_eq!(segment.commits[0].sequence, 1);
+        assert_eq!(segment.commits[0].sequence, Sequence(1));
     }
 
     #[test]
@@ -757,7 +757,7 @@ mod tests {
             epoch: Epoch(3),
             commits: vec![Commit {
                 request_id: id("r1"),
-                sequence: 0,
+                sequence: Sequence(0),
                 payload: Bytes::from_static(b"payload"),
             }],
         };
@@ -913,7 +913,7 @@ mod tests {
             "A stops at the newer epoch"
         );
         let (slot, segment, _) = put(&b.step_and_flush(request("r2")));
-        assert_eq!(segment.commits[0].sequence, 1);
+        assert_eq!(segment.commits[0].sequence, Sequence(1));
         assert_eq!(
             acks(&b.step_and_flush(store.put(slot, segment))),
             vec![id("r2")]

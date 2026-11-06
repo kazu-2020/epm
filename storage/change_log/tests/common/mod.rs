@@ -8,7 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use change_log::{
-    Alarm, Commit, Epoch, Exit, Request, RequestId, Segment, Slot, Submission, serve,
+    Alarm, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Slot, Submission, serve,
 };
 use futures_util::stream::{self, BoxStream};
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
@@ -97,7 +97,7 @@ pub enum Record {
     Acked {
         request: String,
         epoch: u64,
-        sequence: u64,
+        sequence: Sequence,
     },
     PassedOn {
         epoch: u64,
@@ -361,7 +361,7 @@ impl Cluster {
     }
 }
 
-async fn submit(owner: &mpsc::Sender<Submission>, name: &str, wait: Duration) -> Option<u64> {
+async fn submit(owner: &mpsc::Sender<Submission>, name: &str, wait: Duration) -> Option<Sequence> {
     let (acknowledged, ack) = oneshot::channel();
     let request = Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
@@ -548,7 +548,7 @@ pub fn check(outcome: &Outcome) -> Violations {
     let mut log: Vec<Commit> = Vec::new();
     let mut written: BTreeMap<(Slot, Epoch), Bytes> = BTreeMap::new();
     let mut before_probe = None;
-    let mut acknowledged: Vec<(usize, &String, u64, u64)> = Vec::new();
+    let mut acknowledged: Vec<(usize, &String, u64, Sequence)> = Vec::new();
     let mut passed_on: BTreeMap<u64, Vec<(usize, &Commit)>> = BTreeMap::new();
     for (at, record) in outcome.history.iter().enumerate() {
         match record {
@@ -599,7 +599,7 @@ pub fn check(outcome: &Outcome) -> Violations {
                 if !next
                     .iter()
                     .zip(0..)
-                    .all(|(commit, position)| commit.sequence == position)
+                    .all(|(commit, position)| commit.sequence == Sequence(position))
                 {
                     violate("commitSequenceIsPosition", format!("record {at}: {key}"));
                 }
@@ -667,8 +667,8 @@ pub fn check(outcome: &Outcome) -> Violations {
         }
     }
     // Not checked against the log at the time of the record: a store over the network can show a write to a read-back before its PUT returns, and PassedOn is recorded by another task.
-    let at = |sequence: u64| {
-        usize::try_from(sequence)
+    let at = |sequence: Sequence| {
+        usize::try_from(sequence.0)
             .ok()
             .and_then(|index| log.get(index))
     };
@@ -676,23 +676,23 @@ pub fn check(outcome: &Outcome) -> Violations {
         if at(sequence).is_none_or(|commit| commit.request_id.0 != request.as_bytes()) {
             violate(
                 "ackCarriesSequence",
-                format!("record {at_record}: {request} acknowledged as {sequence}"),
+                format!("record {at_record}: {request} acknowledged as {sequence:?}"),
             );
         }
-        if usize::try_from(sequence)
+        if usize::try_from(sequence.0)
             .is_ok_and(|index| passed_on.get(&epoch).map_or(0, Vec::len) <= index)
         {
             violate(
                 "passedOnBeforeAck",
                 format!(
-                    "record {at_record}: epoch {epoch} acknowledged {request} as {sequence} without passing it on"
+                    "record {at_record}: epoch {epoch} acknowledged {request} as {sequence:?} without passing it on"
                 ),
             );
         }
     }
     for (epoch, commits) in passed_on {
         for ((at_record, commit), expected) in commits.into_iter().zip(0..) {
-            if commit.sequence != expected || at(commit.sequence) != Some(commit) {
+            if commit.sequence != Sequence(expected) || at(commit.sequence) != Some(commit) {
                 violate(
                     "passedOnInLogOrder",
                     format!("record {at_record}: epoch {epoch} passed on {commit:?}"),
@@ -717,8 +717,8 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let mut seen = BTreeSet::new();
     let mut sent: BTreeMap<&str, Vec<&Bytes>> = BTreeMap::new();
     let mut epochs: BTreeMap<usize, u64> = BTreeMap::new();
-    let mut applied: BTreeSet<(u64, u64)> = BTreeSet::new();
-    let passed_on: BTreeSet<(u64, u64)> = outcome
+    let mut applied: BTreeSet<(u64, Sequence)> = BTreeSet::new();
+    let passed_on: BTreeSet<(u64, Sequence)> = outcome
         .history
         .iter()
         .filter_map(|record| match record {
