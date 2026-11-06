@@ -60,37 +60,40 @@ pub(super) fn union(left: ScalarBuffer<u64>, right: &ScalarBuffer<u64>) -> Scala
     if left.ptr_eq(right) {
         return left;
     }
-    // Not always split at `left`: a short `left` gives one range, and the merge runs on one thread again.
-    let (left, right): (&[u64], &[u64]) = if left.len() >= right.len() {
+    // Not split at `left` as given: a short `left` gives one range, and the merge runs on one thread again.
+    let (longer, shorter): (&[u64], &[u64]) = if left.len() >= right.len() {
         (&left[..], &right[..])
     } else {
         (&right[..], &left[..])
     };
     let bounds: Vec<(usize, usize)> = iter::once((0, 0))
         .chain(
-            (PARALLEL_ROWS..left.len())
+            (PARALLEL_ROWS..longer.len())
                 .step_by(PARALLEL_ROWS)
-                .map(|left_bound| {
+                .map(|longer_bound| {
                     (
-                        left_bound,
-                        right.partition_point(|&key| key < left[left_bound]),
+                        longer_bound,
+                        shorter.partition_point(|&key| key < longer[longer_bound]),
                     )
                 }),
         )
-        .chain(iter::once((left.len(), right.len())))
+        .chain(iter::once((longer.len(), shorter.len())))
         .collect();
     let ranges: Vec<(&[u64], &[u64])> = bounds
         .windows(2)
         .map(|pair| {
-            let [(left_start, right_start), (left_end, right_end)] = [pair[0], pair[1]];
-            (&left[left_start..left_end], &right[right_start..right_end])
+            let [(longer_start, shorter_start), (longer_end, shorter_end)] = [pair[0], pair[1]];
+            (
+                &longer[longer_start..longer_end],
+                &shorter[shorter_start..shorter_end],
+            )
         })
         .collect();
     let counts: Vec<usize> = ranges
         .par_iter()
-        .map(|&(left, right)| {
+        .map(|&(longer_range, shorter_range)| {
             let mut count = 0;
-            merge(left, right, |_| count += 1);
+            merge(longer_range, shorter_range, |_| count += 1);
             count
         })
         .collect();
@@ -98,9 +101,9 @@ pub(super) fn union(left: ScalarBuffer<u64>, right: &ScalarBuffer<u64>) -> Scala
     split_by_counts(&mut keys, &counts)
         .into_par_iter()
         .zip(&ranges)
-        .for_each(|(part, &(left, right))| {
+        .for_each(|(part, &(longer_range, shorter_range))| {
             let mut written = 0;
-            merge(left, right, |key| {
+            merge(longer_range, shorter_range, |key| {
                 part[written] = key;
                 written += 1;
             });
