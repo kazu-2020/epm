@@ -16,6 +16,16 @@ holds=(postgres_segment_key_without_epoch postgres_no_epoch_check)
 log_safe_without_guard=(s3_no_fence s3_no_epoch_check)
 scenarios=(postgres_blind_write s3_segment_key_without_epoch)
 
+seqlog_invariants=(refinesChangeLog segmentsNeverChange staleEpochNeverCommits slotsContiguous newestOwnerSeesAcknowledged)
+seqlog_breaks=(
+  seqlog_blind_put:refinesChangeLog seqlog_unknown_as_success:refinesChangeLog seqlog_no_deduplication:refinesChangeLog
+  seqlog_no_fence:newestOwnerSeesAcknowledged
+  seqlog_no_epoch_check:staleEpochNeverCommits seqlog_two_in_flight:staleEpochNeverCommits
+)
+# Stopping at a 412 without HEAD gives up commits but never breaks the log.
+seqlog_holds=(seqlog_rejected_as_fenced)
+seqlog_log_safe_without_guard=(seqlog_no_fence seqlog_no_epoch_check seqlog_two_in_flight)
+
 listed=$(printf '%s\n' "${breaks[@]%%:*}" "${holds[@]}" "${scenarios[@]}" | sort -u)
 defined=$(sed -n 's/^module \([a-z0-9_]*\).*/\1/p' mutations.qnt | sort)
 if [[ "$listed" != "$defined" ]]; then
@@ -23,10 +33,20 @@ if [[ "$listed" != "$defined" ]]; then
   diff <(echo "$listed") <(echo "$defined") || true
   exit 1
 fi
+listed=$(printf '%s\n' "${seqlog_breaks[@]%%:*}" "${seqlog_holds[@]}" | sort -u)
+defined=$(sed -n 's/^module \([a-z0-9_]*\).*/\1/p' seqlog_mutations.qnt | sort)
+if [[ "$listed" != "$defined" ]]; then
+  echo "check.sh does not list the same modules as seqlog_mutations.qnt:"
+  diff <(echo "$listed") <(echo "$defined") || true
+  exit 1
+fi
 
 quint typecheck change_log.qnt
 quint typecheck storage.qnt
 quint typecheck mutations.qnt
+quint typecheck seqlog.qnt
+quint typecheck seqlog_mutations.qnt
+quint test seqlog.qnt --main seqlog_designed
 for module in "${scenarios[@]}"; do
   quint test mutations.qnt --main "$module"
 done
@@ -70,6 +90,24 @@ for module in "${holds[@]}"; do
 done
 for module in "${log_safe_without_guard[@]}"; do
   output=$(run mutations.qnt "$module" refinesChangeLog)
+  report "$module refinesChangeLog" "$(outcome "$output")" "$(broken "$output")" hold
+done
+output=$(run seqlog.qnt seqlog_designed "${seqlog_invariants[@]}")
+report seqlog_designed "$(outcome "$output")" "$(broken "$output")" hold
+for witness in "${witnesses[@]}"; do
+  report "seqlog_designed $witness" "$(outcome "$(run seqlog.qnt seqlog_designed "$witness")")" "" break
+done
+for entry in "${seqlog_breaks[@]}"; do
+  module="${entry%%:*}"
+  invariant="${entry##*:}"
+  report "$module $invariant" "$(outcome "$(run seqlog_mutations.qnt "$module" "$invariant")")" "" break
+done
+for module in "${seqlog_holds[@]}"; do
+  output=$(run seqlog_mutations.qnt "$module" "${seqlog_invariants[@]}")
+  report "$module" "$(outcome "$output")" "$(broken "$output")" hold
+done
+for module in "${seqlog_log_safe_without_guard[@]}"; do
+  output=$(run seqlog_mutations.qnt "$module" refinesChangeLog)
   report "$module refinesChangeLog" "$(outcome "$output")" "$(broken "$output")" hold
 done
 exit "$status"
