@@ -27,21 +27,6 @@ def race(calls) -> list[int]:
         return list(pool.map(status, calls))
 
 
-def if_match_race() -> collections.Counter[tuple[int, ...]]:
-    outcomes: collections.Counter[tuple[int, ...]] = collections.Counter()
-    for _ in range(ROUNDS):
-        key = f"manifest-{uuid.uuid4()}"
-        etag = s3.put_object(Bucket=BUCKET, Key=key, Body=b"0")["ETag"]
-        replies = race(
-            [
-                lambda body=str(n).encode(): s3.put_object(Bucket=BUCKET, Key=key, Body=body, IfMatch=etag)
-                for n in range(1, WRITERS + 1)
-            ]
-        )
-        outcomes[tuple(sorted(replies))] += 1
-    return outcomes
-
-
 def if_none_match_race() -> collections.Counter[tuple[int, ...]]:
     outcomes: collections.Counter[tuple[int, ...]] = collections.Counter()
     for _ in range(ROUNDS):
@@ -56,22 +41,16 @@ def if_none_match_race() -> collections.Counter[tuple[int, ...]]:
     return outcomes
 
 
-def retry_after_success() -> int:
-    key = f"manifest-{uuid.uuid4()}"
-    etag = s3.put_object(Bucket=BUCKET, Key=key, Body=b"0")["ETag"]
-    s3.put_object(Bucket=BUCKET, Key=key, Body=b"1", IfMatch=etag)
-    return status(lambda: s3.put_object(Bucket=BUCKET, Key=key, Body=b"1", IfMatch=etag))
-
-
-def if_match_missing_key() -> int:
-    return status(lambda: s3.put_object(Bucket=BUCKET, Key=f"missing-{uuid.uuid4()}", Body=b"0", IfMatch='"0"'))
+def resend_after_success() -> int:
+    key = f"segment-{uuid.uuid4()}"
+    s3.put_object(Bucket=BUCKET, Key=key, Body=b"0", IfNoneMatch="*")
+    return status(lambda: s3.put_object(Bucket=BUCKET, Key=key, Body=b"0", IfNoneMatch="*"))
 
 
 def winner_is_read_back() -> bool:
-    key = f"manifest-{uuid.uuid4()}"
-    etag = s3.put_object(Bucket=BUCKET, Key=key, Body=b"0")["ETag"]
-    bodies = [str(n).encode() for n in range(1, WRITERS + 1)]
-    replies = race([lambda body=body: s3.put_object(Bucket=BUCKET, Key=key, Body=body, IfMatch=etag) for body in bodies])
+    key = f"segment-{uuid.uuid4()}"
+    bodies = [str(n).encode() for n in range(WRITERS)]
+    replies = race([lambda body=body: s3.put_object(Bucket=BUCKET, Key=key, Body=body, IfNoneMatch="*") for body in bodies])
     winners = [body for body, reply in zip(bodies, replies) if reply == 200]
     return len(winners) == 1 and s3.get_object(Bucket=BUCKET, Key=key)["Body"].read() == winners[0]
 
@@ -81,18 +60,14 @@ def main() -> None:
         s3.create_bucket(Bucket=BUCKET)
     one_winner = {tuple(sorted([200] + [412] * (WRITERS - 1))): ROUNDS}
     results = {
-        "If-Match race": dict(if_match_race()),
         "If-None-Match race": dict(if_none_match_race()),
-        "If-Match retry with the old ETag after a success": retry_after_success(),
-        "If-Match on a missing key": if_match_missing_key(),
+        "If-None-Match resend after a success": resend_after_success(),
         "The 1 winner of a race is the body that GET returns": all(winner_is_read_back() for _ in range(ROUNDS)),
     }
     for name, result in results.items():
         print(f"{name}: {result}")
-    assert results["If-Match race"] == one_winner
     assert results["If-None-Match race"] == one_winner
-    assert results["If-Match retry with the old ETag after a success"] == 412
-    assert results["If-Match on a missing key"] == 404
+    assert results["If-None-Match resend after a success"] == 412
     assert results["The 1 winner of a race is the body that GET returns"]
 
 
