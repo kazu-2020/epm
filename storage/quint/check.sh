@@ -26,6 +26,7 @@ fi
 quint typecheck change_log.qnt
 quint typecheck seqlog.qnt
 quint typecheck seqlog_mutations.qnt
+quint typecheck seqlog_replay.qnt
 quint test seqlog.qnt --main seqlog_designed
 quint test seqlog_mutations.qnt --main seqlog_two_in_flight --match pipelineAcknowledgesPastHoleTest
 quint test seqlog_mutations.qnt --main seqlog_rejected_as_fenced --match ownResendRejectedTest

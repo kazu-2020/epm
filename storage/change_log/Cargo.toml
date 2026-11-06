@@ -22,8 +22,11 @@ object_store = { version = "0.14.2", default-features = false }
 tokio = { version = "1.54.1", features = ["macros", "sync", "time"] }
 
 [dev-dependencies]
+anyhow = "1.0.104"
 async-trait = "0.1.92"
 object_store = { version = "0.14.2", default-features = false, features = ["aws"] }
+quint-connect = "0.1.2"
+serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["rt", "test-util"] }
 
 [profile.mutants]

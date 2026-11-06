@@ -11,6 +11,7 @@
 | `change_log.qnt` | 抽象の仕様。ワークスペースごとに追記だけの列が1本あり、1つの Request ID は高々1回だけ足され、ACK するのは列に入ったものだけ |
 | `seqlog.qnt` | 変更ログの書き方のモデル。担当、配置コントローラー(エポックを渡す)、位置、クライアントの再送。守りは `seqlog_design` の `allGuards` に、サーバー数などの上限は `seqlog` の `pure val` に置く |
 | `seqlog_mutations.qnt` | 守りを1つずつ外したモデル(`{ ...allGuards, deduplication: false }` など)。検査が実際に落ちることを示す。`check.sh` は、ここのモジュールがすべて `breaks` か `holds` に入っているかを確かめる |
+| `seqlog_replay.qnt` | Rust の実装に再生するトレースを作るための `replayStep`。`step` の一部の手順だけを許し、送信と停止にステップを使い切らないようにした |
 | `check.sh` | すべての検査をまとめて実行する |
 | `../rustfs/conditional_write.py` | S3 互換サーバーで If-None-Match の応答を実測する |
 
@@ -103,3 +104,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 ## コードとの対応
 
 Rust の実装は `storage/change_log/` にある。担当の状態機械 `Owner::step` が Quint の action に対応し、`mutations.sh` が上の表の変異を Rust のシミュレーションで確かめる。
+
+`storage/change_log/src/owner/replay.rs` は、`seqlog_replay.qnt` のランダムなトレースを [quint-connect](https://crates.io/crates/quint-connect) で `Owner::step` に1ステップずつ渡し、各ステップのあとでモデルと Rust の状態(ストア、各担当、ACK 済みの集合)が同じかを確かめる。`cargo test` で動き、`quint` が PATH に要る。失敗したときは表示される `QUINT_SEED=<値>` を付けて同じトレースを再生する。
+
+再生が確かめるのは「モデルが選んだ手順を、Rust も同じ結果で進める」ことだけである。モデルで起きない手順を Rust が選べるか(たとえば PUT 中に次の PUT を送る `two_in_flight`)は確かめない。それは `mutations.sh` のシミュレーションが捕まえる。
