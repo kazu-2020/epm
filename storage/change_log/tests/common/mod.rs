@@ -96,6 +96,7 @@ pub enum Record {
     },
     Acked {
         request: String,
+        epoch: u64,
         sequence: u64,
     },
     PassedOn {
@@ -304,14 +305,16 @@ impl ObjectStore for Faults {
     }
 }
 
-type Owners = Vec<watch::Receiver<Option<mpsc::Sender<Submission>>>>;
+type Granted = Option<(u64, mpsc::Sender<Submission>)>;
+type Owners = Vec<watch::Receiver<Granted>>;
 
 struct Cluster {
     store: Arc<dyn ObjectStore>,
     workspace: String,
     history: History,
-    servers: Vec<watch::Sender<Option<mpsc::Sender<Submission>>>>,
+    servers: Vec<watch::Sender<Granted>>,
     owners: Vec<Option<JoinHandle<()>>>,
+    recorders: Vec<JoinHandle<()>>,
     epoch: u64,
 }
 
@@ -327,11 +330,11 @@ impl Cluster {
         let workspace = self.workspace.clone();
         let history = Arc::clone(&self.history);
         let passed_on_history = Arc::clone(&self.history);
-        tokio::spawn(async move {
+        self.recorders.push(tokio::spawn(async move {
             while let Some(commit) = passed_on.recv().await {
                 record(&passed_on_history, Record::PassedOn { epoch, commit });
             }
-        });
+        }));
         self.owners[server] = Some(tokio::spawn(async move {
             let owner = serve(store, &workspace, Epoch(epoch), receiver, committed);
             let ended = match AssertUnwindSafe(owner).catch_unwind().await {
@@ -344,7 +347,7 @@ impl Cluster {
             };
             record(&history, ended);
         }));
-        self.servers[server].send_replace(Some(sender));
+        self.servers[server].send_replace(Some((epoch, sender)));
     }
 
     fn crash(&mut self, server: usize) {
@@ -380,15 +383,18 @@ async fn client(index: usize, mut rng: Rng, owners: Owners, history: History, en
         while Instant::now() < end {
             let server = rng.below(SERVERS as u64) as usize;
             let owner = owners[server].borrow().clone();
-            let sequence = match owner {
-                Some(owner) => submit(&owner, &name, rng.up_to(CLIENT_WAIT)).await,
+            let acknowledged = match owner {
+                Some((epoch, owner)) => submit(&owner, &name, rng.up_to(CLIENT_WAIT))
+                    .await
+                    .map(|sequence| (epoch, sequence)),
                 None => None,
             };
-            if let Some(sequence) = sequence {
+            if let Some((epoch, sequence)) = acknowledged {
                 record(
                     &history,
                     Record::Acked {
                         request: name.clone(),
+                        epoch,
                         sequence,
                     },
                 );
@@ -424,6 +430,7 @@ pub async fn simulate(inner: Arc<dyn ObjectStore>, workspace: &str, seed: u64) -
         history: Arc::clone(&history),
         servers,
         owners: (0..SERVERS).map(|_| None).collect(),
+        recorders: Vec::new(),
         epoch: 0,
     };
     let end = Instant::now() + WORKLOAD;
@@ -460,7 +467,7 @@ pub async fn simulate(inner: Arc<dyn ObjectStore>, workspace: &str, seed: u64) -
     record(&history, Record::ProbeStarted);
     let acknowledged: BTreeSet<String> = acknowledged(&history.lock().expect("history"));
     cluster.grant(0);
-    let owner = cluster.servers[0]
+    let (_, owner) = cluster.servers[0]
         .borrow()
         .clone()
         .expect("the probe owner runs");
@@ -475,6 +482,11 @@ pub async fn simulate(inner: Arc<dyn ObjectStore>, workspace: &str, seed: u64) -
     let all = timeout(PROBE_WAIT, probe).await.unwrap_or(false);
     record(&history, Record::ProbeFinished { acknowledged: all });
     cluster.crash(0);
+    for recorder in cluster.recorders.drain(..) {
+        recorder
+            .await
+            .expect("a recorder ends when its owner drops the channel");
+    }
 
     let listed: Vec<ObjectMeta> = inner
         .list(Some(&Path::from(workspace)))
@@ -536,7 +548,7 @@ pub fn check(outcome: &Outcome) -> Violations {
     let mut log: Vec<Commit> = Vec::new();
     let mut written: BTreeMap<(Slot, Epoch), Bytes> = BTreeMap::new();
     let mut before_probe = None;
-    let mut acknowledged: Vec<(usize, &String, u64)> = Vec::new();
+    let mut acknowledged: Vec<(usize, &String, u64, u64)> = Vec::new();
     let mut passed_on: BTreeMap<u64, Vec<(usize, &Commit)>> = BTreeMap::new();
     for (at, record) in outcome.history.iter().enumerate() {
         match record {
@@ -596,8 +608,12 @@ pub fn check(outcome: &Outcome) -> Violations {
             Record::PassedOn { epoch, commit } => {
                 passed_on.entry(*epoch).or_default().push((at, commit));
             }
-            Record::Acked { request, sequence } => {
-                acknowledged.push((at, request, *sequence));
+            Record::Acked {
+                request,
+                epoch,
+                sequence,
+            } => {
+                acknowledged.push((at, request, *epoch, *sequence));
                 if !log
                     .iter()
                     .any(|commit| commit.request_id.0 == request.as_bytes())
@@ -650,17 +666,27 @@ pub fn check(outcome: &Outcome) -> Violations {
             | Record::Rejected { .. } => {}
         }
     }
-    // Not checked against the log at the time of the record: a store over the network can show a write to a read-back before its PUT returns.
+    // Not checked against the log at the time of the record: a store over the network can show a write to a read-back before its PUT returns, and PassedOn is recorded by another task.
     let at = |sequence: u64| {
         usize::try_from(sequence)
             .ok()
             .and_then(|index| log.get(index))
     };
-    for (at_record, request, sequence) in acknowledged {
+    for (at_record, request, epoch, sequence) in acknowledged {
         if at(sequence).is_none_or(|commit| commit.request_id.0 != request.as_bytes()) {
             violate(
                 "ackCarriesSequence",
                 format!("record {at_record}: {request} acknowledged as {sequence}"),
+            );
+        }
+        if usize::try_from(sequence)
+            .is_ok_and(|index| passed_on.get(&epoch).map_or(0, Vec::len) <= index)
+        {
+            violate(
+                "passedOnBeforeAck",
+                format!(
+                    "record {at_record}: epoch {epoch} acknowledged {request} as {sequence} without passing it on"
+                ),
             );
         }
     }

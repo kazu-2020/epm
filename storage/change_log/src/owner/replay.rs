@@ -331,8 +331,11 @@ impl Replay {
                         .log()
                         .get(sequence_index(sequence))
                         .map(|commit| &commit.request_id);
-                    if logged != Some(&request_id) {
-                        bail!("{server} acknowledged {request_id:?} as {sequence}");
+                    let passed_on = self.passed_on.get(server).copied().unwrap_or(0);
+                    if logged != Some(&request_id) || sequence >= passed_on {
+                        bail!(
+                            "{server} acknowledged {request_id:?} as {sequence} after {passed_on} commits"
+                        );
                     }
                     self.acknowledged.insert(name(&request_id));
                 }
