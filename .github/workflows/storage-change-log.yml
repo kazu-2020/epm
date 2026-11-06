@@ -1,0 +1,79 @@
+name: storage-change-log
+
+on:
+  push:
+    branches: [main]
+    paths: ["storage/change_log/**", ".github/workflows/storage-change-log.yml"]
+  pull_request:
+    paths: ["storage/change_log/**", ".github/workflows/storage-change-log.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: storage/change_log
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: storage/change_log
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  rustfs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      rustfs:
+        image: rustfs/rustfs:1.0.0
+        env:
+          RUSTFS_ACCESS_KEY: change-log
+          RUSTFS_SECRET_KEY: change-log-secret
+        ports: ["9000:9000"]
+    env:
+      AWS_ENDPOINT: http://127.0.0.1:9000
+      AWS_ACCESS_KEY_ID: change-log
+      AWS_SECRET_ACCESS_KEY: change-log-secret
+      AWS_REGION: us-east-1
+      CHANGE_LOG_S3_BUCKET: change-log
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: storage/change_log
+      - name: Create the bucket
+        timeout-minutes: 2
+        run: until aws --endpoint-url "$AWS_ENDPOINT" s3 mb "s3://$CHANGE_LOG_S3_BUCKET"; do sleep 2; done
+      - run: cargo test --locked --test s3 -- --ignored --nocapture
+
+  aws:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    environment: bench
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-1
+      CHANGE_LOG_S3_BUCKET: ${{ vars.BENCH_BUCKET }}
+      CHANGE_LOG_S3_PREFIX: change-log-test/${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: storage/change_log
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: cargo test --locked --test s3 -- --ignored --nocapture

@@ -47,3 +47,9 @@ AWS_ENDPOINT_URL=http://127.0.0.1:59000 AWS_ACCESS_KEY_ID=nanashi \
 AWS_SECRET_ACCESS_KEY=nanashi-secret AWS_REGION=us-east-1 \
 uv run --with boto3 storage/s3/latency.py <bucket> <prefix> <out dir> --quick
 ```
+
+## 変更ログの S3 テスト
+
+Actions の `storage-change-log` を main で手で起動すると、`aws` ジョブが `storage/change_log/tests/s3.rs` を東京のバケットに対して流す。EC2 は使わず、GitHub のランナーから直接 S3 を読み書きする。キーは `change-log-test/<実行番号>-<試行>/` の下に置き、ほかのファイルと同じく7日で消える。
+
+ロール `bench-github` には、`change-log-test/*` の `s3:PutObject` と `s3:GetObject` と、そのプレフィックスでの `s3:ListBucket` が要る(`bench.tf`)。apply する前に起動すると、テストは 403 で失敗する。
