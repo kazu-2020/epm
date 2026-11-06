@@ -11,18 +11,11 @@ use object_store::{ObjectStore, PutMode};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::owner::{Alarm, Effect, Event, Owner, PutFailure, Request};
-use crate::segment::{Epoch, RequestId, Segment, Slot};
+use crate::segment::{Commit, Epoch, RequestId, Segment, Slot};
 
 pub struct Submission {
     pub request: Request,
-    pub acknowledged: oneshot::Sender<()>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FailPoint {
-    BeforePut,
-    BeforeReply,
-    BeforeAck,
+    pub acknowledged: oneshot::Sender<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,22 +23,22 @@ pub enum Exit {
     Stopped,
     Alarm(Alarm),
     Closed,
-    Crashed(FailPoint),
 }
 
+// shortcut: unbounded, so a slow engine never delays an ACK; bound it by the lag of the engine once the server measures it.
 pub async fn serve(
     store: Arc<dyn ObjectStore>,
     workspace: &str,
     epoch: Epoch,
     mut requests: mpsc::Receiver<Submission>,
-    mut crash: impl FnMut(FailPoint) -> bool,
+    committed: mpsc::UnboundedSender<Commit>,
 ) -> Exit {
     let log = Path::from(workspace).join("log");
     let mut owner = Owner::new(epoch);
     let mut io: FuturesUnordered<BoxFuture<'static, Result<Event, Alarm>>> =
         FuturesUnordered::new();
     io.push(load(Arc::clone(&store), log.clone()).boxed());
-    let mut waiters: BTreeMap<RequestId, Vec<oneshot::Sender<()>>> = BTreeMap::new();
+    let mut waiters: BTreeMap<RequestId, Vec<oneshot::Sender<u64>>> = BTreeMap::new();
     loop {
         let event = tokio::select! {
             biased;
@@ -61,11 +54,6 @@ pub async fn serve(
                 None => return Exit::Closed,
             },
         };
-        if matches!(event, Event::PutSucceeded { .. } | Event::PutFailed { .. })
-            && crash(FailPoint::BeforeReply)
-        {
-            return Exit::Crashed(FailPoint::BeforeReply);
-        }
         let mut effects = owner.step(event);
         effects.extend(owner.step(Event::Flush));
         for effect in effects {
@@ -75,22 +63,24 @@ pub async fn serve(
                     body,
                     attempt,
                 } => {
-                    if crash(FailPoint::BeforePut) {
-                        return Exit::Crashed(FailPoint::BeforePut);
-                    }
                     let put = put(Arc::clone(&store), key(&log, slot), slot, body, attempt);
                     io.push(put.map(Ok).boxed());
                 }
                 Effect::Get { slot } => {
                     io.push(read_back(Arc::clone(&store), key(&log, slot), slot).boxed());
                 }
-                Effect::Ack(request_id) => {
-                    if crash(FailPoint::BeforeAck) {
-                        return Exit::Crashed(FailPoint::BeforeAck);
+                Effect::Committed(commit) => {
+                    if committed.send(commit).is_err() {
+                        return Exit::Closed;
                     }
+                }
+                Effect::Ack {
+                    request_id,
+                    sequence,
+                } => {
                     for acknowledged in waiters.remove(&request_id).into_iter().flatten() {
                         // Not an error: a client that stopped waiting resends, and the view answers it.
-                        let _ = acknowledged.send(());
+                        let _ = acknowledged.send(sequence);
                     }
                 }
                 Effect::Stop => return Exit::Stopped,

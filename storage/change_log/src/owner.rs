@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use bytes::Bytes;
 
@@ -43,7 +43,11 @@ pub enum Effect {
     Get {
         slot: Slot,
     },
-    Ack(RequestId),
+    Committed(Commit),
+    Ack {
+        request_id: RequestId,
+        sequence: u64,
+    },
     Stop,
     Alarm(Alarm),
 }
@@ -86,7 +90,7 @@ struct Ready {
 
 #[derive(Debug, Default)]
 struct View {
-    request_ids: HashSet<RequestId>,
+    sequences: HashMap<RequestId, u64>,
     next_sequence: u64,
 }
 
@@ -171,7 +175,7 @@ fn transition(epoch: Epoch, phase: Phase, event: Event, effects: &mut Vec<Effect
             },
             Outcome::Committed(fence) => ready(view, next(fence.slot), waiting, effects),
             Outcome::OlderEpoch(taken, found) => {
-                view.add(&found.commits);
+                view.add(&found.commits, effects);
                 let fence = Write::new(epoch, next(taken.slot), Vec::new());
                 effects.push(fence.put());
                 Phase::Fencing {
@@ -203,10 +207,13 @@ fn transition(epoch: Epoch, phase: Phase, event: Event, effects: &mut Vec<Effect
             match advance(epoch, write, event, effects) {
                 Outcome::Waiting(write) => *cell = Some(write),
                 Outcome::Committed(write) => {
-                    for commit in &write.commits {
-                        effects.push(Effect::Ack(commit.request_id.clone()));
+                    ready.view.add(&write.commits, effects);
+                    for commit in write.commits {
+                        effects.push(Effect::Ack {
+                            request_id: commit.request_id,
+                            sequence: commit.sequence,
+                        });
                     }
-                    ready.view.add(&write.commits);
                 }
                 Outcome::OlderEpoch(write, found) => {
                     effects.push(Effect::Alarm(Alarm::OlderEpochAfterDataWrite {
@@ -236,7 +243,7 @@ fn load(
         return stop(effects);
     }
     let free = last.map_or(Slot(0), |(slot, _)| next(*slot));
-    let view = replay(slots);
+    let view = replay(slots, effects);
     if cfg!(feature = "no_fence") {
         return ready(view, free, waiting, effects);
     }
@@ -249,13 +256,13 @@ fn load(
     }
 }
 
-fn replay(slots: &BTreeMap<Slot, Segment>) -> View {
+fn replay(slots: &BTreeMap<Slot, Segment>, effects: &mut Vec<Effect>) -> View {
     let mut view = View::default();
     for (expected, (slot, segment)) in (0..).zip(slots) {
         if slot.0 != expected {
             break;
         }
-        view.add(&segment.commits);
+        view.add(&segment.commits, effects);
     }
     view
 }
@@ -324,8 +331,13 @@ fn advance(epoch: Epoch, mut write: Write, event: Event, effects: &mut Vec<Effec
 impl Ready {
     fn receive(&mut self, request: Request, effects: &mut Vec<Effect>) {
         let request_id = &request.request_id;
-        if !cfg!(feature = "no_deduplication") && self.view.request_ids.contains(request_id) {
-            effects.push(Effect::Ack(request.request_id));
+        if !cfg!(feature = "no_deduplication")
+            && let Some(&sequence) = self.view.sequences.get(request_id)
+        {
+            effects.push(Effect::Ack {
+                request_id: request.request_id,
+                sequence,
+            });
             return;
         }
         let in_batch = self.batch.iter().any(|held| held.request_id == *request_id);
@@ -366,10 +378,12 @@ impl Ready {
 }
 
 impl View {
-    fn add(&mut self, commits: &[Commit]) {
+    fn add(&mut self, commits: &[Commit], effects: &mut Vec<Effect>) {
         for commit in commits {
-            self.request_ids.insert(commit.request_id.clone());
+            self.sequences
+                .insert(commit.request_id.clone(), commit.sequence);
             self.next_sequence += 1;
+            effects.push(Effect::Committed(commit.clone()));
         }
     }
 }
@@ -429,6 +443,25 @@ mod tests {
         })
     }
 
+    fn commit(name: &'static str, sequence: u64) -> Commit {
+        Commit {
+            request_id: id(name),
+            sequence,
+            payload: Bytes::from_static(b"payload"),
+        }
+    }
+
+    fn committed(name: &'static str, sequence: u64) -> Effect {
+        Effect::Committed(commit(name, sequence))
+    }
+
+    fn ack(name: &'static str, sequence: u64) -> Effect {
+        Effect::Ack {
+            request_id: id(name),
+            sequence,
+        }
+    }
+
     fn put(effects: &[Effect]) -> (Slot, Segment, u32) {
         let puts: Vec<_> = effects
             .iter()
@@ -453,7 +486,7 @@ mod tests {
         effects
             .iter()
             .filter_map(|effect| match effect {
-                Effect::Ack(request_id) => Some(request_id.clone()),
+                Effect::Ack { request_id, .. } => Some(request_id.clone()),
                 _ => None,
             })
             .collect()
@@ -582,7 +615,7 @@ mod tests {
         assert_eq!(request_ids(&put(&effects).1), vec![id("r2")]);
         assert_eq!(
             owner.step_and_flush(request("r1")),
-            vec![Effect::Ack(id("r1"))],
+            vec![ack("r1", 0)],
             "in the view"
         );
     }
@@ -660,7 +693,7 @@ mod tests {
                 slot,
                 found: Some(written)
             }),
-            vec![Effect::Ack(id("r1"))]
+            vec![committed("r1", 0), ack("r1", 0)]
         );
 
         let (slot, _, _) = put(&owner.step_and_flush(request("r2")));
@@ -856,7 +889,7 @@ mod tests {
         assert_eq!(b.step_and_flush(store.put(slot, fence)), vec![]);
         assert_eq!(
             b.step_and_flush(request("r1")),
-            vec![Effect::Ack(id("r1"))],
+            vec![ack("r1", 0)],
             "B sees r1"
         );
         assert_eq!(store.replay(), vec![id("r1")]);
@@ -911,8 +944,51 @@ mod tests {
         );
         assert_eq!(
             owner.step_and_flush(store.read_back(slot)),
-            vec![Effect::Ack(id("r1"))]
+            vec![committed("r1", 0), ack("r1", 0)]
         );
         assert_eq!(store.replay(), vec![id("r1")]);
+    }
+
+    #[test]
+    fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
+        let mut store = Store::default();
+        store.put(
+            Slot(0),
+            Segment {
+                epoch: Epoch(1),
+                commits: vec![commit("r1", 0)],
+            },
+        );
+        let mut owner = Owner::new(Epoch(3));
+        let effects = owner.step_and_flush(store.loaded());
+        assert_eq!(effects[0], committed("r1", 0), "read on load");
+        let (fence_slot, fence, _) = put(&effects);
+        store.put(
+            fence_slot,
+            Segment {
+                epoch: Epoch(2),
+                commits: vec![commit("r2", 1)],
+            },
+        );
+        assert_eq!(
+            owner.step_and_flush(store.put(fence_slot, fence)),
+            vec![Effect::Get { slot: fence_slot }]
+        );
+        let effects = owner.step_and_flush(store.read_back(fence_slot));
+        assert_eq!(effects[0], committed("r2", 1), "found by the fence");
+        let (slot, fence, _) = put(&effects);
+        assert_eq!(owner.step_and_flush(store.put(slot, fence)), vec![]);
+
+        let (slot, segment, _) = put(&owner.step_and_flush(request("r3")));
+        assert_eq!(
+            owner.step_and_flush(store.put(slot, segment)),
+            vec![committed("r3", 2), ack("r3", 2)],
+            "own write"
+        );
+        assert_eq!(
+            owner.step_and_flush(request("r2")),
+            vec![ack("r2", 1)],
+            "a resend is acknowledged with its first sequence"
+        );
     }
 }

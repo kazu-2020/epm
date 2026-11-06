@@ -90,7 +90,7 @@ fn seeds_keep_the_invariants() {
     if seeds.len() >= 100 {
         let expected = [
             "commitAfterHandover",
-            "crashAtFailPoint",
+            "crashAfterApplyBeforeReply",
             "fenceMovedPastOldOwner",
             "oldOwnerStopped",
             "sameBytesResent",
