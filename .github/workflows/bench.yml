@@ -15,7 +15,7 @@ on:
         options: [r7i.2xlarge, r7i.16xlarge]
         default: r7i.2xlarge
       scales:
-        description: Data sizes as multiples of the 100 million cells, separated by spaces (1 also runs hyperfine and edit)
+        description: Multiples of the quantity cells of the representative model, separated by spaces (1 is about 100 million cells in all, and also runs hyperfine and edit)
         default: "1"
       minutes:
         description: Minutes before the instance stops itself (30 to 140)
@@ -85,9 +85,9 @@ jobs:
       - name: Check the inputs
         run: |
           [[ "$SCALES" =~ ^[1-9][0-9]*( [1-9][0-9]*)*$ ]] || exit 1
-          [[ "$MINUTES" =~ ^[0-9]+$ ]] || exit 1
+          [[ "$MINUTES" =~ ^[1-9][0-9]*$ ]] || exit 1
           [ "$MINUTES" -ge 30 ] && [ "$MINUTES" -le 140 ] || exit 1
-          [[ "$VOLUME" =~ ^[0-9]+$ ]] || exit 1
+          [[ "$VOLUME" =~ ^[1-9][0-9]*$ ]] || exit 1
           [ "$VOLUME" -ge 30 ] && [ "$VOLUME" -le 500 ] || exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
