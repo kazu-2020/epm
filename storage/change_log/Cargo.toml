@@ -1,0 +1,31 @@
+[package]
+name = "change_log"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[features]
+blind_put = []
+unknown_as_success = []
+no_deduplication = []
+no_inflight_deduplication = []
+no_fence = []
+no_epoch_check = []
+two_in_flight = []
+rejected_as_fenced = []
+
+[dependencies]
+bytes = "1.12.1"
+futures-util = "0.3.34"
+object_store = { version = "0.14.2", default-features = false }
+tokio = { version = "1.54.1", features = ["macros", "sync", "time"] }
+
+[dev-dependencies]
+async-trait = "0.1.92"
+object_store = { version = "0.14.2", default-features = false, features = ["aws"] }
+tokio = { version = "1.54.1", features = ["rt", "test-util"] }
+
+[profile.mutants]
+inherits = "test"
+debug = "none"

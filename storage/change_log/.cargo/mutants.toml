@@ -1,0 +1,10 @@
+profile = "mutants"
+exclude_re = [
+    # Not tested: these comparisons run only in the builds with a mutation feature.
+    "replace == with != in advance",
+    # Not tested: these only change how long a retry waits before it runs.
+    "replace > with (==|<|>=) in put",
+    "replace \\+= with \\*= in (load|read)",
+    "replace backoff -> Duration",
+    "replace \\* with / in backoff",
+]

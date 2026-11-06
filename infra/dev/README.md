@@ -34,7 +34,7 @@ Actions の `bench` を手で起動する。SHA を空にすると、起動す�
 
 ## S3 のレイテンシの測定
 
-Actions の `s3-latency` を main で手で起動する。変更ログ(方式 A)が使う S3 の要求を、東京の EC2 から測る。`storage/s3/latency.py` を同じ起動テンプレートの EC2 で動かし、バケットの `latency/` に書いて読む。結果は `bench` と同じく S3 の `results/` に置き、実行ページの要約と artifact に残す。
+Actions の `s3-latency` を main で手で起動する。変更ログが使う S3 の要求を、東京の EC2 から測る。`storage/s3/latency.py` を同じ起動テンプレートの EC2 で動かし、バケットの `latency/` に書いて読む。結果は `bench` と同じく S3 の `results/` に置き、実行ページの要約と artifact に残す。
 
 - 測るもの: 新しいキーへの If-None-Match の PUT(1KB・100KB・10MB、各1,000回)と GET、4KB の PUT を毎秒1回と10回で各5分、既にあるキーへの PUT の 412 とそのあとの HEAD、8 writer が同じキーに同時に書いたときの結果、`start-after` 付きの LIST(1,000 と 10,000 キー)、1GB と 10GB の range GET の速さ。
 - SDK の再試行は切る。小さい要求の1回の timeout は1秒にする。
@@ -47,3 +47,9 @@ AWS_ENDPOINT_URL=http://127.0.0.1:59000 AWS_ACCESS_KEY_ID=nanashi \
 AWS_SECRET_ACCESS_KEY=nanashi-secret AWS_REGION=us-east-1 \
 uv run --with boto3 storage/s3/latency.py <bucket> <prefix> <out dir> --quick
 ```
+
+## 変更ログの S3 テスト
+
+Actions の `storage-change-log` を main で手で起動すると、`aws` ジョブが `storage/change_log/tests/s3.rs` を東京のバケットに対して流す。EC2 は使わず、GitHub のランナーから直接 S3 を読み書きする。キーは `change-log-test/<実行番号>-<試行>/` の下に置き、ほかのファイルと同じく7日で消える。
+
+ロール `bench-github` には、`change-log-test/*` の `s3:PutObject` と `s3:GetObject` と、そのプレフィックスでの `s3:ListBucket` が要る(`bench.tf`)。apply する前に起動すると、テストは 403 で失敗する。
