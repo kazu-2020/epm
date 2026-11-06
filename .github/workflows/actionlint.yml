@@ -13,6 +13,11 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    container:
+      image: rhysd/actionlint:1.7.12
+      # The image runs as guest, and the runner writes its files in /__w as root.
+      options: --user root
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+      # The image has no git, so checkout makes no .git and actionlint cannot find the workflows by itself.
+      - run: actionlint -color .github/workflows/*.y*ml
