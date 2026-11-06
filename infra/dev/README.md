@@ -30,7 +30,7 @@ Actions の `bench` を手で起動する。SHA を空にすると、起動す�
 
 ## EC2 での測定の共通の手順
 
-`bench` と `s3-latency` の EC2 を使うジョブは、どちらも再利用 workflow `.github/workflows/ec2.yml` を呼ぶ。このジョブは S3 の `bin/` へのファイルの配置、user-data の組み立て、起動、結果待ち、終了、要約と artifact を受け持つ。EC2 の前半(`shutdown`、結果を S3 に置く `finish`、AWS CLI の準備、`bin/` の取得)は `.github/ec2/prelude.sh` にまとめ、測定ごとのスクリプトはその続きだけを書く。`ec2.yml` は、入力の分数が30分以上で結果を待つ時間より10分以上短いこと、結果を待つ時間 < ジョブの時間 < 180分(ロールのセッション)であることを確かめる。3つ目の測定を足すときは、この workflow を呼ぶ。
+`bench` と `s3-latency` の EC2 を使うジョブは、どちらも再利用 workflow `.github/workflows/ec2.yml` を呼ぶ。このジョブは S3 の `bin/` へのファイルの配置、user-data の組み立て、起動、結果待ち、終了、要約と artifact を受け持つ。EC2 の前半(`shutdown`、結果を S3 に置く `finish`、AWS CLI の準備、`bin/` の取得、shutdown までの残り時間の計算)は `.github/ec2/prelude.sh` にまとめ、測定ごとのスクリプトはその続きだけを書く。`ec2.yml` は、入力の分数が30分以上で結果を待つ時間より10分以上短いこと、結果を待つ時間 < ジョブの時間 < 180分(ロールのセッション)であることを確かめる。3つ目の測定を足すときは、この workflow を呼ぶ。
 
 ## S3 のレイテンシの測定
 

@@ -65,13 +65,13 @@ jobs:
       MINUTES: ${{ inputs.minutes }}
       WAIT_MINUTES: ${{ inputs.wait-minutes }}
       JOB_MINUTES: ${{ inputs.job-minutes }}
+      ROLE_SECONDS: 10800
     steps:
-      # The order of the time limits in infra/dev/README.md. The role session is 180 minutes.
       - name: Check the time limits
         run: |
           [[ "$MINUTES" =~ ^[1-9][0-9]*$ ]] || exit 1
           [ "$MINUTES" -ge 30 ] && [ "$MINUTES" -le $((WAIT_MINUTES - 10)) ] || exit 1
-          [ "$WAIT_MINUTES" -lt "$JOB_MINUTES" ] && [ "$JOB_MINUTES" -lt 180 ] || exit 1
+          [ "$WAIT_MINUTES" -lt "$JOB_MINUTES" ] && [ $((JOB_MINUTES * 60)) -lt "$ROLE_SECONDS" ] || exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -84,7 +84,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-duration-seconds: 10800
+          role-duration-seconds: ${{ env.ROLE_SECONDS }}
       - name: Upload the files
         env:
           PATHS: ${{ inputs.files }}

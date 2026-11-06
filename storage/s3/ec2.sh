@@ -9,5 +9,4 @@ for item in instance-type placement/availability-zone; do
     echo "$item: $(curl -sH "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$item")"
 done > out/machine.txt
 
-# Not limited by the shutdown alone: the shutdown stops the network before finish can upload the results.
-timeout "$(( (MINUTES - 10) * 60 - SECONDS ))s" /root/venv/bin/python bin/latency.py "$BUCKET" "latency/$RUN" out
+timeout "$(time_before_shutdown 10)" /root/venv/bin/python bin/latency.py "$BUCKET" "latency/$RUN" out

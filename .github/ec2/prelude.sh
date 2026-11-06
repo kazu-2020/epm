@@ -21,3 +21,7 @@ apt-get -o DPkg::Lock::Timeout=600 update
 cd /root
 aws s3 cp --recursive "s3://$BUCKET/bin/$RUN/" bin/
 chmod -R +x bin
+
+# Not limited by the shutdown alone: the shutdown stops the network before finish can upload the results.
+# Not N minutes before the shutdown counted from the call: the shutdown counts from the start of this script, and the setup uses up part of it.
+time_before_shutdown() { echo "$(( (MINUTES - $1) * 60 - SECONDS ))s"; }
