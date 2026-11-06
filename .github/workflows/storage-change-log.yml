@@ -3,9 +3,9 @@ name: storage-change-log
 on:
   push:
     branches: [main]
-    paths: ["storage/change_log/**", ".github/workflows/storage-change-log.yml"]
+    paths: ["storage/change_log/**", "storage/quint/**", ".github/workflows/storage-change-log.yml"]
   pull_request:
-    paths: ["storage/change_log/**", ".github/workflows/storage-change-log.yml"]
+    paths: ["storage/change_log/**", "storage/quint/**", ".github/workflows/storage-change-log.yml"]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,7 @@ jobs:
           workspaces: storage/change_log
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: npm install -g @informalsystems/quint@0.33.1
       - run: cargo test --locked
 
   rustfs:

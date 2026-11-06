@@ -66,7 +66,9 @@ pub async fn serve(
         {
             return Exit::Crashed(FailPoint::BeforeReply);
         }
-        for effect in owner.step(event) {
+        let mut effects = owner.step(event);
+        effects.extend(owner.step(Event::Flush));
+        for effect in effects {
             match effect {
                 Effect::Put {
                     slot,
