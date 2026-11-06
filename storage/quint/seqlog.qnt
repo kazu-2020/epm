@@ -21,7 +21,7 @@ module seqlog {
   pure val MaxResends = 1
   pure val MaxInFlight = 2
 
-  // The epoch is in the object metadata, not in the key: the slot number alone is what two owners fight for.
+  // The epoch is at the start of the segment body, not in the key: the slot number alone is what two owners fight for.
   // One epoch has one owner, so the epoch also tells whose write it is.
   type Slot = { epoch: int, requests: List[str] }
   type Write = { server: str, slot: int, epoch: int, requests: List[str], attempt: int }
