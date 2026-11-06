@@ -11,6 +11,7 @@ Local run against RustFS (only to check the script, not the numbers):
 import collections
 import concurrent.futures
 import json
+import math
 import pathlib
 import sys
 import time
@@ -31,16 +32,15 @@ LIST_ROUNDS = 10 if QUICK else 200
 BIG_MB = (8, 16) if QUICK else (1024, 10 * 1024)
 
 # No retries: a retry hides the tail, and a retried write whose first attempt succeeded returns 412.
-# Timeout of 1 second for one attempt, as the commit path will use (Fable opinion, 4.1).
 fast = boto3.client(
     "s3",
     config=botocore.config.Config(
         retries={"total_max_attempts": 1}, connect_timeout=1, read_timeout=1, max_pool_connections=64
     ),
 )
-slow = boto3.client(
-    "s3", config=botocore.config.Config(retries={"total_max_attempts": 1}, max_pool_connections=128)
-)
+slow = boto3.client("s3", config=botocore.config.Config(retries={"total_max_attempts": 1}, max_pool_connections=128))
+# Not the measured clients: a failed setup request must not stop the run.
+setup = boto3.client("s3", config=botocore.config.Config(retries={"mode": "standard"}, max_pool_connections=32))
 results: dict[str, dict] = {}
 
 
@@ -52,28 +52,31 @@ def position(n: int) -> str:
     return f"{n:020d}.seg"
 
 
-def timed(call) -> tuple[float, int]:
+def timed(call) -> tuple[float, int | str]:
     start = time.perf_counter()
     try:
         call()
         code = 200
     except botocore.exceptions.ClientError as error:
         code = error.response["ResponseMetadata"]["HTTPStatusCode"]
-    except (botocore.exceptions.ConnectionError, botocore.exceptions.ReadTimeoutError):
+    except botocore.exceptions.BotoCoreError:
         code = 0
     return (time.perf_counter() - start) * 1000, code
 
 
 def percentile(sorted_values: list[float], p: float) -> float:
-    return sorted_values[min(len(sorted_values) - 1, int(p * len(sorted_values)))]
+    return sorted_values[max(0, math.ceil(p * len(sorted_values)) - 1)]
 
 
-def record(name: str, samples: list[tuple[float, int]], **extra) -> None:
+def record(name: str, samples: list[tuple[float, int | str]], **extra) -> None:
     times = sorted(ms for ms, _ in samples)
     results[name] = {
         "count": len(samples),
         "codes": dict(collections.Counter(str(code) for _, code in samples)),
-        **{f"p{label}": round(percentile(times, p), 1) for label, p in [("50", 0.5), ("90", 0.9), ("99", 0.99), ("999", 0.999)]},
+        **{
+            f"p{label}": round(percentile(times, p), 1)
+            for label, p in [("50", 0.5), ("90", 0.9), ("99", 0.99), ("999", 0.999)]
+        },
         "max": round(times[-1], 1),
         **extra,
         "ms": [round(ms, 2) for ms, _ in samples],
@@ -107,12 +110,15 @@ def sizes() -> None:
         client = slow if size > 1024 * 1024 else fast
         body = b"x" * size
         keys = [key("size", label, position(n)) for n in range(COUNT)]
-        record(f"put-if-none-match-{label}", [timed(put_new(client, k, body)) for k in keys], note="new keys, one at a time")
+        record(
+            f"put-if-none-match-{label}",
+            [timed(put_new(client, k, body)) for k in keys],
+            note="new keys, one at a time",
+        )
 
-        def get(k=None):
-            return lambda: client.get_object(Bucket=BUCKET, Key=k)["Body"].read()
-
-        record(f"get-{label}", [timed(get(k)) for k in keys])
+        record(
+            f"get-{label}", [timed(lambda k=k: client.get_object(Bucket=BUCKET, Key=k)["Body"].read()) for k in keys]
+        )
 
 
 def rates() -> None:
@@ -140,8 +146,10 @@ def race() -> None:
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
             replies = list(pool.map(lambda b: timed(put_new(fast, k, b))[1], bodies))
         outcomes[str(sorted(replies))] += 1
-        stored = fast.get_object(Bucket=BUCKET, Key=k)["Body"].read()
-        if replies.count(200) == 1 and stored == bodies[replies.index(200)]:
+        if (
+            replies.count(200) == 1
+            and setup.get_object(Bucket=BUCKET, Key=k)["Body"].read() == bodies[replies.index(200)]
+        ):
             winner_read_back += 1
     results["race-8-writers-same-key"] = {
         "note": f"{RACE_ROUNDS} rounds, outcomes {dict(outcomes)}, rounds with one 200 and its body stored: {winner_read_back}",
@@ -158,7 +166,7 @@ def conflict_then_head() -> None:
         head = timed(lambda: fast.head_object(Bucket=BUCKET, Key=k))
         conflicts.append(conflict)
         heads.append(head)
-        both.append((conflict[0] + head[0], max(conflict[1], head[1])))
+        both.append((conflict[0] + head[0], f"{conflict[1]}+{head[1]}"))
     record("put-if-none-match-existing-key", conflicts, note="expect 412")
     record("head-after-412", heads)
     record("412-then-head", both, note="sum of the two, the in-doubt path")
@@ -169,7 +177,7 @@ def lists() -> None:
     for size in LIST_KEYS:
         keys = [key("list", size, position(n)) for n in range(size)]
         with concurrent.futures.ThreadPoolExecutor(32) as pool:
-            list(pool.map(lambda k: fast.put_object(Bucket=BUCKET, Key=k, Body=body), keys))
+            list(pool.map(lambda k: setup.put_object(Bucket=BUCKET, Key=k, Body=body), keys))
         prefix = key("list", size) + "/"
         tail = keys[-11].removeprefix(prefix)
 
@@ -188,8 +196,16 @@ def lists() -> None:
                 token = {"ContinuationToken": reply["NextContinuationToken"]}
             assert found == size, found
 
-        record(f"list-{size}-keys-start-after-tail", [timed(list_tail) for _ in range(LIST_ROUNDS)], note="returns the last 10 keys")
-        record(f"list-{size}-keys-all-pages", [timed(list_all) for _ in range(LIST_ROUNDS)], note="all pages, one after another")
+        record(
+            f"list-{size}-keys-start-after-tail",
+            [timed(list_tail) for _ in range(LIST_ROUNDS)],
+            note="returns the last 10 keys",
+        )
+        record(
+            f"list-{size}-keys-all-pages",
+            [timed(list_all) for _ in range(LIST_ROUNDS)],
+            note="all pages, one after another",
+        )
 
 
 def range_get() -> None:

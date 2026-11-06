@@ -30,4 +30,5 @@ for item in instance-type placement/availability-zone; do
 done > out/machine.txt
 
 # Not limited by the shutdown alone: the shutdown stops the network before finish can upload the results.
-timeout "$((MINUTES - 10))m" /root/venv/bin/python latency.py "$BUCKET" "latency/$RUN" out
+# Not MINUTES - 10 from now: the shutdown counts from boot, and the setup above can take minutes.
+timeout "$((MINUTES * 60 - 600 - $(cut -d. -f1 /proc/uptime)))s" /root/venv/bin/python latency.py "$BUCKET" "latency/$RUN" out
