@@ -880,7 +880,7 @@ impl Columns {
                     .zip(seen.par_chunks_mut(share))
                     .enumerate()
                     .for_each(|(owner, (totals, seen))| {
-                        // Not a write to the shared `totals` and `seen` per row: with a few slots, owners share cache lines and wait for each other on every row.
+                        // Not a write per row to the shared `totals` and `seen`: with few slots, owners share cache lines and wait for each other.
                         let mut own_totals = vec![0.0; totals.len()];
                         let mut own_seen = vec![false; seen.len()];
                         for (&slot, &value) in slots.iter().zip(&self.values[..]) {
