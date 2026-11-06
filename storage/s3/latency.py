@@ -39,8 +39,9 @@ fast = boto3.client(
     ),
 )
 slow = boto3.client("s3", config=botocore.config.Config(retries={"total_max_attempts": 1}, max_pool_connections=128))
-# Not the measured clients: a failed setup request must not stop the run.
-setup = boto3.client("s3", config=botocore.config.Config(retries={"mode": "standard"}, max_pool_connections=32))
+setup_with_retries = boto3.client(
+    "s3", config=botocore.config.Config(retries={"mode": "standard"}, max_pool_connections=32)
+)
 results: dict[str, dict] = {}
 
 
@@ -148,7 +149,7 @@ def race() -> None:
         outcomes[str(sorted(replies))] += 1
         if (
             replies.count(200) == 1
-            and setup.get_object(Bucket=BUCKET, Key=k)["Body"].read() == bodies[replies.index(200)]
+            and setup_with_retries.get_object(Bucket=BUCKET, Key=k)["Body"].read() == bodies[replies.index(200)]
         ):
             winner_read_back += 1
     results["race-8-writers-same-key"] = {
@@ -177,7 +178,7 @@ def lists() -> None:
     for size in LIST_KEYS:
         keys = [key("list", size, position(n)) for n in range(size)]
         with concurrent.futures.ThreadPoolExecutor(32) as pool:
-            list(pool.map(lambda k: setup.put_object(Bucket=BUCKET, Key=k, Body=body), keys))
+            list(pool.map(lambda k: setup_with_retries.put_object(Bucket=BUCKET, Key=k, Body=body), keys))
         prefix = key("list", size) + "/"
         tail = keys[-11].removeprefix(prefix)
 
