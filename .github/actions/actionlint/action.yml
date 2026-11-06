@@ -1,0 +1,6 @@
+name: actionlint
+description: Check the workflows with actionlint and the shellcheck in its image
+runs:
+  using: docker
+  image: Dockerfile
+  args: [-color]
