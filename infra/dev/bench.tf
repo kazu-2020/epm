@@ -115,7 +115,7 @@ resource "aws_iam_role_policy" "bench_instance" {
         Action   = "s3:ListBucket"
         Resource = aws_s3_bucket.bench.arn
         Condition = {
-          StringLike = { "s3:prefix" = "bin/*" }
+          StringLike = { "s3:prefix" = ["bin/*", "latency/*"] }
         }
       },
       {
@@ -127,6 +127,11 @@ resource "aws_iam_role_policy" "bench_instance" {
         Effect   = "Allow"
         Action   = "s3:PutObject"
         Resource = "${aws_s3_bucket.bench.arn}/results/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject"]
+        Resource = "${aws_s3_bucket.bench.arn}/latency/*"
       },
     ]
   })
