@@ -113,7 +113,7 @@ jobs:
             disk=(--block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=$VOLUME,VolumeType=gp3,DeleteOnTermination=true,Encrypted=true}")
           fi
           aws ec2 run-instances \
-            --launch-template 'LaunchTemplateName=bench,Version=$Latest' \
+            --launch-template "LaunchTemplateName=bench,Version=\$Latest" \
             --instance-type "$INSTANCE_TYPE" \
             "${disk[@]}" \
             --user-data file://user-data.sh \
