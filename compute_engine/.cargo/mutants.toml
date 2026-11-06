@@ -40,6 +40,8 @@ exclude_re = [
     "replace Evaluator<[^>]*>::count_uses -> Result<\\(\\), EvaluateError> with Ok\\(\\(\\)\\)",
     "replace \\+= with \\*= in Evaluator<[^>]*>::count_uses",
     "replace > with (<|>=) in Evaluator<[^>]*>::node",
+    # Not tested: a capacity hint only changes how much memory is reserved, so no test sees it.
+    "replace \\+ with [-*] in Measure::compact",
 ]
 # Not mutated: bench, datagen and oracle are tools, not engine code. No test can tell datagen mutants apart, each oracle mutant relinks DuckDB and reruns the property test, and bench only drives the engines.
 exclude_globs = ["bench/**", "datagen/**", "oracle/**"]

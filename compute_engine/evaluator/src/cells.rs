@@ -120,7 +120,6 @@ impl Cells {
             }
         }
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
-        // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
         let creates_cells = |term: &Cells| !any_full || term.axes.len() == axes.len();
         let mut coordinates: HashSet<Vec<MemberId>> = HashSet::new();
         for (_, term) in &terms {
@@ -211,7 +210,6 @@ impl Cells {
         });
         let mut groups: HashMap<Vec<MemberId>, f64> = HashMap::new();
         for (coordinate, &value) in cells {
-            // Not a group of its own: the design document drops a member whose attribute is null from the sum.
             let group: Option<Vec<MemberId>> = by
                 .iter()
                 .map(|axis| {

@@ -26,6 +26,14 @@ storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少な�
 
 終了コードが 1 なら、次のどれかが起きた。設計どおりのモデル(`s3`、`postgres`)で性質が破れた。到達するはずの状態に届かなかった。守りを外したモデルで、`check.sh` の `breaks` に書いた性質が破れなかった、または `holds` と `log_safe_without_guard` の性質が破れた。反例の手順は `quint run storage.qnt --main s3 --invariant <性質> --mbt` で見る(`mbt::actionTaken` に各ステップの操作が出る)。
 
+モデルが前提にする条件付き書き込みの応答は、RustFS で次のように実測する。
+
+```sh
+AWS_ENDPOINT_URL=http://127.0.0.1:59000 AWS_ACCESS_KEY_ID=nanashi \
+AWS_SECRET_ACCESS_KEY=nanashi-secret AWS_REGION=us-east-1 \
+uv run --with boto3 storage/rustfs/conditional_write.py
+```
+
 ## 検査する性質
 
 | 名前 | 意味 |

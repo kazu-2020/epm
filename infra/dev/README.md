@@ -35,3 +35,11 @@ Actions の `s3-latency` を main で手で起動する。変更ログ(方式 A)
 - 測るもの: 新しいキーへの If-None-Match の PUT(1KB・100KB・10MB、各1,000回)と GET、4KB の PUT を毎秒1回と10回で各5分、既にあるキーへの PUT の 412 とそのあとの HEAD、8 writer が同じキーに同時に書いたときの結果、`start-after` 付きの LIST(1,000 と 10,000 キー)、1GB と 10GB の range GET の速さ。
 - SDK の再試行は切る。小さい要求の1回の timeout は1秒にする。
 - 時間の上限は、測定の `timeout`(入力の分数 − 10分)< EC2 の `shutdown`(入力の分数、30〜90分)< 結果を待つステップ(100分)< ジョブ(120分)の順にする。
+
+スクリプトだけを手元の RustFS で確かめるときは次のように動かす。数字は参考にならない。
+
+```sh
+AWS_ENDPOINT_URL=http://127.0.0.1:59000 AWS_ACCESS_KEY_ID=nanashi \
+AWS_SECRET_ACCESS_KEY=nanashi-secret AWS_REGION=us-east-1 \
+uv run --with boto3 storage/s3/latency.py <bucket> <prefix> <out dir> --quick
+```

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Usage: storage/quint/check.sh [samples]
 set -euo pipefail
 cd "$(dirname "$0")"
 samples="${1:-50000}"
@@ -11,7 +10,6 @@ breaks=(
   s3_no_epoch_check:staleEpochNeverCommits
   postgres_unknown_as_success:refinesChangeLog postgres_no_deduplication:refinesChangeLog
 )
-# On PostgreSQL the lease check in the commit transaction does the work of these guards.
 holds=(postgres_segment_key_without_epoch postgres_no_epoch_check)
 log_safe_without_guard=(s3_no_fence s3_no_epoch_check)
 scenarios=(postgres_blind_write s3_segment_key_without_epoch)
