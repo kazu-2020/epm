@@ -13,6 +13,11 @@ module seqlog_no_deduplication {
   import seqlog(guards = { ...allGuards, deduplication: false }).* from "./seqlog"
 }
 
+module seqlog_no_inflight_deduplication {
+  import seqlog_design.* from "./seqlog"
+  import seqlog(guards = { ...allGuards, inFlightDeduplication: false }).* from "./seqlog"
+}
+
 module seqlog_no_fence {
   import seqlog_design.* from "./seqlog"
   import seqlog(guards = { ...allGuards, fence: false }).* from "./seqlog"
@@ -48,4 +53,20 @@ module seqlog_two_in_flight {
 module seqlog_rejected_as_fenced {
   import seqlog_design.* from "./seqlog"
   import seqlog(guards = { ...allGuards, headsAfterRejection: false }).* from "./seqlog"
+
+  run ownResendRejectedTest =
+    init
+      .then(all { ghost, grant("A") })
+      .then(all { ghost, load("A") })
+      .then(applyOne)
+      .then(replyOne)
+      .then(all { ghost, send("A", "r1") })
+      .then(all { ghost, receive("A", "r1") })
+      .then(all { ghost, flush("A") })
+      .then(all { ghost, timeout("A") })
+      .then(all { ghost, resolve("A") })
+      .then(nondet write = store.writesInFlight.filter(w => w.attempt == 0).oneOf() all { ghost, apply(write, true) })
+      .then(nondet write = store.writesInFlight.filter(w => w.attempt == 1).oneOf() all { ghost, apply(write, false) })
+      .then(replyOne)
+      .expect(servers.get("A").phase == Stopped and replay(store.slots) == List("r1") and clients.acknowledged == Set())
 }

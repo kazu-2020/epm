@@ -1,11 +1,11 @@
 module seqlog_design {
   type Guards = {
-    ifNoneMatch: bool, readsBackUnknown: bool, deduplication: bool, fence: bool, epochCheck: bool, oneInFlight: bool,
-    headsAfterRejection: bool,
+    ifNoneMatch: bool, readsBackUnknown: bool, deduplication: bool, inFlightDeduplication: bool, fence: bool,
+    epochCheck: bool, oneInFlight: bool, headsAfterRejection: bool,
   }
   pure val allGuards: Guards = {
-    ifNoneMatch: true, readsBackUnknown: true, deduplication: true, fence: true, epochCheck: true, oneInFlight: true,
-    headsAfterRejection: true,
+    ifNoneMatch: true, readsBackUnknown: true, deduplication: true, inFlightDeduplication: true, fence: true,
+    epochCheck: true, oneInFlight: true, headsAfterRejection: true,
   }
 }
 
@@ -110,7 +110,8 @@ module seqlog {
     val self = servers.get(server)
     val message = { server: server, request: request }
     val received = { ...clients, requestsInFlight: clients.requestsInFlight.exclude(Set(message)) }
-    val held = self.batch.toSet().union(self.pending.map(p => p.write.requests.toSet()).flatten())
+    val inFlight = if (guards.inFlightDeduplication) self.pending.map(p => p.write.requests.toSet()).flatten() else Set()
+    val held = self.batch.toSet().union(inFlight)
     all {
       clients.requestsInFlight.contains(message),
       self.phase == Ready,
@@ -202,7 +203,7 @@ module seqlog {
     val refence = { ...write, slot: write.slot + 1, attempt: 0 }
     val resend = not(taken) and write.attempt < MaxResends
     val own = taken and found.epoch == write.epoch
-    val oldOwnerTookFenceSlot = taken and found.epoch < self.epoch and isFence(write)
+    val oldOwnerTookFenceSlot = taken and found.epoch < write.epoch and isFence(write)
     all {
       if (not(taken)) replace(server, self, write, { write: if (resend) again else write, unknown: false })
       else if (own) succeed(server, self, write)
@@ -242,6 +243,22 @@ module seqlog {
   val staleEpochNeverCommits: bool = store.slots.keys().forall(i =>
     store.slots.keys().forall(j => i < j implies store.slots.get(i).epoch <= store.slots.get(j).epoch))
 
+  // A 412 is resolved by the epoch alone, so one epoch must never write two contents to one slot.
+  val oneContentPerSlotPerEpoch: bool = {
+    val everyWrite = store.writesInFlight.union(store.replies.map(r => r.write)).union(
+      servers.keys().map(s => servers.get(s).pending.map(p => p.write)).flatten())
+    and {
+      everyWrite.forall(w => everyWrite.forall(v => (w.slot == v.slot and w.epoch == v.epoch) implies w.requests == v.requests)),
+      store.slots.keys().forall(i => everyWrite.forall(w =>
+        (w.slot == i and w.epoch == store.slots.get(i).epoch) implies w.requests == store.slots.get(i).requests)),
+    }
+  }
+
+  val dataWriteNeverSeesOlderEpoch: bool = servers.keys().forall(s =>
+    servers.get(s).pending.forall(p =>
+      (p.unknown and not(isFence(p.write)) and store.slots.keys().contains(p.write.slot))
+        implies store.slots.get(p.write.slot).epoch >= p.write.epoch))
+
   val slotsContiguous: bool = store.slots.keys().forall(i => i >= 0 and i < store.slots.keys().size())
 
   val newestOwnerSeesAcknowledged: bool = servers.keys().forall(server =>
@@ -278,11 +295,29 @@ module seqlog {
       .then(replyOne)
       .expect(and {
         servers.get("B").phase == Ready,
+        servers.get("B").view == List("r1"),
         clients.acknowledged == Set("r1"),
         replay(store.slots) == List("r1"),
         store.slots.get(2) == { epoch: 2, requests: List() },
         refinesChangeLog, newestOwnerSeesAcknowledged, staleEpochNeverCommits,
       })
+
+  run ownResendAcknowledgedTest =
+    init
+      .then(all { ghost, grant("A") })
+      .then(all { ghost, load("A") })
+      .then(applyOne)
+      .then(replyOne)
+      .then(all { ghost, send("A", "r1") })
+      .then(all { ghost, receive("A", "r1") })
+      .then(all { ghost, flush("A") })
+      .then(all { ghost, timeout("A") })
+      .then(all { ghost, resolve("A") })
+      .then(nondet write = store.writesInFlight.filter(w => w.attempt == 0).oneOf() all { ghost, apply(write, true) })
+      .then(nondet write = store.writesInFlight.filter(w => w.attempt == 1).oneOf() all { ghost, apply(write, false) })
+      .then(replyOne)
+      .then(all { ghost, resolve("A") })
+      .expect(servers.get("A").phase == Ready and clients.acknowledged == Set("r1") and refinesChangeLog)
 }
 
 module seqlog_designed {

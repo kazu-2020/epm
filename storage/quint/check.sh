@@ -16,9 +16,10 @@ holds=(postgres_segment_key_without_epoch postgres_no_epoch_check)
 log_safe_without_guard=(s3_no_fence s3_no_epoch_check)
 scenarios=(postgres_blind_write s3_segment_key_without_epoch)
 
-seqlog_invariants=(refinesChangeLog segmentsNeverChange staleEpochNeverCommits slotsContiguous newestOwnerSeesAcknowledged)
+seqlog_invariants=(refinesChangeLog segmentsNeverChange staleEpochNeverCommits slotsContiguous newestOwnerSeesAcknowledged oneContentPerSlotPerEpoch dataWriteNeverSeesOlderEpoch)
 seqlog_breaks=(
   seqlog_blind_put:refinesChangeLog seqlog_unknown_as_success:refinesChangeLog seqlog_no_deduplication:refinesChangeLog
+  seqlog_no_inflight_deduplication:refinesChangeLog
   seqlog_no_fence:newestOwnerSeesAcknowledged
   seqlog_blind_put:segmentsNeverChange
   seqlog_no_epoch_check:staleEpochNeverCommits
@@ -48,7 +49,8 @@ quint typecheck mutations.qnt
 quint typecheck seqlog.qnt
 quint typecheck seqlog_mutations.qnt
 quint test seqlog.qnt --main seqlog_designed
-quint test seqlog_mutations.qnt --main seqlog_two_in_flight
+quint test seqlog_mutations.qnt --main seqlog_two_in_flight --match pipelineAcknowledgesPastHoleTest
+quint test seqlog_mutations.qnt --main seqlog_rejected_as_fenced --match ownResendRejectedTest
 for module in "${scenarios[@]}"; do
   quint test mutations.qnt --main "$module"
 done

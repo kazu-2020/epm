@@ -50,6 +50,7 @@ storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少な�
 | 1つの担当は、同じセグメントのキーに別の中身を書かない。再起動した担当は、前と同じエポックを使わない(配置コントローラーから新しいエポックをもらう) | 設計の約束。モデルの担当は結果が分からなければ待ち続け、`segmentsNeverChange` でキーを使い回さないことを確かめた |
 | 担当の交代は配置コントローラーがエポックを1つ増やして行う。古い担当は交代を知らないまま動き続けうる | 設計ドキュメント「変更ログ」タブ(エポック、システムのログ)。SlateDB の manifest RFC(writer epoch) |
 | PostgreSQL 案では、ログの追記とリースのエポックの検査を1つのトランザクションで行う | nanashi の `PgJournal`(世代番号とリース) |
+| 同時の条件付き書き込みで S3 が返す 409 ConditionalRequestConflict は、結果不明と同じに扱う(HEAD してから、空なら再送)。モデルでは応答の消失と同じ経路になる | [AWS S3: conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html) |
 
 ## 結果(seed 1、5万回、最大30ステップ)
 
@@ -69,11 +70,11 @@ storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少な�
 
 ## 方式 A(`seqlog.qnt`)
 
-変更ログを `<ws>/log/<連番>` の位置の列として持つ。担当は次の位置に If-None-Match で PUT し、200 なら ACK する。グループコミットでは、1回の PUT に batch 全体を入れる。エポックはキーではなく中身(実際の S3 では metadata と中身の先頭)に入れる。新しい担当は LIST で末尾を探し、末尾の位置を HEAD してエポックが自分より新しければ止まる。そうでなければ、その次の位置に空のフェンスを置く。位置の順にエポックは減らないので、末尾のエポックを見れば足りる。412 を受けたら、その位置を HEAD でエポックを読む。自分のエポックなら自分の書き込みとして成功、自分より新しいエポックなら止まる、自分より古いエポックはフェンスのときだけ起こりうるので次の位置でフェンスをやり直す。データの書き込みで古いエポックを見たら止まる。1つのエポックの担当は1つで、1つの位置には1回しか書かない(再送は同じ中身)ので、エポックが同じなら自分の書き込みと言える。実装では、エポックと write-id を metadata に入れて HEAD で比べる。変更ログは位置 0 から最初の穴までを並べたもの。
+変更ログを `<ws>/log/<連番>` の位置の列として持つ。担当は次の位置に If-None-Match で PUT し、200 なら ACK する。グループコミットでは、1回の PUT に batch 全体を入れる。エポックはキーではなく中身(実際の S3 では metadata と中身の先頭)に入れる。新しい担当は LIST で末尾を探し、末尾の位置を HEAD してエポックが自分より新しければ止まる。そうでなければ、その次の位置に空のフェンスを置く。位置の順にエポックは減らないので、末尾のエポックを見れば足りる。412 を受けたら、その位置を HEAD でエポックを読む。自分のエポックなら自分の書き込みとして成功、自分より新しいエポックなら止まる、自分より古いエポックはフェンスのときだけ起こりうる。そのときは、取られた位置を GET して中身を自分の view と重複排除の集合に足してから、次の位置でフェンスをやり直す。HEAD だけでやり直すと、古い担当の最後のコミットを見ないまま受け付けを始める。データの書き込みで古いエポックを見たら止まる。1つのエポックの担当は1つで、1つの位置には1回しか書かない(再送は同じ中身)ので、エポックが同じなら自分の書き込みと言える。この前提は性質 `oneContentPerSlotPerEpoch` で確かめる。実装では、エポックと write-id を metadata に入れて HEAD で比べ、エポックが同じで write-id が違えば止めて alarm を出す。重複排除の集合は、確定したログの Request ID と、PUT 中(ACK 前)の Request ID の和。flush で batch を空にするので、PUT 中のものを入れないと同じ Request ID が次の位置にもう1回入る。変更ログは位置 0 から最初の穴までを並べたもの。
 
 S3 の SDK や `object_store` crate が 5xx のあとに自動で再送し、1回目が入っていた場合も、この「412 のあとの HEAD で自分の書き込みと分かる」経路になる(`witnessNoOwnResendRejected` で届くことを確かめる)。
 
-性質は、`refinesChangeLog`、`segmentsNeverChange`(一度書いた位置の中身は変わらない)、`newestOwnerSeesAcknowledged` を残し、`staleEpochNeverCommits` を「位置の順にエポックが減らない」に書き換え、`slotsContiguous`(最大の位置より下に穴がない)を足した。マニフェストがないので `epochNeverDecreases` と `manifestSegmentsExist` はない。到達確認の4つは S3 案と同じ意味に写した。担当の交代の直後に古い担当の遅れた PUT が位置を先に取る場面は、固定の手順 `oldOwnerTakesSlotFirstTest` で確かめる。
+性質は、`refinesChangeLog`、`segmentsNeverChange`(一度書いた位置の中身は変わらない)、`newestOwnerSeesAcknowledged` を残し、`staleEpochNeverCommits` を「位置の順にエポックが減らない」に書き換え、`slotsContiguous`(最大の位置より下に穴がない)、`oneContentPerSlotPerEpoch`(1つのエポックは1つの位置に1つの中身しか書かない)、`dataWriteNeverSeesOlderEpoch`(データの書き込みが 412 のあとに自分より古いエポックを見ることはない。Rust ではここを alarm にする)を足した。マニフェストがないので `epochNeverDecreases` と `manifestSegmentsExist` はない。到達確認の4つは S3 案と同じ意味に写した。担当の交代の直後に古い担当の遅れた PUT が位置を先に取る場面は、固定の手順 `oldOwnerTakesSlotFirstTest` で確かめる。この手順は、フェンスのやり直しで GET を省く誤りも捕まえる(省いても5万回のランダムシミュレーションでは届かなかった)。自分の再送が 412 になり、HEAD で自分の書き込みと分かって ACK する場面は `ownResendAcknowledgedTest` で確かめる。
 
 結果(seed 1、5万回、最大30ステップ):
 
@@ -83,14 +84,15 @@ S3 の SDK や `object_store` crate が 5xx のあとに自動で再送し、1�
 | If-None-Match(`seqlog_blind_put`、`ifNoneMatch`) | `refinesChangeLog`、`segmentsNeverChange` |
 | 結果不明を成功とみなさない(`seqlog_unknown_as_success`、`readsBackUnknown`) | `refinesChangeLog` |
 | Request ID による重複排除(`seqlog_no_deduplication`、`deduplication`) | `refinesChangeLog` |
+| PUT 中の Request ID も重複とみなす(`seqlog_no_inflight_deduplication`、`inFlightDeduplication`) | `refinesChangeLog` |
 | 新しい担当がフェンスを置く(`seqlog_no_fence`、`fence`) | `newestOwnerSeesAcknowledged`。ログは壊れない |
 | 起動時に末尾のエポックが自分より新しければ止まる(`seqlog_no_epoch_check`、`epochCheck`) | `staleEpochNeverCommits`。ログは壊れない |
 | 1つの担当が同時に送る PUT は1つ(`seqlog_two_in_flight`、`oneInFlight`) | `refinesChangeLog`(固定の手順で確認)、`staleEpochNeverCommits`、`slotsContiguous` |
 | 412 のあとに HEAD する(`seqlog_rejected_as_fenced`、`headsAfterRejection`) | 破れず |
 
-`seqlog_two_in_flight` が方式 A に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、位置 N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの位置に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。「同時に送る PUT は1つ」はコードの不変条件として書く。
+`seqlog_two_in_flight` が方式 A に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、位置 N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの位置に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。`slotsContiguous` の反例も、5,000回では届かず5万回で届く。「同時に送る PUT は1つ」はコードの不変条件として書く。
 
-`seqlog_rejected_as_fenced` は安全性を壊さない。412 で HEAD せずに止まると、自分の書き込みが入っていても ACK しないだけで、ログは壊れない。HEAD は、再送のたびに担当が止まらないためのもの(活性)で、安全性のためではない。
+`seqlog_rejected_as_fenced` は安全性を壊さない。412 で HEAD せずに止まると、自分の書き込みが入っていても ACK しないだけで、ログは壊れない。HEAD は、再送のたびに担当が止まらないためのもの(活性)で、安全性のためではない。止まった担当が確定済みのコミットを ACK しない場面は、固定の手順 `ownResendRejectedTest` で確かめる。
 
 ## 分かったこと
 
