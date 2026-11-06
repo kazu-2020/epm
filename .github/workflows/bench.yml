@@ -36,6 +36,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      - name: Check the inputs
+        env:
+          SCALES: ${{ inputs.scales }}
+          MINUTES: ${{ inputs.minutes }}
+          VOLUME: ${{ inputs.volume }}
+        run: |
+          [[ "$SCALES" =~ ^[1-9][0-9]*( [1-9][0-9]*)*$ ]] || exit 1
+          [[ "$MINUTES" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [ "$MINUTES" -ge 30 ] && [ "$MINUTES" -le 140 ] || exit 1
+          [[ "$VOLUME" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [ "$VOLUME" -ge 30 ] && [ "$VOLUME" -le 500 ] || exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.sha || github.sha }}
@@ -82,13 +93,6 @@ jobs:
       MINUTES: ${{ inputs.minutes }}
       VOLUME: ${{ inputs.volume }}
     steps:
-      - name: Check the inputs
-        run: |
-          [[ "$SCALES" =~ ^[1-9][0-9]*( [1-9][0-9]*)*$ ]] || exit 1
-          [[ "$MINUTES" =~ ^[1-9][0-9]*$ ]] || exit 1
-          [ "$MINUTES" -ge 30 ] && [ "$MINUTES" -le 140 ] || exit 1
-          [[ "$VOLUME" =~ ^[1-9][0-9]*$ ]] || exit 1
-          [ "$VOLUME" -ge 30 ] && [ "$VOLUME" -le 500 ] || exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -103,6 +107,7 @@ jobs:
           role-duration-seconds: 10800
       - name: Upload the binaries
         run: |
+          cp compute_engine/bench/ec2/run.sh bin/
           aws s3 cp --recursive bin/ "s3://$BUCKET/bin/$RUN/"
       - name: Start the instance
         run: |
@@ -112,7 +117,7 @@ jobs:
             echo "BUCKET=$BUCKET"
             echo "RUN=$RUN"
             echo "MINUTES=$MINUTES"
-            echo "export SCALES='$SCALES'"
+            echo "SCALES='$SCALES'"
             tail -n +2 "$script"
           } > user-data.sh
           aws ec2 run-instances \
