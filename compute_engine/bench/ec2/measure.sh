@@ -35,6 +35,8 @@ chmod -R +x bin
 
 # Not limited by the shutdown alone: the shutdown stops the network before finish can upload the results.
 timeout "$((MINUTES - 15))m" bash -euxo pipefail <<'MEASURE'
+# Not the 4 KB pages that glibc malloc uses by default: their faults and unmaps took about a fifth of the 32-thread time (bench #13).
+export GLIBC_TUNABLES=glibc.malloc.hugetlb=1
 # Not any vCPUs: with SMT, two threads can share one core, so take one CPU per physical core.
 mapfile -t cores < <(lscpu -p=CPU,CORE | awk -F, '!/^#/ && !seen[$2]++ {print $1}')
 pin() { echo taskset -c "$(printf '%s\n' "${cores[@]:0:$1}" | paste -sd,)"; }
@@ -90,4 +92,5 @@ for scale in $SCALES; do
     fi
     rm -rf "data-$scale"
 done
+grep -E '^(thp_fault|compact_stall)' /proc/vmstat > out/vmstat.txt
 MEASURE
