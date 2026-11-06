@@ -23,10 +23,14 @@ Actions の `bench` を手で起動する。SHA を空にすると、起動す�
 
 1. `build` ジョブが GitHub のランナーで `compute_engine` の bench をビルドする。このジョブは OIDC トークンを取れない。
 2. `measure` ジョブがビルドした実行ファイルを artifact から受け取り、S3 の `bin/` に置く。
-3. `measure` ジョブが起動テンプレート `bench`(Ubuntu 24.04 の最新 AMI、インバウンドなし)で EC2 を1台起動する。インスタンスは入力で r7i.2xlarge(既定)か r7i.16xlarge を選ぶ。ディスクの大きさも入力で変える。user-data は `compute_engine/bench/ec2/measure.sh`。
+3. `measure` ジョブが起動テンプレート `bench`(Ubuntu 24.04 の最新 AMI、インバウンドなし)で EC2 を1台起動する。インスタンスは入力で r7i.2xlarge(既定)か r7i.16xlarge を選ぶ。ディスクの大きさも入力で変える。user-data は共通の前半 `.github/ec2/prelude.sh` と `compute_engine/bench/ec2/measure.sh` をつないだもの。
 4. EC2 は入力の規模(代表モデルの数量のセルの倍数、1倍で全体約1億セル)ごとにデータを作る。1倍では `recalculate` を hyperfine で5回、`edit` を入力ごとに100回回す。どの規模でも、物理コアに固定した 1〜32 スレッドで `recalculate` を回し、入力 `baseline` があればそのコミットも同じ順に交互に回す。STREAM と `perf` の結果も置く。結果は S3 の `results/` に置き、自分で終了する。時間の上限は、計測の `timeout`(入力の分数 − 15分から準備にかかった時間を引いた分)< EC2 の `shutdown`(入力の分数、30〜140分)< 結果を待つステップ(150分)< `measure` ジョブ(170分)< ロールのセッション(180分)の順にする。どれかを変えるときは、この順を保つ。
    `sha` には PR #44 以降のコミットを指定する。`stream.c` と、`generate` の倍率の引数をそのコミットから使うため。`baseline` は `recalculate` だけを使うので、古いコミットでもよい。
 5. `measure` ジョブは結果を取り、実行ページの要約と artifact に残す。S3 のファイルは7日で消える。
+
+## EC2 での測定の共通の手順
+
+`bench` と `s3-latency` の EC2 を使うジョブは、どちらも再利用 workflow `.github/workflows/ec2.yml` を呼ぶ。このジョブは S3 の `bin/` へのファイルの配置、user-data の組み立て、起動、結果待ち、終了、要約と artifact を受け持つ。EC2 の前半(`shutdown`、結果を S3 に置く `finish`、AWS CLI の準備、`bin/` の取得、shutdown までの残り時間の計算)は `.github/ec2/prelude.sh` にまとめ、測定ごとのスクリプトはその続きだけを書く。`ec2.yml` は、入力の分数が30分以上で結果を待つ時間より10分以上短いこと、結果を待つ時間 < ジョブの時間 < 180分(ロールのセッション)であることを確かめる。3つ目の測定を足すときは、この workflow を呼ぶ。
 
 ## S3 のレイテンシの測定
 

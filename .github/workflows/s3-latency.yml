@@ -19,78 +19,16 @@ concurrency: bench
 
 jobs:
   measure:
-    runs-on: ubuntu-24.04
-    environment: bench
-    timeout-minutes: 120
+    uses: ./.github/workflows/ec2.yml
     permissions:
       contents: read
       id-token: write
-    env:
-      AWS_REGION: ap-northeast-1
-      BUCKET: ${{ vars.BENCH_BUCKET }}
-      RUN: s3-latency-${{ github.run_id }}-${{ github.run_attempt }}
-      INSTANCE_TYPE: ${{ inputs.instance }}
-      MINUTES: ${{ inputs.minutes }}
-    steps:
-      - name: Check the inputs
-        run: |
-          [[ "$MINUTES" =~ ^[0-9]+$ ]] || exit 1
-          [ "$MINUTES" -ge 30 ] && [ "$MINUTES" -le 90 ] || exit 1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-duration-seconds: 10800
-      - name: Upload the script
-        run: aws s3 cp storage/s3/latency.py "s3://$BUCKET/bin/$RUN/latency.py"
-      - name: Start the instance
-        run: |
-          script=storage/s3/ec2.sh
-          {
-            head -n 1 "$script"
-            echo "BUCKET=$BUCKET"
-            echo "RUN=$RUN"
-            echo "MINUTES=$MINUTES"
-            tail -n +2 "$script"
-          } > user-data.sh
-          aws ec2 run-instances \
-            --launch-template 'LaunchTemplateName=bench,Version=$Latest' \
-            --instance-type "$INSTANCE_TYPE" \
-            --user-data file://user-data.sh \
-            --query 'Instances[0].[InstanceId,ImageId,InstanceType]' --output text > instance.txt
-          read -r instance image type < instance.txt
-          echo "INSTANCE=$instance" >> "$GITHUB_ENV"
-          echo "Instance $instance, $type, AMI $image" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Wait for the results
-        timeout-minutes: 100
-        run: |
-          done_key="results/$RUN/exit-code"
-          until aws s3api head-object --bucket "$BUCKET" --key "$done_key" > /dev/null 2>&1; do
-            state=$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].State.Name' --output text || true)
-            if [ "$state" = terminated ] && ! aws s3api head-object --bucket "$BUCKET" --key "$done_key" > /dev/null 2>&1; then
-              echo "::error::The instance ended without results"
-              exit 1
-            fi
-            sleep 30
-          done
-          aws s3 cp --recursive "s3://$BUCKET/results/$RUN/" out/
-      - name: Write the summary
-        run: |
-          {
-            cat out/machine.txt || true
-            echo
-            cat out/latency.md || true
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$(cat out/exit-code)"
-      - if: always() && env.INSTANCE != ''
-        name: Terminate the instance
-        run: aws ec2 terminate-instances --instance-ids "$INSTANCE" > /dev/null
-      - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: s3-latency-${{ env.RUN }}
-          path: out/
-          if-no-files-found: ignore
+    with:
+      name: s3-latency
+      files: storage/s3/latency.py
+      script: storage/s3/ec2.sh
+      summary: storage/s3/summary.sh
+      instance: ${{ inputs.instance }}
+      minutes: ${{ inputs.minutes }}
+      wait-minutes: 100
+      job-minutes: 120
