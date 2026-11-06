@@ -594,7 +594,9 @@ pub fn check(outcome: &Outcome) -> Violations {
                 let invariant = match alarm {
                     Alarm::OlderEpochAfterDataWrite { .. } => "dataWriteNeverSeesOlderEpoch",
                     Alarm::OtherContentInOwnEpoch { .. } => "oneContentPerSlotPerEpoch",
-                    Alarm::UnreadableSegment { .. } | Alarm::UnexpectedKey { .. } => "noAlarm",
+                    Alarm::UnreadableSegment { .. }
+                    | Alarm::UnexpectedKey { .. }
+                    | Alarm::PermanentStoreError { .. } => "noAlarm",
                 };
                 violate(invariant, format!("record {at}: {alarm:?}"));
             }
