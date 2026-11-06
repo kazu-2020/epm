@@ -23,9 +23,26 @@ module seqlog_no_epoch_check {
   import seqlog(guards = { ...allGuards, epochCheck: false }).* from "./seqlog"
 }
 
+// A fixed scenario, because random simulation does not reach this acknowledgement past a hole.
 module seqlog_two_in_flight {
   import seqlog_design.* from "./seqlog"
   import seqlog(guards = { ...allGuards, oneInFlight: false }).* from "./seqlog"
+
+  run pipelineAcknowledgesPastHoleTest =
+    init
+      .then(all { ghost, grant("A") })
+      .then(all { ghost, load("A") })
+      .then(applyOne)
+      .then(replyOne)
+      .then(all { ghost, send("A", "r1") })
+      .then(all { ghost, receive("A", "r1") })
+      .then(all { ghost, flush("A") })
+      .then(all { ghost, send("A", "r2") })
+      .then(all { ghost, receive("A", "r2") })
+      .then(all { ghost, flush("A") })
+      .then(nondet write = store.writesInFlight.filter(w => w.slot == 2).oneOf() all { ghost, apply(write, false) })
+      .then(replyOne)
+      .expect(clients.acknowledged == Set("r2") and replay(store.slots) == List() and not(refinesChangeLog))
 }
 
 module seqlog_rejected_as_fenced {

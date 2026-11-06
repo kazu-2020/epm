@@ -69,7 +69,7 @@ storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少な�
 
 ## 方式 A(`seqlog.qnt`)
 
-変更ログを `<ws>/log/<連番>` の位置の列として持つ。担当は次の位置に If-None-Match で PUT し、200 なら ACK する。グループコミットでは、1回の PUT に batch 全体を入れる。エポックはキーではなく中身(実際の S3 では metadata と中身の先頭)に入れる。新しい担当は LIST で末尾を探し、その次の位置に空のフェンスを置く。412 を受けたら、その位置を HEAD で読む。自分の書き込みなら成功、自分より新しいエポックなら止まる、自分より古いエポックはフェンスのときだけ起こりうるので次の位置でフェンスをやり直す。データの書き込みで古いエポックを見たら止まる。変更ログは位置 0 から最初の穴までを並べたもの。
+変更ログを `<ws>/log/<連番>` の位置の列として持つ。担当は次の位置に If-None-Match で PUT し、200 なら ACK する。グループコミットでは、1回の PUT に batch 全体を入れる。エポックはキーではなく中身(実際の S3 では metadata と中身の先頭)に入れる。新しい担当は LIST で末尾を探し、末尾の位置を HEAD してエポックが自分より新しければ止まる。そうでなければ、その次の位置に空のフェンスを置く。位置の順にエポックは減らないので、末尾のエポックを見れば足りる。412 を受けたら、その位置を HEAD でエポックを読む。自分のエポックなら自分の書き込みとして成功、自分より新しいエポックなら止まる、自分より古いエポックはフェンスのときだけ起こりうるので次の位置でフェンスをやり直す。データの書き込みで古いエポックを見たら止まる。1つのエポックの担当は1つで、1つの位置には1回しか書かない(再送は同じ中身)ので、エポックが同じなら自分の書き込みと言える。実装では、エポックと write-id を metadata に入れて HEAD で比べる。変更ログは位置 0 から最初の穴までを並べたもの。
 
 S3 の SDK や `object_store` crate が 5xx のあとに自動で再送し、1回目が入っていた場合も、この「412 のあとの HEAD で自分の書き込みと分かる」経路になる(`witnessNoOwnResendRejected` で届くことを確かめる)。
 
@@ -84,11 +84,11 @@ S3 の SDK や `object_store` crate が 5xx のあとに自動で再送し、1�
 | 結果不明を成功とみなさない(`seqlog_unknown_as_success`、`readsBackUnknown`) | `refinesChangeLog` |
 | Request ID による重複排除(`seqlog_no_deduplication`、`deduplication`) | `refinesChangeLog` |
 | 新しい担当がフェンスを置く(`seqlog_no_fence`、`fence`) | `newestOwnerSeesAcknowledged`。ログは壊れない |
-| LIST で自分より新しいエポックを見たら止まる(`seqlog_no_epoch_check`、`epochCheck`) | `staleEpochNeverCommits`。ログは壊れない |
-| 1つの担当が同時に送る PUT は1つ(`seqlog_two_in_flight`、`oneInFlight`) | `staleEpochNeverCommits`、`slotsContiguous`。ログは壊れない |
+| 起動時に末尾のエポックが自分より新しければ止まる(`seqlog_no_epoch_check`、`epochCheck`) | `staleEpochNeverCommits`。ログは壊れない |
+| 1つの担当が同時に送る PUT は1つ(`seqlog_two_in_flight`、`oneInFlight`) | `refinesChangeLog`(固定の手順で確認)、`staleEpochNeverCommits`、`slotsContiguous` |
 | 412 のあとに HEAD する(`seqlog_rejected_as_fenced`、`headsAfterRejection`) | 破れず |
 
-`seqlog_two_in_flight` が方式 A に固有の守り。PUT を pipelining すると、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの位置に入る。「同時に送る PUT は1つ」はコードの不変条件として書く。
+`seqlog_two_in_flight` が方式 A に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、位置 N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの位置に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。「同時に送る PUT は1つ」はコードの不変条件として書く。
 
 `seqlog_rejected_as_fenced` は安全性を壊さない。412 で HEAD せずに止まると、自分の書き込みが入っていても ACK しないだけで、ログは壊れない。HEAD は、再送のたびに担当が止まらないためのもの(活性)で、安全性のためではない。
 
@@ -102,7 +102,7 @@ S3 の SDK や `object_store` crate が 5xx のあとに自動で再送し、1�
 - 複数のワークスペース、テナントの混入。キーの命名、ワークスペースごとのデータ鍵、IAM で守る。
 - 活性(いつか確定する、交代後にいつか書ける)。Apalache もランダムシミュレーションも活性を検査しない。
 - グループコミットにまとめる件数、ハッシュの鎖、Event ID、3分の打ち切り。
-- S3 の LIST。S3 案のモデルの担当はマニフェストだけを読み、セグメントを一覧から拾わない。方式 A のモデルは LIST を、その時点の全位置を一度に読む操作として扱う。
+- S3 の LIST。S3 案のモデルの担当はマニフェストだけを読み、セグメントを一覧から拾わない。方式 A のモデルは LIST と末尾の HEAD を、1つの操作として扱う。間に新しい担当が書いた場合は、フェンスの 412 の経路で止まる。
 - 方式 A のスナップショット、`covers_seq`、Request ID の窓、GC。
 
 網羅検査ではない。TLC で今の上限(サーバー2台、要求2つ、エポック3、再送1回)を網羅しようとしたところ、20分で4,000万状態を超えて終わらなかった。Apalache の上限つき検査(10ステップ)は5分半かかり、10ステップでは届かない反例がある。このため、ランダムシミュレーションを主に使う。反例が出なかったことは「5万回の試行で見つからなかった」という意味である。

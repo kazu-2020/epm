@@ -83,7 +83,7 @@ module seqlog {
     val free = lastSlot(slots) + 1
     val fence = { server: server, slot: free, epoch: self.epoch, requests: List(), attempt: 0 }
     val loaded = { ...self, next: free + 1, view: replay(slots) }
-    val stale = guards.epochCheck and slots.keys().exists(i => slots.get(i).epoch > self.epoch)
+    val stale = guards.epochCheck and lastSlot(slots) >= 0 and slots.get(lastSlot(slots)).epoch > self.epoch
     all {
       self.phase == Loading,
       if (stale) stop(server)
@@ -201,10 +201,11 @@ module seqlog {
     val again = { ...write, attempt: write.attempt + 1 }
     val refence = { ...write, slot: write.slot + 1, attempt: 0 }
     val resend = not(taken) and write.attempt < MaxResends
-    val oldOwnerTookFenceSlot = taken and found != slotOf(write) and found.epoch < self.epoch and isFence(write)
+    val own = taken and found.epoch == write.epoch
+    val oldOwnerTookFenceSlot = taken and found.epoch < self.epoch and isFence(write)
     all {
       if (not(taken)) replace(server, self, write, { write: if (resend) again else write, unknown: false })
-      else if (found == slotOf(write)) succeed(server, self, write)
+      else if (own) succeed(server, self, write)
       else if (oldOwnerTookFenceSlot) all {
         servers' = servers.set(server, {
           ...self, next: refence.slot + 1, view: self.view.concat(found.requests), pending: Set({ write: refence, unknown: false }),
@@ -250,7 +251,7 @@ module seqlog {
   val witnessNotTwoAcknowledged: bool = clients.acknowledged.size() < 2
   val witnessNoCommitAfterHandover: bool = not(store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0))
   val witnessNoOwnResendRejected: bool = not(store.replies.exists(reply =>
-    not(reply.succeeded) and store.slots.get(reply.write.slot) == slotOf(reply.write)))
+    not(reply.succeeded) and store.slots.get(reply.write.slot).epoch == reply.write.epoch))
   val witnessNoOldOwnerStopped: bool = servers.keys().forall(server => servers.get(server).phase != Stopped)
 
   action applyOne: bool = nondet write = store.writesInFlight.oneOf() all { ghost, apply(write, false) }

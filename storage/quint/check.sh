@@ -20,10 +20,12 @@ seqlog_invariants=(refinesChangeLog segmentsNeverChange staleEpochNeverCommits s
 seqlog_breaks=(
   seqlog_blind_put:refinesChangeLog seqlog_unknown_as_success:refinesChangeLog seqlog_no_deduplication:refinesChangeLog
   seqlog_no_fence:newestOwnerSeesAcknowledged
-  seqlog_no_epoch_check:staleEpochNeverCommits seqlog_two_in_flight:staleEpochNeverCommits
+  seqlog_blind_put:segmentsNeverChange
+  seqlog_no_epoch_check:staleEpochNeverCommits
+  seqlog_two_in_flight:staleEpochNeverCommits seqlog_two_in_flight:slotsContiguous
 )
 seqlog_holds=(seqlog_rejected_as_fenced)
-seqlog_log_safe_without_guard=(seqlog_no_fence seqlog_no_epoch_check seqlog_two_in_flight)
+seqlog_log_safe_without_guard=(seqlog_no_fence seqlog_no_epoch_check)
 
 listed=$(printf '%s\n' "${breaks[@]%%:*}" "${holds[@]}" "${scenarios[@]}" | sort -u)
 defined=$(sed -n 's/^module \([a-z0-9_]*\).*/\1/p' mutations.qnt | sort)
@@ -46,6 +48,7 @@ quint typecheck mutations.qnt
 quint typecheck seqlog.qnt
 quint typecheck seqlog_mutations.qnt
 quint test seqlog.qnt --main seqlog_designed
+quint test seqlog_mutations.qnt --main seqlog_two_in_flight
 for module in "${scenarios[@]}"; do
   quint test mutations.qnt --main "$module"
 done
