@@ -24,6 +24,7 @@ jobs:
           workspaces: |
             compute_engine
             compute_engine/formula/fuzz
+      - run: shellcheck bench/ec2/*.sh
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
