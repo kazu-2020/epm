@@ -263,15 +263,25 @@ impl Columns {
             .par_iter()
             .map(|piece| piece.clone().filter(|&row| keep(row)).count())
             .collect();
-        let total = counts.iter().sum();
-        if total == self.len() {
+        if counts.iter().sum::<usize>() == self.len() {
             return self.clone();
         }
+        self.copy_rows(&counts, |piece| {
+            pieces[piece].clone().filter(|&row| keep(row))
+        })
+    }
+
+    fn copy_rows<Rows: Iterator<Item = usize>>(
+        &self,
+        counts: &[usize],
+        rows: impl Fn(usize) -> Rows + Sync,
+    ) -> Columns {
+        let total = counts.iter().sum();
         let mut keys = vec![0; total];
         let mut values = vec![0.0; total];
-        let mut outputs = Vec::with_capacity(pieces.len());
+        let mut outputs = Vec::with_capacity(counts.len());
         let (mut keys_left, mut values_left) = (keys.as_mut_slice(), values.as_mut_slice());
-        for &count in &counts {
+        for &count in counts {
             let (piece_keys, rest_keys) = keys_left.split_at_mut(count);
             let (piece_values, rest_values) = values_left.split_at_mut(count);
             outputs.push((piece_keys, piece_values));
@@ -279,10 +289,10 @@ impl Columns {
         }
         outputs
             .into_par_iter()
-            .zip(pieces)
-            .for_each(|((piece_keys, piece_values), piece)| {
-                let kept = piece.clone().filter(|&row| keep(row));
-                for ((key, value), row) in piece_keys.iter_mut().zip(piece_values).zip(kept) {
+            .enumerate()
+            .for_each(|(piece, (piece_keys, piece_values))| {
+                for ((key, value), row) in piece_keys.iter_mut().zip(piece_values).zip(rows(piece))
+                {
                     *key = self.keys[row];
                     *value = self.values[row];
                 }
@@ -461,9 +471,9 @@ impl Columns {
             })
             .collect();
         // Not select: it reads every key twice, and an edit keeps a few rows out of millions, so the second read is the cost.
-        let rows: Vec<usize> = pieces
+        let kept: Vec<Vec<usize>> = pieces
             .par_iter()
-            .flat_map_iter(|piece| {
+            .map(|piece| {
                 self.keys[piece.clone()]
                     .iter()
                     .enumerate()
@@ -476,18 +486,15 @@ impl Columns {
                                     .unwrap_or(false)
                             })
                     })
-                    .map(move |(offset, _)| piece.start + offset)
+                    .map(|(offset, _)| piece.start + offset)
+                    .collect()
             })
             .collect();
-        if rows.len() == self.len() {
+        let counts: Vec<usize> = kept.iter().map(Vec::len).collect();
+        if counts.iter().sum::<usize>() == self.len() {
             return self;
         }
-        Columns {
-            axes: self.axes.clone(),
-            layout: self.layout.clone(),
-            keys: gather(&rows, &self.keys).into(),
-            values: gather(&rows, &self.values).into(),
-        }
+        self.copy_rows(&counts, |piece| kept[piece].iter().copied())
     }
 
     pub(crate) fn changes_from(&self, old: &Columns) -> (Vec<u64>, Vec<Option<f64>>) {
