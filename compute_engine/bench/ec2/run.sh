@@ -17,7 +17,7 @@ if [ -d bin/baseline ]; then binaries+=(baseline); fi
 timed() {
     local result=$1 binary=$2 scale=$3
     shift 3
-    # Not stopped by set -e: one failed binary must not throw away the runs of the other.
+    # Not stopped by set -e: one failed run must not throw away the other runs.
     RECALCULATE_HASH=1 "$@" /usr/bin/time -v "bin/$binary/recalculate" "data-$scale" column > "$result" 2>&1 ||
         echo "exit code $?" >> "$result"
 }
