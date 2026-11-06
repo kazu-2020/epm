@@ -34,7 +34,8 @@ chmod -R +x bin
 } > out/machine.txt 2>&1
 
 # Not limited by the shutdown alone: the shutdown stops the network before finish can upload the results.
-timeout "$((MINUTES - 15))m" bash -euxo pipefail <<'MEASURE'
+# Not MINUTES - 15 from now: the shutdown counts from the start of this script, so the setup above uses up part of it.
+timeout "$(( (MINUTES - 15) * 60 - SECONDS ))s" bash -euxo pipefail <<'MEASURE'
 # Not the 4 KB pages that glibc malloc uses by default: their faults and unmaps took about a fifth of the 32-thread time (bench #13).
 export GLIBC_TUNABLES=glibc.malloc.hugetlb=1
 # Not any vCPUs: with SMT, two threads can share one core, so take one CPU per physical core.

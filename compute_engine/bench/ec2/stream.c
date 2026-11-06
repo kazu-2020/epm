@@ -20,8 +20,10 @@ static void *work(void *arg) {
     return NULL;
 }
 
+#define MOST_THREADS 64
+
 static double run(void) {
-    pthread_t pool[64];
+    pthread_t pool[MOST_THREADS];
     double started = now();
     for (size_t t = 0; t < threads; t++) pthread_create(&pool[t], NULL, work, (void *)t);
     for (size_t t = 0; t < threads; t++) pthread_join(pool[t], NULL);
@@ -33,11 +35,18 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: stream <threads> <megabytes per array>\n");
         return 2;
     }
-    threads = atoi(argv[1]);
-    n = (size_t)atoi(argv[2]) * 1024 * 1024 / sizeof(double);
+    int requested = atoi(argv[1]), megabytes = atoi(argv[2]);
+    if (requested < 1 || requested > MOST_THREADS || megabytes < 1) {
+        fprintf(stderr, "usage: stream <1 to %d threads> <megabytes per array>\n", MOST_THREADS);
+        return 2;
+    }
+    threads = requested;
+    n = (size_t)megabytes * 1024 * 1024 / sizeof(double);
     a = malloc(n * sizeof(double));
+    if (a == NULL) return 1;
     for (size_t i = 0; i < n; i++) a[i] = i;
     b = malloc(n * sizeof(double));
+    if (b == NULL) return 1;
     for (size_t i = 0; i < n; i++) b[i] = 0;
     double warm = 1e9, fresh = 1e9;
     for (int round = 0; round < 5; round++) {
@@ -45,6 +54,7 @@ int main(int argc, char **argv) {
         if (t < warm) warm = t;
         double *keep = b;
         b = mmap(NULL, n * sizeof(double), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (b == MAP_FAILED) return 1;
         t = run();
         if (t < fresh) fresh = t;
         munmap(b, n * sizeof(double));
