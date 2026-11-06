@@ -54,6 +54,7 @@ pub enum Alarm {
     OtherContentInOwnEpoch { slot: Slot },
     UnreadableSegment { slot: Slot, error: DecodeError },
     UnexpectedKey { key: String },
+    PermanentStoreError { key: String, status: u16 },
 }
 
 #[derive(Debug)]

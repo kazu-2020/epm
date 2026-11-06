@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::error;
+use std::iter;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,8 +80,7 @@ pub async fn serve(
                     if crash(FailPoint::BeforePut) {
                         return Exit::Crashed(FailPoint::BeforePut);
                     }
-                    let put = put(Arc::clone(&store), key(&log, slot), slot, body, attempt);
-                    io.push(put.map(Ok).boxed());
+                    io.push(put(Arc::clone(&store), key(&log, slot), slot, body, attempt).boxed());
                 }
                 Effect::Get { slot } => {
                     io.push(read_back(Arc::clone(&store), key(&log, slot), slot).boxed());
@@ -110,7 +111,7 @@ async fn put(
     slot: Slot,
     body: Bytes,
     attempt: u32,
-) -> Event {
+) -> Result<Event, Alarm> {
     if attempt > 0 {
         tokio::time::sleep(backoff(attempt)).await;
     }
@@ -119,17 +120,15 @@ async fn put(
     } else {
         PutMode::Create
     };
-    match store.put_opts(&path, body.into(), mode.into()).await {
-        Ok(_) => Event::PutSucceeded { slot },
-        Err(object_store::Error::AlreadyExists { .. }) => Event::PutFailed {
-            slot,
-            failure: PutFailure::AlreadyExists,
-        },
-        Err(_) => Event::PutFailed {
-            slot,
-            failure: PutFailure::Unknown,
-        },
-    }
+    let failure = match store.put_opts(&path, body.into(), mode.into()).await {
+        Ok(_) => return Ok(Event::PutSucceeded { slot }),
+        Err(object_store::Error::AlreadyExists { .. }) => PutFailure::AlreadyExists,
+        Err(error) => {
+            permanent(&error, &path, PERMANENT)?;
+            PutFailure::Unknown
+        }
+    };
+    Ok(Event::PutFailed { slot, failure })
 }
 
 async fn read_back(store: Arc<dyn ObjectStore>, path: Path, slot: Slot) -> Result<Event, Alarm> {
@@ -142,7 +141,8 @@ async fn load(store: Arc<dyn ObjectStore>, log: Path) -> Result<Event, Alarm> {
     let listed = loop {
         match store.list(Some(&log)).try_collect::<Vec<_>>().await {
             Ok(listed) => break listed,
-            Err(_) => {
+            Err(error) => {
+                permanent(&error, &log, PERMANENT_FOR_LIST)?;
                 attempt += 1;
                 tokio::time::sleep(backoff(attempt)).await;
             }
@@ -180,12 +180,40 @@ async fn read(store: &dyn ObjectStore, path: &Path, slot: Slot) -> Result<Option
                     .map_err(|error| Alarm::UnreadableSegment { slot, error });
             }
             Err(object_store::Error::NotFound { .. }) => return Ok(None),
-            Err(_) => {
+            Err(error) => {
+                permanent(&error, path, PERMANENT)?;
                 attempt += 1;
                 tokio::time::sleep(backoff(attempt)).await;
             }
         }
     }
+}
+
+const PERMANENT: &[u16] = &[401, 403, 501];
+// Not 404 for PUT and GET: a missing key gets 404 too. A LIST gets 404 only for a missing bucket.
+const PERMANENT_FOR_LIST: &[u16] = &[401, 403, 404, 501];
+
+fn permanent(error: &object_store::Error, path: &Path, statuses: &[u16]) -> Result<(), Alarm> {
+    let status = match error {
+        object_store::Error::NotImplemented { .. } => Some(501),
+        _ => status(error),
+    };
+    match status {
+        Some(status) if statuses.contains(&status) => Err(Alarm::PermanentStoreError {
+            key: path.to_string(),
+            status,
+        }),
+        _ => Ok(()),
+    }
+}
+
+// Not a downcast: object_store 0.14 keeps RetryError private and wraps a failed S3 LIST in Generic.
+fn status(error: &object_store::Error) -> Option<u16> {
+    iter::successors(Some(error as &dyn error::Error), |error| error.source()).find_map(|error| {
+        let text = error.to_string();
+        let rest = text.strip_prefix("Server returned non-2xx status code: ")?;
+        rest.get(..3)?.parse::<u16>().ok()
+    })
 }
 
 fn backoff(attempt: u32) -> Duration {
