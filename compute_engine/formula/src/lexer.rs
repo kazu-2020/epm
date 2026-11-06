@@ -133,7 +133,6 @@ impl Lexer<'_> {
     }
 
     fn attribute_follows(&self) -> bool {
-        // Not a token on its own: "1." and ".5" stay unexpected characters next to the number instead of splitting it.
         let mut lookahead = self.characters.clone();
         lookahead
             .find(|&(_, next)| !next.is_whitespace())

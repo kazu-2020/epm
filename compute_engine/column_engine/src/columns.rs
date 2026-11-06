@@ -719,7 +719,6 @@ impl Columns {
         sort_in_key_order(&mut axes, |&axis| axis, dimensions)?;
         axes.dedup();
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
-        // Not an empty result when no term is full: ADR 0002 spreads every term, so '人数' + SUM('売上', BY '期間') has a cell on every pair.
         let spread: Vec<Columns> = if any_full {
             Vec::new()
         } else {

@@ -533,8 +533,7 @@ impl Measure {
             return self.clone();
         }
         let (change_keys, changes) = self.merged_changes();
-        // Not `+`: a capacity hint is invisible to tests, so cargo-mutants would report its `*` mutant as surviving.
-        let capacity = self.values.len().saturating_add(changes.len());
+        let capacity = self.values.len() + changes.len();
         let mut keys = Vec::with_capacity(capacity);
         let mut values = Vec::with_capacity(capacity);
         let mut start = 0;

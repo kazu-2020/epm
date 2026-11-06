@@ -180,7 +180,6 @@ fn sum_of_terms(terms: &[Term], key_orders: &KeyOrders) -> Query {
         .collect();
     let axes_list: Vec<DimensionUlid> = axes.iter().copied().collect();
     let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
-    // Not only the full terms when none is full: spreading every term keeps '人数' + SUM('売上', BY '期間') defined on every pair.
     let creates_cells = |term: &Query| !any_full || term.axes.len() == axes.len();
     let columns = if axes.is_empty() {
         "1 AS unit".to_string()

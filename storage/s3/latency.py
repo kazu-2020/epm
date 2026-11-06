@@ -1,13 +1,3 @@
-"""Measure the S3 requests that the change log (scheme A) uses.
-
-Run it on EC2 in the region of the bucket. `.github/workflows/s3-latency.yml` does that.
-Local run against RustFS (only to check the script, not the numbers):
-
-    AWS_ENDPOINT_URL=http://127.0.0.1:59000 AWS_ACCESS_KEY_ID=nanashi \
-    AWS_SECRET_ACCESS_KEY=nanashi-secret AWS_REGION=us-east-1 \
-    uv run --with boto3 storage/s3/latency.py <bucket> <prefix> <out dir> --quick
-"""
-
 import collections
 import concurrent.futures
 import json

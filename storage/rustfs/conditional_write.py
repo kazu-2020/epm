@@ -1,12 +1,3 @@
-"""Measure the replies of conditional writes on an S3 compatible server.
-
-The Quint model (storage/quint/) assumes these replies. Run this script to check them:
-
-    AWS_ENDPOINT_URL=http://127.0.0.1:59000 AWS_ACCESS_KEY_ID=nanashi \
-    AWS_SECRET_ACCESS_KEY=nanashi-secret AWS_REGION=us-east-1 \
-    uv run --with boto3 storage/rustfs/conditional_write.py
-"""
-
 import collections
 import concurrent.futures
 import uuid
