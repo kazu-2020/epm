@@ -880,13 +880,18 @@ impl Columns {
                     .zip(seen.par_chunks_mut(share))
                     .enumerate()
                     .for_each(|(owner, (totals, seen))| {
+                        // Not a write to the shared `totals` and `seen` per row: with a few slots, owners share cache lines and wait for each other on every row.
+                        let mut own_totals = vec![0.0; totals.len()];
+                        let mut own_seen = vec![false; seen.len()];
                         for (&slot, &value) in slots.iter().zip(&self.values[..]) {
                             let at = (slot as usize).wrapping_sub(owner * share);
-                            if at < totals.len() {
-                                totals[at] += value;
-                                seen[at] = true;
+                            if at < own_totals.len() {
+                                own_totals[at] += value;
+                                own_seen[at] = true;
                             }
                         }
+                        totals.copy_from_slice(&own_totals);
+                        seen.copy_from_slice(&own_seen);
                     });
             }
             let slots: Vec<usize> = (0..space)
