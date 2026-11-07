@@ -19,4 +19,10 @@ tokio = { version = "1.54.1", features = ["macros", "sync"] }
 ulid = "3.0.0"
 
 [dev-dependencies]
+async-trait = "0.1.92"
+futures-util = "0.3.34"
+oracle = { path = "../compute_engine/oracle" }
 tokio = { version = "1.54.1", features = ["rt", "test-util", "time"] }
+
+[profile.dev.package."*"]
+opt-level = 1

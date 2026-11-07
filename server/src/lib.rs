@@ -55,7 +55,7 @@ async fn recalculate(
         tokio::select! {
             biased;
             Some(commit) = commits.recv() => {
-                // Not after the edit: then a crash could never land between an ACK and its recalculation.
+                // Not after the edit: then a crash lands between an ACK and its recalculation only when commits come in a batch.
                 tokio::task::yield_now().await;
                 if let Err(alarm) = engine.apply(&commit) {
                     return alarm;
