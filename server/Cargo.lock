@@ -903,6 +903,8 @@ dependencies = [
  "evaluator",
  "formula",
  "measure",
+ "object_store",
+ "tokio",
  "ulid",
 ]
 

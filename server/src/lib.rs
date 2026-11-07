@@ -3,14 +3,81 @@ mod edit;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use change_log::{Commit, Sequence};
+use change_log::{Commit, Epoch, Sequence, Submission};
 use datagen::Workspace;
 use dimension::Dimension;
 use evaluator::EvaluateError;
 use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
 use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureUlid};
+use object_store::ObjectStore;
+use tokio::sync::{mpsc, watch};
 
 pub use crate::edit::{DecodeError, Edit};
+
+#[derive(Debug, PartialEq)]
+pub enum Exit {
+    ChangeLog(change_log::Exit),
+    Engine(EngineAlarm),
+}
+
+// shortcut: every new owner rebuilds the engine from the start of the log; add snapshots when start-up time matters.
+pub async fn run(
+    store: Arc<dyn ObjectStore>,
+    workspace: &str,
+    epoch: Epoch,
+    engine: Engine,
+    requests: mpsc::Receiver<Submission>,
+    recalculated: watch::Sender<Option<Sequence>>,
+) -> Exit {
+    let (accepted, accepted_requests) = mpsc::channel(1);
+    let (committed, commits) = mpsc::unbounded_channel();
+    // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
+    tokio::select! {
+        biased;
+        exit = change_log::serve(store, workspace, epoch, accepted_requests, committed) => {
+            Exit::ChangeLog(exit)
+        }
+        alarm = recalculate(engine, requests, accepted, commits, recalculated) => {
+            Exit::Engine(alarm)
+        }
+    }
+}
+
+async fn recalculate(
+    mut engine: Engine,
+    mut requests: mpsc::Receiver<Submission>,
+    accepted: mpsc::Sender<Submission>,
+    mut commits: mpsc::UnboundedReceiver<Commit>,
+    recalculated: watch::Sender<Option<Sequence>>,
+) -> EngineAlarm {
+    let mut accepted = Some(accepted);
+    loop {
+        tokio::select! {
+            biased;
+            Some(commit) = commits.recv() => {
+                // Not after the edit: then a crash could never land between an ACK and its recalculation.
+                tokio::task::yield_now().await;
+                if let Err(alarm) = engine.apply(&commit) {
+                    return alarm;
+                }
+                recalculated.send_replace(Some(commit.sequence));
+            }
+            submission = requests.recv(), if accepted.is_some() => match submission {
+                Some(submission) => {
+                    let checked = Edit::decode(submission.request.payload.clone())
+                        .is_ok_and(|edit| engine.check(&edit).is_ok());
+                    // shortcut: a rejected edit only drops its sender, so the client gets no reason until PR 3 adds HTTP.
+                    if checked && let Some(accepted) = &accepted {
+                        // Not an error: the owner stopped, and run returns its exit.
+                        let _ = accepted.send(submission).await;
+                    }
+                }
+                None => accepted = None,
+            },
+            else => std::future::pending::<()>().await,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Engine {

@@ -14,4 +14,9 @@ dimension = { path = "../compute_engine/dimension" }
 evaluator = { path = "../compute_engine/evaluator" }
 formula = { path = "../compute_engine/formula" }
 measure = { path = "../compute_engine/measure" }
+object_store = { version = "0.14.2", default-features = false }
+tokio = { version = "1.54.1", features = ["macros", "sync"] }
 ulid = "3.0.0"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["rt", "test-util", "time"] }
