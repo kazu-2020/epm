@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use change_log::{Commit, Epoch, Exit, Request, RequestId, Segment, Submission, serve};
+use change_log::{Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Submission, serve};
 use futures_util::TryStreamExt;
 use futures_util::stream::BoxStream;
 use object_store::memory::InMemory;
@@ -38,7 +38,7 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64) -> Owner {
 }
 
 impl Owner {
-    fn passed_on(&mut self) -> Vec<(String, u64)> {
+    fn passed_on(&mut self) -> Vec<(String, Sequence)> {
         let mut passed_on = Vec::new();
         while let Ok(commit) = self.committed.try_recv() {
             passed_on.push((name(&commit.request_id), commit.sequence));
@@ -50,7 +50,7 @@ impl Owner {
 async fn submit(
     requests: &mpsc::Sender<Submission>,
     name: &str,
-) -> Result<u64, oneshot::error::RecvError> {
+) -> Result<Sequence, oneshot::error::RecvError> {
     let (acknowledged, ack) = oneshot::channel();
     let request = Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
@@ -70,10 +70,10 @@ fn name(request_id: &RequestId) -> String {
     String::from_utf8(request_id.0.to_vec()).expect("utf-8")
 }
 
-fn named(names: &[(&str, u64)]) -> Vec<(String, u64)> {
+fn named(names: &[(&str, u64)]) -> Vec<(String, Sequence)> {
     names
         .iter()
-        .map(|(name, sequence)| ((*name).to_owned(), *sequence))
+        .map(|(name, sequence)| ((*name).to_owned(), Sequence(*sequence)))
         .collect()
 }
 
@@ -107,13 +107,13 @@ async fn log(store: &Arc<dyn ObjectStore>) -> Vec<String> {
 async fn a_newer_owner_takes_over_and_the_old_owner_stops() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut a = start(&store, 1);
-    assert_eq!(submit(&a.requests, "r1").await, Ok(0));
-    assert_eq!(submit(&a.requests, "r2").await, Ok(1));
+    assert_eq!(submit(&a.requests, "r1").await, Ok(Sequence(0)));
+    assert_eq!(submit(&a.requests, "r2").await, Ok(Sequence(1)));
     assert_eq!(a.passed_on(), named(&[("r1", 0), ("r2", 1)]));
     let mut b = start(&store, 2);
     assert_eq!(
         submit(&b.requests, "r1").await,
-        Ok(0),
+        Ok(Sequence(0)),
         "B acknowledges r1 from its view"
     );
     assert!(
@@ -121,7 +121,7 @@ async fn a_newer_owner_takes_over_and_the_old_owner_stops() {
         "A does not acknowledge r3"
     );
     assert_eq!(a.exit.await.expect("A ends"), Exit::Stopped);
-    assert_eq!(submit(&b.requests, "r3").await, Ok(2));
+    assert_eq!(submit(&b.requests, "r3").await, Ok(Sequence(2)));
     assert_eq!(b.passed_on(), named(&[("r1", 0), ("r2", 1), ("r3", 2)]));
     assert_eq!(log(&store).await, ["r1", "r2", "r3"]);
 }
@@ -214,7 +214,7 @@ async fn a_crash_while_a_put_waits_for_its_reply_loses_no_acknowledged_request()
             puts: AtomicUsize::new(0),
         });
         let mut a = start(&store, 1);
-        assert_eq!(submit(&a.requests, "r0").await, Ok(0));
+        assert_eq!(submit(&a.requests, "r0").await, Ok(Sequence(0)));
         let requests = a.requests.clone();
         let r1 = tokio::spawn(async move { submit(&requests, "r1").await });
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -230,7 +230,7 @@ async fn a_crash_while_a_put_waits_for_its_reply_loses_no_acknowledged_request()
         let mut b = start(&store, 2);
         assert_eq!(
             submit(&b.requests, "r1").await,
-            Ok(1),
+            Ok(Sequence(1)),
             "{stall:?}: B acknowledges the resend"
         );
         assert_eq!(

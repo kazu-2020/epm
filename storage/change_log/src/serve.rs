@@ -13,11 +13,11 @@ use object_store::{ObjectStore, PutMode};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::owner::{Alarm, Effect, Event, Owner, PutFailure, Request};
-use crate::segment::{Commit, Epoch, RequestId, Segment, Slot};
+use crate::segment::{Commit, Epoch, RequestId, Segment, Sequence, Slot};
 
 pub struct Submission {
     pub request: Request,
-    pub acknowledged: oneshot::Sender<u64>,
+    pub acknowledged: oneshot::Sender<Sequence>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,7 +40,7 @@ pub async fn serve(
     let mut io: FuturesUnordered<BoxFuture<'static, Result<Event, Alarm>>> =
         FuturesUnordered::new();
     io.push(load(Arc::clone(&store), log.clone()).boxed());
-    let mut waiters: BTreeMap<RequestId, Vec<oneshot::Sender<u64>>> = BTreeMap::new();
+    let mut waiters: BTreeMap<RequestId, Vec<oneshot::Sender<Sequence>>> = BTreeMap::new();
     loop {
         let event = tokio::select! {
             biased;
