@@ -31,6 +31,7 @@ const LATEST_APPLY: Duration = Duration::from_secs(2);
 const PROBE_WAIT: Duration = Duration::from_secs(60);
 const LATEST_REPLY: Duration = Duration::from_secs(1);
 const ACK_LOST_PERCENT: u64 = 20;
+const CRASH_AFTER_ACK_PERCENT: u64 = 10;
 
 pub trait Server: Send + Sync {
     fn start(
@@ -421,6 +422,16 @@ impl Cluster {
         started.recalculated
     }
 
+    fn crash_if_granted(&mut self, server: usize, epoch: u64) {
+        let granted = self.servers[server]
+            .borrow()
+            .as_ref()
+            .map(|(epoch, _)| *epoch);
+        if granted == Some(epoch) {
+            self.crash(server);
+        }
+    }
+
     fn crash(&mut self, server: usize) {
         if let Some(owner) = self.owners[server].take()
             && !owner.is_finished()
@@ -454,16 +465,14 @@ async fn submit(
 }
 
 async fn client(
-    index: usize,
+    requests: Vec<(String, Bytes)>,
     mut rng: Rng,
-    server: Arc<dyn Server>,
     owners: Owners,
     history: History,
     end: Instant,
+    crashes: mpsc::UnboundedSender<(usize, u64)>,
 ) {
-    for request in 0..REQUESTS_PER_CLIENT {
-        let name = format!("c{index}r{request}");
-        let payload = server.payload(&name);
+    for (name, payload) in requests {
         while Instant::now() < end {
             let server = rng.below(SERVERS as u64) as usize;
             let owner = owners[server].borrow().clone();
@@ -484,6 +493,11 @@ async fn client(
                         sequence,
                     },
                 );
+                if rng.percent(CRASH_AFTER_ACK_PERCENT) {
+                    crashes
+                        .send((server, epoch))
+                        .expect("the simulation takes crashes");
+                }
                 let ack_lost = rng.percent(ACK_LOST_PERCENT);
                 if !ack_lost {
                     break;
@@ -526,15 +540,23 @@ pub async fn simulate(
         epoch: 0,
     };
     let end = Instant::now() + WORKLOAD;
+    let (crashes, mut crashes_after_ack) = mpsc::unbounded_channel();
     let clients: Vec<_> = (0..CLIENTS)
         .map(|index| {
+            let requests = (0..REQUESTS_PER_CLIENT)
+                .map(|request| {
+                    let name = format!("c{index}r{request}");
+                    let payload = server.payload(&name);
+                    (name, payload)
+                })
+                .collect();
             let run = client(
-                index,
+                requests,
                 rng.fork(),
-                Arc::clone(&server),
                 owners.clone(),
                 Arc::clone(&history),
                 end,
+                crashes.clone(),
             );
             tokio::spawn(run)
         })
@@ -546,7 +568,16 @@ pub async fn simulate(
         } else {
             Duration::from_secs(3)
         };
-        sleep(rng.up_to(pause)).await;
+        let mut pause = std::pin::pin!(sleep(rng.up_to(pause)));
+        loop {
+            tokio::select! {
+                biased;
+                Some((server, epoch)) = crashes_after_ack.recv() => {
+                    cluster.crash_if_granted(server, epoch);
+                }
+                () = &mut pause => break,
+            }
+        }
         let server = rng.below(SERVERS as u64) as usize;
         if rng.percent(60) {
             cluster.grant(server);
