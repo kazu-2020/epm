@@ -1,0 +1,12 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+bytes = "1.12.1"
+dimension = { path = "../compute_engine/dimension" }
+measure = { path = "../compute_engine/measure" }
+ulid = "3.0.0"
