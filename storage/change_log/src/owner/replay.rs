@@ -137,7 +137,7 @@ impl Server {
     fn with_view(phase: ModelPhase, epoch: u64, view: &View) -> Server {
         Server {
             view: view.sequences.keys().map(name).collect(),
-            view_length: view.next_sequence,
+            view_length: view.next_sequence.0,
             ..Server::empty(phase, epoch)
         }
     }
@@ -214,10 +214,6 @@ impl State<Replay> for ModelState {
     }
 }
 
-fn sequence_index(sequence: Sequence) -> usize {
-    usize::try_from(sequence.0).expect("a short log")
-}
-
 fn names(segment: &Segment) -> Vec<String> {
     segment
         .commits
@@ -234,7 +230,7 @@ struct Replay {
     writes_in_flight: BTreeMap<Write, Segment>,
     replies: BTreeSet<Reply>,
     acknowledged: BTreeSet<String>,
-    passed_on: BTreeMap<String, u64>,
+    passed_on: BTreeMap<String, Sequence>,
 }
 
 impl Driver for Replay {
@@ -247,7 +243,7 @@ impl Driver for Replay {
             grant(server: String) => {
                 self.granted_epoch += 1;
                 self.owners.insert(server.clone(), Owner::new(Epoch(self.granted_epoch)));
-                self.passed_on.insert(server, 0);
+                self.passed_on.insert(server, Sequence(0));
             },
             crash(server: String) => {
                 self.owners.remove(&server);
@@ -313,15 +309,15 @@ impl Replay {
                     self.writes_in_flight.insert(write, segment);
                 }
                 Effect::Committed(commit) => {
-                    let logged = self.log().get(sequence_index(commit.sequence)) == Some(&&commit);
+                    let logged = self.log().get(commit.sequence.index()) == Some(&&commit);
                     let passed_on = self
                         .passed_on
                         .get_mut(server)
                         .context("a granted owner counts its commits")?;
-                    if commit.sequence.0 != *passed_on || !logged {
-                        bail!("{server} passed on {commit:?} after {passed_on} commits");
+                    if commit.sequence != *passed_on || !logged {
+                        bail!("{server} passed on {commit:?} when {passed_on:?} was next");
                     }
-                    *passed_on += 1;
+                    *passed_on = passed_on.next();
                 }
                 Effect::Ack {
                     request_id,
@@ -329,12 +325,12 @@ impl Replay {
                 } => {
                     let logged = self
                         .log()
-                        .get(sequence_index(sequence))
+                        .get(sequence.index())
                         .map(|commit| &commit.request_id);
-                    let passed_on = self.passed_on.get(server).copied().unwrap_or(0);
-                    if logged != Some(&request_id) || sequence.0 >= passed_on {
+                    let passed_on = self.passed_on.get(server).copied().unwrap_or_default();
+                    if logged != Some(&request_id) || sequence >= passed_on {
                         bail!(
-                            "{server} acknowledged {request_id:?} as {sequence:?} after {passed_on} commits"
+                            "{server} acknowledged {request_id:?} as {sequence:?} when {passed_on:?} was next"
                         );
                     }
                     self.acknowledged.insert(name(&request_id));

@@ -92,7 +92,7 @@ struct Ready {
 #[derive(Debug, Default)]
 struct View {
     sequences: HashMap<RequestId, Sequence>,
-    next_sequence: u64,
+    next_sequence: Sequence,
 }
 
 #[derive(Debug)]
@@ -364,7 +364,7 @@ impl Ready {
         let commits = self
             .batch
             .drain(..)
-            .zip(self.view.next_sequence..)
+            .zip(self.view.next_sequence.0..)
             .map(|(request, sequence)| Commit {
                 request_id: request.request_id,
                 sequence: Sequence(sequence),
@@ -383,7 +383,7 @@ impl View {
         for commit in commits {
             self.sequences
                 .insert(commit.request_id.clone(), commit.sequence);
-            self.next_sequence += 1;
+            self.next_sequence = self.next_sequence.next();
             effects.push(Effect::Committed(commit.clone()));
         }
     }

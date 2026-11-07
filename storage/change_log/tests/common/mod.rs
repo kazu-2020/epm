@@ -667,11 +667,7 @@ pub fn check(outcome: &Outcome) -> Violations {
         }
     }
     // Not checked against the log at the time of the record: a store over the network can show a write to a read-back before its PUT returns, and PassedOn is recorded by another task.
-    let at = |sequence: Sequence| {
-        usize::try_from(sequence.0)
-            .ok()
-            .and_then(|index| log.get(index))
-    };
+    let at = |sequence: Sequence| log.get(sequence.index());
     for (at_record, request, epoch, sequence) in acknowledged {
         if at(sequence).is_none_or(|commit| commit.request_id.0 != request.as_bytes()) {
             violate(
@@ -679,9 +675,7 @@ pub fn check(outcome: &Outcome) -> Violations {
                 format!("record {at_record}: {request} acknowledged as {sequence:?}"),
             );
         }
-        if usize::try_from(sequence.0)
-            .is_ok_and(|index| passed_on.get(&epoch).map_or(0, Vec::len) <= index)
-        {
+        if passed_on.get(&epoch).map_or(0, Vec::len) <= sequence.index() {
             violate(
                 "passedOnBeforeAck",
                 format!(

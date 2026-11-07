@@ -9,8 +9,18 @@ pub struct Epoch(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Slot(pub u64);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Sequence(pub u64);
+
+impl Sequence {
+    pub fn next(self) -> Sequence {
+        Sequence(self.0 + 1)
+    }
+
+    pub fn index(self) -> usize {
+        usize::try_from(self.0).expect("a Commit Sequence fits in usize")
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(pub Bytes);
