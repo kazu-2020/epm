@@ -5,6 +5,12 @@ edition = "2024"
 
 [workspace]
 
+[features]
+apply_before_commit = []
+skip_commit = []
+apply_twice = []
+swap_commits = []
+
 [dependencies]
 bytes = "1.12.1"
 change_log = { path = "../storage/change_log" }

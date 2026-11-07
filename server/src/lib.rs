@@ -57,7 +57,19 @@ async fn recalculate(
             Some(commit) = commits.recv() => {
                 // Not after the edit: then a crash lands between an ACK and its recalculation only when commits come in a batch.
                 tokio::task::yield_now().await;
+                if cfg!(feature = "skip_commit") && commit.sequence == Sequence(1) {
+                    continue;
+                }
+                if cfg!(feature = "swap_commits")
+                    && let Ok(later) = commits.try_recv()
+                    && let Err(alarm) = engine.apply(&later)
+                {
+                    return alarm;
+                }
                 if let Err(alarm) = engine.apply(&commit) {
+                    return alarm;
+                }
+                if cfg!(feature = "apply_twice") && let Err(alarm) = engine.apply(&commit) {
                     return alarm;
                 }
                 recalculated.send_replace(Some(commit.sequence));
@@ -66,6 +78,17 @@ async fn recalculate(
                 Some(submission) => {
                     let checked = Edit::decode(submission.request.payload.clone())
                         .is_ok_and(|edit| engine.check(&edit).is_ok());
+                    if cfg!(feature = "apply_before_commit") && checked {
+                        let early = Commit {
+                            request_id: submission.request.request_id.clone(),
+                            sequence: engine.next,
+                            payload: submission.request.payload.clone(),
+                        };
+                        if let Err(alarm) = engine.apply(&early) {
+                            return alarm;
+                        }
+                        recalculated.send_replace(Some(early.sequence));
+                    }
                     // shortcut: a rejected edit only drops its sender, so the client gets no reason until PR 3 adds HTTP.
                     if checked && let Some(accepted) = &accepted {
                         // Not an error: the owner stopped, and run returns its exit.
