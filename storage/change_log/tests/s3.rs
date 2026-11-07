@@ -7,6 +7,10 @@ use object_store::aws::AmazonS3Builder;
 use object_store::{ObjectStore, RetryConfig};
 use tokio::runtime::Runtime;
 
+struct ChangeLog;
+
+impl common::Server for ChangeLog {}
+
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
@@ -44,7 +48,9 @@ fn seeds_keep_the_invariants_on_s3() {
     for seed in 0..seeds {
         let workspace = format!("{prefix}/seed-{seed}");
         let started = Instant::now();
-        let outcome = runtime.block_on(common::simulate(Arc::clone(&store), &workspace, seed));
+        let simulation =
+            common::simulate(Arc::new(ChangeLog), Arc::clone(&store), &workspace, seed);
+        let outcome = runtime.block_on(simulation);
         let (acknowledged, slots) = common::counts(&outcome);
         let violations = common::check(&outcome);
         println!(

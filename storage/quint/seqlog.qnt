@@ -265,6 +265,12 @@ module seqlog {
     val self = servers.get(server)
     (self.phase == Ready and self.epoch == grantedEpoch) implies clients.acknowledged.subseteq(self.view.toSet()))
 
+  val viewIsLogPrefix: bool = servers.keys().forall(server =>
+    val self = servers.get(server)
+    val log = replay(store.slots)
+    (self.phase == Ready and self.epoch == grantedEpoch) implies
+      (if (self.view.length() > log.length()) false else log.slice(0, self.view.length()) == self.view))
+
   val witnessNotTwoAcknowledged: bool = clients.acknowledged.size() < 2
   val witnessNoCommitAfterHandover: bool = not(store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0))
   val witnessNoOwnResendRejected: bool = not(store.replies.exists(reply =>
