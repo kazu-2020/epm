@@ -9,13 +9,26 @@ pub struct Epoch(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Slot(pub u64);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Sequence(pub u64);
+
+impl Sequence {
+    pub fn next(self) -> Sequence {
+        Sequence(self.0 + 1)
+    }
+
+    pub fn index(self) -> usize {
+        usize::try_from(self.0).expect("a Commit Sequence fits in usize")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(pub Bytes);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Commit {
     pub request_id: RequestId,
-    pub sequence: u64,
+    pub sequence: Sequence,
     pub payload: Bytes,
 }
 
@@ -49,7 +62,7 @@ impl Segment {
         let mut commits = Vec::new();
         for _ in 0..count {
             let request_id = RequestId(reader.prefixed()?);
-            let sequence = reader.u64()?;
+            let sequence = Sequence(reader.u64()?);
             let payload = reader.prefixed()?;
             commits.push(Commit {
                 request_id,
@@ -72,7 +85,7 @@ pub fn encode(epoch: Epoch, commits: &[Commit]) -> Bytes {
     out.put_u32_le(length(commits.len()));
     for commit in commits {
         put_prefixed(&mut out, &commit.request_id.0);
-        out.put_u64_le(commit.sequence);
+        out.put_u64_le(commit.sequence.0);
         put_prefixed(&mut out, &commit.payload);
     }
     out.freeze()
@@ -124,7 +137,7 @@ mod tests {
     fn commit(request_id: &'static str, sequence: u64, payload: &'static str) -> Commit {
         Commit {
             request_id: RequestId(Bytes::from_static(request_id.as_bytes())),
-            sequence,
+            sequence: Sequence(sequence),
             payload: Bytes::from_static(payload.as_bytes()),
         }
     }

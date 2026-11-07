@@ -8,7 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use change_log::{
-    Alarm, Commit, Epoch, Exit, Request, RequestId, Segment, Slot, Submission, serve,
+    Alarm, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Slot, Submission, serve,
 };
 use futures_util::stream::{self, BoxStream};
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
@@ -28,7 +28,7 @@ const WORKLOAD: Duration = Duration::from_secs(20);
 const CLIENT_WAIT: Duration = Duration::from_secs(2);
 const LATEST_APPLY: Duration = Duration::from_secs(2);
 const PROBE_WAIT: Duration = Duration::from_secs(60);
-const CRASH_PERCENT: u64 = 2;
+const LATEST_REPLY: Duration = Duration::from_secs(1);
 const ACK_LOST_PERCENT: u64 = 20;
 
 #[derive(Debug)]
@@ -96,6 +96,12 @@ pub enum Record {
     },
     Acked {
         request: String,
+        epoch: u64,
+        sequence: Sequence,
+    },
+    PassedOn {
+        epoch: u64,
+        commit: Commit,
     },
     ProbeStarted,
     ProbeFinished {
@@ -219,6 +225,11 @@ impl ObjectStore for Faults {
                 source: "409 ConditionalRequestConflict".into(),
             }),
             27..32 => Err(unavailable("503 Slow Down")),
+            32..40 => {
+                let result = apply(inner, history, location, payload, options).await;
+                sleep(self.delay(LATEST_REPLY)).await;
+                result
+            }
             _ => apply(inner, history, location, payload, options).await,
         }
     }
@@ -294,34 +305,38 @@ impl ObjectStore for Faults {
     }
 }
 
-type Owners = Vec<watch::Receiver<Option<mpsc::Sender<Submission>>>>;
+type Granted = Option<(u64, mpsc::Sender<Submission>)>;
+type Owners = Vec<watch::Receiver<Granted>>;
 
 struct Cluster {
     store: Arc<dyn ObjectStore>,
     workspace: String,
     history: History,
-    servers: Vec<watch::Sender<Option<mpsc::Sender<Submission>>>>,
+    servers: Vec<watch::Sender<Granted>>,
     owners: Vec<Option<JoinHandle<()>>>,
+    recorders: Vec<JoinHandle<()>>,
     epoch: u64,
 }
 
 impl Cluster {
-    fn grant(&mut self, server: usize, mut crashes: Option<Rng>) {
+    fn grant(&mut self, server: usize) {
         self.crash(server);
         self.epoch += 1;
         let epoch = self.epoch;
         record(&self.history, Record::Granted { server, epoch });
         let (sender, receiver) = mpsc::channel(64);
+        let (committed, mut passed_on) = mpsc::unbounded_channel();
         let store = Arc::clone(&self.store);
         let workspace = self.workspace.clone();
         let history = Arc::clone(&self.history);
-        let crash = move |_| {
-            crashes
-                .as_mut()
-                .is_some_and(|rng| rng.percent(CRASH_PERCENT))
-        };
+        let passed_on_history = Arc::clone(&self.history);
+        self.recorders.push(tokio::spawn(async move {
+            while let Some(commit) = passed_on.recv().await {
+                record(&passed_on_history, Record::PassedOn { epoch, commit });
+            }
+        }));
         self.owners[server] = Some(tokio::spawn(async move {
-            let owner = serve(store, &workspace, Epoch(epoch), receiver, crash);
+            let owner = serve(store, &workspace, Epoch(epoch), receiver, committed);
             let ended = match AssertUnwindSafe(owner).catch_unwind().await {
                 Ok(exit) => Record::Exited {
                     server,
@@ -332,11 +347,13 @@ impl Cluster {
             };
             record(&history, ended);
         }));
-        self.servers[server].send_replace(Some(sender));
+        self.servers[server].send_replace(Some((epoch, sender)));
     }
 
     fn crash(&mut self, server: usize) {
-        if let Some(owner) = self.owners[server].take() {
+        if let Some(owner) = self.owners[server].take()
+            && !owner.is_finished()
+        {
             owner.abort();
             record(&self.history, Record::Crashed { server });
         }
@@ -344,7 +361,7 @@ impl Cluster {
     }
 }
 
-async fn submit(owner: &mpsc::Sender<Submission>, name: &str, wait: Duration) -> bool {
+async fn submit(owner: &mpsc::Sender<Submission>, name: &str, wait: Duration) -> Option<Sequence> {
     let (acknowledged, ack) = oneshot::channel();
     let request = Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
@@ -356,8 +373,8 @@ async fn submit(owner: &mpsc::Sender<Submission>, name: &str, wait: Duration) ->
             acknowledged,
         })
         .await
-        .is_ok()
-        && matches!(timeout(wait, ack).await, Ok(Ok(())))
+        .ok()?;
+    timeout(wait, ack).await.ok()?.ok()
 }
 
 async fn client(index: usize, mut rng: Rng, owners: Owners, history: History, end: Instant) {
@@ -367,14 +384,18 @@ async fn client(index: usize, mut rng: Rng, owners: Owners, history: History, en
             let server = rng.below(SERVERS as u64) as usize;
             let owner = owners[server].borrow().clone();
             let acknowledged = match owner {
-                Some(owner) => submit(&owner, &name, rng.up_to(CLIENT_WAIT)).await,
-                None => false,
+                Some((epoch, owner)) => submit(&owner, &name, rng.up_to(CLIENT_WAIT))
+                    .await
+                    .map(|sequence| (epoch, sequence)),
+                None => None,
             };
-            if acknowledged {
+            if let Some((epoch, sequence)) = acknowledged {
                 record(
                     &history,
                     Record::Acked {
                         request: name.clone(),
+                        epoch,
+                        sequence,
                     },
                 );
                 let ack_lost = rng.percent(ACK_LOST_PERCENT);
@@ -409,6 +430,7 @@ pub async fn simulate(inner: Arc<dyn ObjectStore>, workspace: &str, seed: u64) -
         history: Arc::clone(&history),
         servers,
         owners: (0..SERVERS).map(|_| None).collect(),
+        recorders: Vec::new(),
         epoch: 0,
     };
     let end = Instant::now() + WORKLOAD;
@@ -418,7 +440,7 @@ pub async fn simulate(inner: Arc<dyn ObjectStore>, workspace: &str, seed: u64) -
             tokio::spawn(run)
         })
         .collect();
-    cluster.grant(0, Some(rng.fork()));
+    cluster.grant(0);
     while Instant::now() < end {
         let pause = if rng.percent(30) {
             Duration::from_millis(100)
@@ -428,7 +450,7 @@ pub async fn simulate(inner: Arc<dyn ObjectStore>, workspace: &str, seed: u64) -
         sleep(rng.up_to(pause)).await;
         let server = rng.below(SERVERS as u64) as usize;
         if rng.percent(60) {
-            cluster.grant(server, Some(rng.fork()));
+            cluster.grant(server);
         } else {
             cluster.crash(server);
         }
@@ -444,14 +466,14 @@ pub async fn simulate(inner: Arc<dyn ObjectStore>, workspace: &str, seed: u64) -
 
     record(&history, Record::ProbeStarted);
     let acknowledged: BTreeSet<String> = acknowledged(&history.lock().expect("history"));
-    cluster.grant(0, None);
-    let owner = cluster.servers[0]
+    cluster.grant(0);
+    let (_, owner) = cluster.servers[0]
         .borrow()
         .clone()
         .expect("the probe owner runs");
     let probe = async {
         for request in &acknowledged {
-            if !submit(&owner, request, PROBE_WAIT).await {
+            if submit(&owner, request, PROBE_WAIT).await.is_none() {
                 return false;
             }
         }
@@ -460,6 +482,11 @@ pub async fn simulate(inner: Arc<dyn ObjectStore>, workspace: &str, seed: u64) -
     let all = timeout(PROBE_WAIT, probe).await.unwrap_or(false);
     record(&history, Record::ProbeFinished { acknowledged: all });
     cluster.crash(0);
+    for recorder in cluster.recorders.drain(..) {
+        recorder
+            .await
+            .expect("a recorder ends when its owner drops the channel");
+    }
 
     let listed: Vec<ObjectMeta> = inner
         .list(Some(&Path::from(workspace)))
@@ -481,7 +508,7 @@ fn acknowledged(history: &[Record]) -> BTreeSet<String> {
     history
         .iter()
         .filter_map(|record| match record {
-            Record::Acked { request } => Some(request.clone()),
+            Record::Acked { request, .. } => Some(request.clone()),
             _ => None,
         })
         .collect()
@@ -521,6 +548,8 @@ pub fn check(outcome: &Outcome) -> Violations {
     let mut log: Vec<Commit> = Vec::new();
     let mut written: BTreeMap<(Slot, Epoch), Bytes> = BTreeMap::new();
     let mut before_probe = None;
+    let mut acknowledged: Vec<(usize, &String, u64, Sequence)> = Vec::new();
+    let mut passed_on: BTreeMap<u64, Vec<(usize, &Commit)>> = BTreeMap::new();
     for (at, record) in outcome.history.iter().enumerate() {
         match record {
             Record::Sent { key, body } => {
@@ -570,13 +599,21 @@ pub fn check(outcome: &Outcome) -> Violations {
                 if !next
                     .iter()
                     .zip(0..)
-                    .all(|(commit, position)| commit.sequence == position)
+                    .all(|(commit, position)| commit.sequence == Sequence(position))
                 {
                     violate("commitSequenceIsPosition", format!("record {at}: {key}"));
                 }
                 log = next;
             }
-            Record::Acked { request } => {
+            Record::PassedOn { epoch, commit } => {
+                passed_on.entry(*epoch).or_default().push((at, commit));
+            }
+            Record::Acked {
+                request,
+                epoch,
+                sequence,
+            } => {
+                acknowledged.push((at, request, *epoch, *sequence));
                 if !log
                     .iter()
                     .any(|commit| commit.request_id.0 == request.as_bytes())
@@ -629,6 +666,34 @@ pub fn check(outcome: &Outcome) -> Violations {
             | Record::Rejected { .. } => {}
         }
     }
+    // Not checked against the log at the time of the record: a store over the network can show a write to a read-back before its PUT returns, and PassedOn is recorded by another task.
+    let at = |sequence: Sequence| log.get(sequence.index());
+    for (at_record, request, epoch, sequence) in acknowledged {
+        if at(sequence).is_none_or(|commit| commit.request_id.0 != request.as_bytes()) {
+            violate(
+                "ackCarriesSequence",
+                format!("record {at_record}: {request} acknowledged as {sequence:?}"),
+            );
+        }
+        if passed_on.get(&epoch).map_or(0, Vec::len) <= sequence.index() {
+            violate(
+                "passedOnBeforeAck",
+                format!(
+                    "record {at_record}: epoch {epoch} acknowledged {request} as {sequence:?} without passing it on"
+                ),
+            );
+        }
+    }
+    for (epoch, commits) in passed_on {
+        for ((at_record, commit), expected) in commits.into_iter().zip(0..) {
+            if commit.sequence != Sequence(expected) || at(commit.sequence) != Some(commit) {
+                violate(
+                    "passedOnInLogOrder",
+                    format!("record {at_record}: epoch {epoch} passed on {commit:?}"),
+                );
+            }
+        }
+    }
     if store != outcome.store {
         violate(
             "historyMatchesStore",
@@ -645,20 +710,42 @@ pub fn counts(outcome: &Outcome) -> (usize, usize) {
 pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let mut seen = BTreeSet::new();
     let mut sent: BTreeMap<&str, Vec<&Bytes>> = BTreeMap::new();
+    let mut epochs: BTreeMap<usize, u64> = BTreeMap::new();
+    let mut applied: BTreeSet<(u64, Sequence)> = BTreeSet::new();
+    let passed_on: BTreeSet<(u64, Sequence)> = outcome
+        .history
+        .iter()
+        .filter_map(|record| match record {
+            Record::PassedOn { epoch, commit } => Some((*epoch, commit.sequence)),
+            _ => None,
+        })
+        .collect();
     for record in &outcome.history {
         match record {
             Record::Sent { key, body } => sent.entry(key).or_default().push(body),
+            Record::Granted { server, epoch } => {
+                epochs.insert(*server, *epoch);
+            }
+            Record::Applied { body, .. } => {
+                let segment = decode(body);
+                if let Some(first) = segment.commits.first() {
+                    applied.insert((segment.epoch.0, first.sequence));
+                }
+            }
+            Record::Crashed { server } => {
+                if epochs.get(server).is_some_and(|epoch| {
+                    applied
+                        .iter()
+                        .any(|written| written.0 == *epoch && !passed_on.contains(written))
+                }) {
+                    seen.insert("crashAfterApplyBeforeReply");
+                }
+            }
             Record::Exited {
                 exit: Exit::Stopped,
                 ..
             } => {
                 seen.insert("oldOwnerStopped");
-            }
-            Record::Exited {
-                exit: Exit::Crashed(_),
-                ..
-            } => {
-                seen.insert("crashAtFailPoint");
             }
             Record::Rejected { .. } => {
                 seen.insert("storeRejectedPut");
