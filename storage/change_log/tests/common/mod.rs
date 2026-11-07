@@ -1018,5 +1018,13 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     {
         seen.insert("fenceMovedPastOldOwner");
     }
+    if fences.iter().any(|(epoch, slot)| {
+        fences.contains(&(*epoch, Slot(slot.0 + 1)))
+            && segments
+                .get(slot)
+                .is_some_and(|older| older.epoch < *epoch && !older.commits.is_empty())
+    }) {
+        seen.insert("fenceFoundOlderCommits");
+    }
     seen
 }
