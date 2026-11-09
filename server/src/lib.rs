@@ -218,4 +218,6 @@ impl Admit for Definitions {
         let edit = Edit::decode(payload.clone()).map_err(Rejection::Undecodable)?;
         self.add(&edit, &mut BTreeMap::new())
     }
+
+    fn replay(&mut self, _payload: &Bytes) {}
 }

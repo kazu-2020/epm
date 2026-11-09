@@ -70,6 +70,8 @@ pub trait Admit {
     type Rejection: Clone;
 
     fn admit(&mut self, payload: &Bytes) -> Result<(), Self::Rejection>;
+
+    fn replay(&mut self, payload: &Bytes);
 }
 
 #[derive(Debug)]
@@ -81,6 +83,8 @@ impl Admit for AdmitAll {
     fn admit(&mut self, _payload: &Bytes) -> Result<(), Infallible> {
         Ok(())
     }
+
+    fn replay(&mut self, _payload: &Bytes) {}
 }
 
 #[derive(Debug)]
@@ -445,8 +449,7 @@ impl View {
     ) {
         self.add(commits, effects);
         for commit in commits {
-            // Not checked: an older owner admitted these commits in this order, and the engine raises an alarm for a bad one.
-            let _ = admit.admit(&commit.payload);
+            admit.replay(&commit.payload);
         }
     }
 
@@ -697,23 +700,34 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct Checked(Rc<RefCell<Vec<Bytes>>>);
+    struct Checked {
+        admitted: Rc<RefCell<Vec<Bytes>>>,
+        replayed: Rc<RefCell<Vec<Bytes>>>,
+    }
 
     impl Admit for Checked {
         type Rejection = &'static str;
 
         fn admit(&mut self, payload: &Bytes) -> Result<(), &'static str> {
-            self.0.borrow_mut().push(payload.clone());
+            self.admitted.borrow_mut().push(payload.clone());
             if payload.as_ref() == b"bad" {
                 return Err("bad");
             }
             Ok(())
         }
+
+        fn replay(&mut self, payload: &Bytes) {
+            self.replayed.borrow_mut().push(payload.clone());
+        }
     }
 
     impl Checked {
-        fn payloads(&self) -> Vec<Bytes> {
-            self.0.borrow().clone()
+        fn admitted(&self) -> Vec<Bytes> {
+            self.admitted.borrow().clone()
+        }
+
+        fn replayed(&self) -> Vec<Bytes> {
+            self.replayed.borrow().clone()
         }
     }
 
@@ -760,11 +774,11 @@ mod tests {
             vec![committed_as("r3", 1, "good")],
             "the rejected request took no Commit Sequence"
         );
-        assert_eq!(checked.payloads(), ["good", "bad", "good"]);
+        assert_eq!(checked.admitted(), ["good", "bad", "good"]);
     }
 
     #[test]
-    fn a_new_owner_checks_the_commits_of_older_owners_in_sequence_order() {
+    fn a_new_owner_replays_the_commits_of_older_owners_in_sequence_order() {
         let mut store = Store::default();
         store.put(
             Slot(0),
@@ -793,9 +807,13 @@ mod tests {
             super::Effect::Committed(committed_as("r3", 2, "third"))
         );
         assert_eq!(
-            checked.payloads(),
+            checked.replayed(),
             ["first", "bad", "third"],
             "every commit, a bad one too"
+        );
+        assert!(
+            checked.admitted().is_empty(),
+            "no replayed commit is checked"
         );
     }
 
