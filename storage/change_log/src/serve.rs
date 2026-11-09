@@ -81,9 +81,9 @@ pub async fn serve<A: Admit>(
                 Effect::Ack {
                     request_id,
                     sequence,
-                } => answer(&mut waiters, &request_id, Ok(sequence)),
+                } => acknowledge(&mut waiters, &request_id, sequence),
                 Effect::Rejected { request_id, reason } => {
-                    answer(&mut waiters, &request_id, Err(reason));
+                    reject(&mut waiters, &request_id, reason);
                 }
                 Effect::Stop => return Exit::Stopped,
                 Effect::Alarm(alarm) => return Exit::Alarm(alarm),
@@ -92,11 +92,23 @@ pub async fn serve<A: Admit>(
     }
 }
 
-fn answer<R: Clone>(waiters: &mut Waiters<R>, request_id: &RequestId, answer: Result<Sequence, R>) {
+fn acknowledge<R>(waiters: &mut Waiters<R>, request_id: &RequestId, sequence: Sequence) {
     for acknowledged in waiters.remove(request_id).into_iter().flatten() {
         // Not an error: a client that stopped waiting resends, and the view answers it.
-        let _ = acknowledged.send(answer.clone());
+        let _ = acknowledged.send(Ok(sequence));
     }
+}
+
+fn reject<R>(waiters: &mut Waiters<R>, request_id: &RequestId, reason: R) {
+    let Some(waiting) = waiters.get_mut(request_id) else {
+        return;
+    };
+    let oldest = waiting.remove(0);
+    if waiting.is_empty() {
+        waiters.remove(request_id);
+    }
+    // Not an error: a client that stopped waiting resends, and the owner checks it again.
+    let _ = oldest.send(Err(reason));
 }
 
 fn key(log: &Path, slot: Slot) -> Path {
