@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use change_log::{Commit, RequestId, Sequence};
+use change_log::{Admit, Commit, RequestId, Sequence};
 use datagen::Workspace;
 use datagen::representative::{self, Size};
 use dimension::MemberId;
@@ -63,18 +63,28 @@ fn a_formula_error_shows_before_any_request() {
     ));
 }
 
+fn admit(payload: &Bytes) -> Result<(), Rejection> {
+    engine().definitions().clone().admit(payload)
+}
+
 #[test]
-fn only_a_cell_of_an_input_measure_passes_the_check() {
-    let engine = engine();
-    assert_eq!(engine.check(&quantity([0, 1, 1, 0, 1], Some(2.5))), Ok(()));
-    assert_eq!(engine.check(&quantity([0, 1, 1, 0, 1], None)), Ok(()));
+fn only_a_cell_of_an_input_measure_is_admitted() {
+    assert_eq!(
+        admit(&quantity([0, 1, 1, 0, 1], Some(2.5)).encode()),
+        Ok(())
+    );
+    assert_eq!(admit(&quantity([0, 1, 1, 0, 1], None).encode()), Ok(()));
+    assert_eq!(
+        admit(&Bytes::from_static(b"\x09")),
+        Err(Rejection::Undecodable(DecodeError::Version(9)))
+    );
     let mut result = quantity([0, 1, 1, 0, 1], Some(2.5));
     result.measure = SALES;
-    assert_eq!(engine.check(&result), Err(Rejection::NotAnInput(SALES)));
+    assert_eq!(admit(&result.encode()), Err(Rejection::NotAnInput(SALES)));
     let mut short = quantity([0, 1, 1, 0, 1], Some(2.5));
     short.coordinate.pop();
     assert_eq!(
-        engine.check(&short),
+        admit(&short.encode()),
         Err(Rejection::Coordinate(MeasureError::CoordinateLength {
             expected: 5,
             found: 4
@@ -82,7 +92,7 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     );
     let versions = 3;
     assert!(matches!(
-        engine.check(&quantity([0, versions, 1, 0, 1], Some(2.5))),
+        admit(&quantity([0, versions, 1, 0, 1], Some(2.5)).encode()),
         Err(Rejection::Coordinate(MeasureError::MemberOutOfRange { member, .. }))
             if member == MemberId(versions)
     ));

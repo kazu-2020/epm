@@ -1,10 +1,10 @@
 mod edit;
 
-use std::collections::BTreeSet;
-use std::convert::Infallible;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use change_log::{AdmitAll, Commit, Epoch, Sequence, Submission};
+use bytes::Bytes;
+use change_log::{Admit, Commit, Epoch, Sequence, Submission};
 use datagen::Workspace;
 use dimension::Dimension;
 use evaluator::EvaluateError;
@@ -27,15 +27,16 @@ pub async fn run(
     workspace: &str,
     epoch: Epoch,
     engine: Engine,
-    requests: mpsc::Receiver<Submission<Infallible>>,
+    requests: mpsc::Receiver<Submission<Rejection>>,
     recalculated: watch::Sender<Option<Sequence>>,
 ) -> Exit {
     let (accepted, accepted_requests) = mpsc::channel(1);
     let (committed, commits) = mpsc::unbounded_channel();
+    let definitions = engine.definitions.clone();
     // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
     tokio::select! {
         biased;
-        exit = change_log::serve(store, workspace, epoch, AdmitAll, accepted_requests, committed) => {
+        exit = change_log::serve(store, workspace, epoch, definitions, accepted_requests, committed) => {
             Exit::ChangeLog(exit)
         }
         alarm = recalculate(engine, requests, accepted, commits, recalculated) => {
@@ -46,8 +47,8 @@ pub async fn run(
 
 async fn recalculate(
     mut engine: Engine,
-    mut requests: mpsc::Receiver<Submission<Infallible>>,
-    accepted: mpsc::Sender<Submission<Infallible>>,
+    mut requests: mpsc::Receiver<Submission<Rejection>>,
+    accepted: mpsc::Sender<Submission<Rejection>>,
     mut commits: mpsc::UnboundedReceiver<Commit>,
     recalculated: watch::Sender<Option<Sequence>>,
 ) -> EngineAlarm {
@@ -77,9 +78,7 @@ async fn recalculate(
             }
             submission = requests.recv(), if accepted.is_some() => match submission {
                 Some(submission) => {
-                    let checked = Edit::decode(submission.request.payload.clone())
-                        .is_ok_and(|edit| engine.check(&edit).is_ok());
-                    if cfg!(feature = "apply_before_commit") && checked {
+                    if cfg!(feature = "apply_before_commit") {
                         let early = Commit {
                             request_id: submission.request.request_id.clone(),
                             sequence: engine.next,
@@ -90,8 +89,7 @@ async fn recalculate(
                         }
                         recalculated.send_replace(Some(early.sequence));
                     }
-                    // shortcut: a rejected edit only drops its sender, so the client gets no reason until PR 3 adds HTTP.
-                    if checked && let Some(accepted) = &accepted {
+                    if let Some(accepted) = &accepted {
                         // Not an error: the owner stopped, and run returns its exit.
                         let _ = accepted.send(submission).await;
                     }
@@ -108,8 +106,13 @@ pub struct Engine {
     dimensions: Arc<[Dimension]>,
     measures: Vec<Measure>,
     formulas: Vec<(MeasureUlid, CheckedExpression)>,
-    inputs: BTreeSet<MeasureUlid>,
+    definitions: Definitions,
     next: Sequence,
+}
+
+#[derive(Clone, Debug)]
+pub struct Definitions {
+    inputs: BTreeMap<MeasureUlid, Delta>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -132,8 +135,9 @@ pub enum FormulaError {
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Rejection {
+    Undecodable(DecodeError),
     NotAnInput(MeasureUlid),
     Coordinate(MeasureError),
 }
@@ -171,7 +175,12 @@ impl Engine {
             .map(|input| input.definition().clone())
             .chain(formulas.iter().map(|formula| formula.result.clone()))
             .collect();
-        let input_ulids = inputs.iter().map(Measure::ulid).collect();
+        let input_definitions = Definitions {
+            inputs: inputs
+                .iter()
+                .map(|input| (input.ulid(), input.delta()))
+                .collect(),
+        };
         let mut measures = inputs;
         let mut checked = Vec::with_capacity(formulas.len());
         for formula in &formulas {
@@ -202,13 +211,13 @@ impl Engine {
             dimensions: dimensions.into(),
             measures,
             formulas: checked,
-            inputs: input_ulids,
+            definitions: input_definitions,
             next: Sequence::default(),
         })
     }
 
-    pub fn check(&self, edit: &Edit) -> Result<(), Rejection> {
-        self.delta(edit).map(drop)
+    pub fn definitions(&self) -> &Definitions {
+        &self.definitions
     }
 
     pub fn apply(&mut self, commit: &Commit) -> Result<(), EngineAlarm> {
@@ -222,6 +231,7 @@ impl Engine {
         let edit = Edit::decode(commit.payload.clone())
             .map_err(|error| EngineAlarm::Undecodable { sequence, error })?;
         let delta = self
+            .definitions
             .delta(&edit)
             .map_err(|rejection| EngineAlarm::Rejected {
                 sequence,
@@ -247,22 +257,29 @@ impl Engine {
     pub fn measures(&self) -> &[Measure] {
         &self.measures
     }
+}
 
+impl Definitions {
     fn delta(&self, edit: &Edit) -> Result<Delta, Rejection> {
-        if !self.inputs.contains(&edit.measure) {
-            return Err(Rejection::NotAnInput(edit.measure));
-        }
         let mut delta = self
-            .measures
-            .iter()
-            .find(|measure| measure.ulid() == edit.measure)
-            .expect("the engine holds every input measure")
-            .delta();
+            .inputs
+            .get(&edit.measure)
+            .ok_or(Rejection::NotAnInput(edit.measure))?
+            .clone();
         match edit.value {
             Some(value) => delta.set(&edit.coordinate, value),
             None => delta.delete(&edit.coordinate),
         }
         .map_err(Rejection::Coordinate)?;
         Ok(delta)
+    }
+}
+
+impl Admit for Definitions {
+    type Rejection = Rejection;
+
+    fn admit(&mut self, payload: &Bytes) -> Result<(), Rejection> {
+        let edit = Edit::decode(payload.clone()).map_err(Rejection::Undecodable)?;
+        self.delta(&edit).map(drop)
     }
 }

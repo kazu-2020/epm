@@ -139,7 +139,7 @@ struct Axis {
     len: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MeasureError {
     NoAxes,
     DuplicateAxis(DimensionUlid),

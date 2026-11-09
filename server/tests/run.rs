@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -8,7 +7,7 @@ use dimension::MemberId;
 use measure::MeasureUlid;
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
-use server::{DecodeError, Edit, Engine, EngineAlarm, Exit, run};
+use server::{DecodeError, Edit, Engine, EngineAlarm, Exit, Rejection, run};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use ulid::Ulid;
@@ -24,7 +23,7 @@ const TINY: Size = Size {
 const WORKSPACE: &str = "ws";
 
 struct Owner {
-    requests: mpsc::Sender<Submission<Infallible>>,
+    requests: mpsc::Sender<Submission<Rejection>>,
     recalculated: watch::Receiver<Option<Sequence>>,
     exit: JoinHandle<Exit>,
 }
@@ -54,11 +53,11 @@ fn edit(measure: u128, value: Option<f64>) -> Bytes {
     .encode()
 }
 
-async fn submit(
-    requests: &mpsc::Sender<Submission<Infallible>>,
+async fn submit<R>(
+    requests: &mpsc::Sender<Submission<R>>,
     name: &str,
     payload: Bytes,
-) -> Result<Sequence, oneshot::error::RecvError> {
+) -> Result<Result<Sequence, R>, oneshot::error::RecvError> {
     let (acknowledged, ack) = oneshot::channel();
     let request = Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
@@ -71,8 +70,7 @@ async fn submit(
         })
         .await
         .expect("the owner is running");
-    let Ok(sequence) = ack.await?;
-    Ok(sequence)
+    ack.await
 }
 
 impl Owner {
@@ -92,24 +90,22 @@ async fn only_checked_edits_enter_the_log_and_a_newer_owner_recalculates_them() 
     let sales = 200;
     assert_eq!(
         submit(&a.requests, "r1", edit(quantity, Some(3.0))).await,
-        Ok(Sequence(0))
+        Ok(Ok(Sequence(0)))
     );
     a.recalculates(0).await;
-    assert!(
-        submit(&a.requests, "result", edit(sales, Some(3.0)))
-            .await
-            .is_err(),
-        "no ACK for an edit of a formula result"
+    assert_eq!(
+        submit(&a.requests, "result", edit(sales, Some(3.0))).await,
+        Ok(Err(Rejection::NotAnInput(MeasureUlid(Ulid(sales))))),
+        "an edit of a formula result"
     );
-    assert!(
-        submit(&a.requests, "garbage", Bytes::from_static(b"\x09"))
-            .await
-            .is_err(),
-        "no ACK for a payload that does not decode"
+    assert_eq!(
+        submit(&a.requests, "garbage", Bytes::from_static(b"\x09")).await,
+        Ok(Err(Rejection::Undecodable(DecodeError::Version(9)))),
+        "a payload that does not decode"
     );
     assert_eq!(
         submit(&a.requests, "r2", edit(quantity, None)).await,
-        Ok(Sequence(1)),
+        Ok(Ok(Sequence(1))),
         "the rejected edits took no Commit Sequence"
     );
     a.recalculates(1).await;
@@ -118,7 +114,7 @@ async fn only_checked_edits_enter_the_log_and_a_newer_owner_recalculates_them() 
     b.recalculates(1).await;
     assert_eq!(
         submit(&b.requests, "r3", edit(quantity, Some(5.0))).await,
-        Ok(Sequence(2))
+        Ok(Ok(Sequence(2)))
     );
     b.recalculates(2).await;
     assert!(
@@ -148,7 +144,7 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
     });
     assert_eq!(
         submit(&requests, "garbage", Bytes::from_static(b"\x09")).await,
-        Ok(Sequence(0))
+        Ok(Ok(Sequence(0)))
     );
     unchecked.abort();
 
