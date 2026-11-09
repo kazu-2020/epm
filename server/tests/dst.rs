@@ -193,18 +193,21 @@ fn cells(measure: &Measure) -> Vec<(Vec<u32>, String)> {
     exact(&measure.cells().collect::<Vec<_>>())
 }
 
-fn recalculated_log(model: &Model, log: &[Commit]) -> Result<Engine, String> {
+fn recalculated_log(model: &Model, log: &[Commit], batch: usize) -> Result<Engine, String> {
     let mut engine = model.engine.clone();
-    for commit in log {
-        engine.apply(commit).map_err(|alarm| format!("{alarm:?}"))?;
+    for commits in log.chunks(batch) {
+        engine = engine
+            .apply_batch(commits)
+            .map_err(|alarm| format!("{alarm:?}"))?;
     }
     Ok(engine)
 }
 
-fn final_values(model: &Model, outcome: &common::Outcome) -> common::Violations {
+fn final_values(model: &Model, seed: u64, outcome: &common::Outcome) -> common::Violations {
     let (_, log) = common::replay(&outcome.store);
     let expected = model.recalculate_all(model.fold(&log));
-    let difference = match recalculated_log(model, &log) {
+    let batch = 1 + (seed % 4) as usize;
+    let difference = match recalculated_log(model, &log, batch) {
         Err(alarm) => Some(alarm),
         Ok(engine) => engine
             .measures()
@@ -247,7 +250,7 @@ fn seeds_keep_the_invariants() {
                         .map(|&seed| {
                             let outcome = simulate(model, seed);
                             let mut violations = common::check(&outcome);
-                            violations.extend(final_values(model, &outcome));
+                            violations.extend(final_values(model, seed, &outcome));
                             let witnesses = common::witnesses(&outcome);
                             (seed, violations, witnesses, common::counts(&outcome))
                         })
@@ -327,7 +330,8 @@ fn final_values_agree_with_duckdb() {
         let references: Vec<&Measure> = inputs.iter().collect();
         let mut oracle =
             Oracle::new(&model.dimensions(), &references).expect("DuckDB loads the inputs");
-        let engine = recalculated_log(&model, &log).expect("the engine applies the log");
+        let engine =
+            recalculated_log(&model, &log, log.len().max(1)).expect("the engine applies the log");
         let (engine_inputs, results) = engine.measures().split_at(inputs.len());
         for (input, expected) in engine_inputs.iter().zip(&inputs) {
             assert_eq!(cells(input), cells(expected), "seed {seed}");

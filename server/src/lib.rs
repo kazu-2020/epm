@@ -1,6 +1,7 @@
 mod edit;
 
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -64,14 +65,17 @@ async fn recalculate(
                 }
                 if cfg!(feature = "swap_commits")
                     && let Ok(later) = commits.try_recv()
-                    && let Err(alarm) = engine.apply(&later)
+                    && let Err(alarm) = engine.apply_batch(&[later])
                 {
                     return alarm;
                 }
-                if let Err(alarm) = engine.apply(&commit) {
-                    return alarm;
-                }
-                if cfg!(feature = "apply_twice") && let Err(alarm) = engine.apply(&commit) {
+                engine = match engine.apply_batch(std::slice::from_ref(&commit)) {
+                    Ok(engine) => engine,
+                    Err(alarm) => return alarm,
+                };
+                if cfg!(feature = "apply_twice")
+                    && let Err(alarm) = engine.apply_batch(std::slice::from_ref(&commit))
+                {
                     return alarm;
                 }
                 recalculated.send_replace(Some(commit.sequence));
@@ -84,9 +88,10 @@ async fn recalculate(
                             sequence: engine.next,
                             payload: submission.request.payload.clone(),
                         };
-                        if let Err(alarm) = engine.apply(&early) {
-                            return alarm;
-                        }
+                        engine = match engine.apply_batch(std::slice::from_ref(&early)) {
+                            Ok(engine) => engine,
+                            Err(alarm) => return alarm,
+                        };
                         recalculated.send_replace(Some(early.sequence));
                     }
                     if let Some(accepted) = &accepted {
@@ -105,7 +110,7 @@ async fn recalculate(
 pub struct Engine {
     dimensions: Arc<[Dimension]>,
     measures: Vec<Measure>,
-    formulas: Vec<(MeasureUlid, CheckedExpression)>,
+    formulas: Arc<[(MeasureUlid, CheckedExpression)]>,
     definitions: Definitions,
     next: Sequence,
 }
@@ -157,7 +162,7 @@ pub enum EngineAlarm {
         rejection: Rejection,
     },
     Failed {
-        sequence: Sequence,
+        sequences: RangeInclusive<Sequence>,
         error: EvaluateError,
     },
 }
@@ -210,7 +215,7 @@ impl Engine {
         Ok(Engine {
             dimensions: dimensions.into(),
             measures,
-            formulas: checked,
+            formulas: checked.into(),
             definitions: input_definitions,
             next: Sequence::default(),
         })
@@ -220,58 +225,71 @@ impl Engine {
         &self.definitions
     }
 
-    pub fn apply(&mut self, commit: &Commit) -> Result<(), EngineAlarm> {
-        let sequence = commit.sequence;
-        if sequence != self.next {
-            return Err(EngineAlarm::OutOfOrder {
-                expected: self.next,
-                found: sequence,
-            });
+    pub fn apply_batch(&self, commits: &[Commit]) -> Result<Engine, EngineAlarm> {
+        let (Some(first), Some(last)) = (commits.first(), commits.last()) else {
+            return Ok(self.clone());
+        };
+        let mut next = self.next;
+        let mut deltas = BTreeMap::new();
+        for commit in commits {
+            let sequence = commit.sequence;
+            if sequence != next {
+                return Err(EngineAlarm::OutOfOrder {
+                    expected: next,
+                    found: sequence,
+                });
+            }
+            let edit = Edit::decode(commit.payload.clone())
+                .map_err(|error| EngineAlarm::Undecodable { sequence, error })?;
+            self.definitions
+                .add(&edit, &mut deltas)
+                .map_err(|rejection| EngineAlarm::Rejected {
+                    sequence,
+                    rejection,
+                })?;
+            next = sequence.next();
         }
-        let edit = Edit::decode(commit.payload.clone())
-            .map_err(|error| EngineAlarm::Undecodable { sequence, error })?;
-        let delta = self
-            .definitions
-            .delta(&edit)
-            .map_err(|rejection| EngineAlarm::Rejected {
-                sequence,
-                rejection,
-            })?;
         let dimensions: Vec<&Dimension> = self.dimensions.iter().collect();
         let formulas: Vec<(MeasureUlid, &CheckedExpression)> = self
             .formulas
             .iter()
             .map(|(result, expression)| (*result, expression))
             .collect();
-        column_engine::edit(
-            &mut self.measures,
-            [(edit.measure, delta)],
-            &formulas,
-            &dimensions,
-        )
-        .map_err(|error| EngineAlarm::Failed { sequence, error })?;
-        self.next = sequence.next();
-        Ok(())
+        let mut measures = self.measures.clone();
+        column_engine::edit(&mut measures, deltas, &formulas, &dimensions).map_err(|error| {
+            EngineAlarm::Failed {
+                sequences: first.sequence..=last.sequence,
+                error,
+            }
+        })?;
+        Ok(Engine {
+            measures,
+            next,
+            ..self.clone()
+        })
     }
 
     pub fn measures(&self) -> &[Measure] {
         &self.measures
     }
+
+    pub fn recalculated(&self) -> Option<Sequence> {
+        self.next.0.checked_sub(1).map(Sequence)
+    }
 }
 
 impl Definitions {
-    fn delta(&self, edit: &Edit) -> Result<Delta, Rejection> {
-        let mut delta = self
+    fn add(&self, edit: &Edit, deltas: &mut BTreeMap<MeasureUlid, Delta>) -> Result<(), Rejection> {
+        let empty = self
             .inputs
             .get(&edit.measure)
-            .ok_or(Rejection::NotAnInput(edit.measure))?
-            .clone();
+            .ok_or(Rejection::NotAnInput(edit.measure))?;
+        let delta = deltas.entry(edit.measure).or_insert_with(|| empty.clone());
         match edit.value {
             Some(value) => delta.set(&edit.coordinate, value),
             None => delta.delete(&edit.coordinate),
         }
-        .map_err(Rejection::Coordinate)?;
-        Ok(delta)
+        .map_err(Rejection::Coordinate)
     }
 }
 
@@ -280,6 +298,6 @@ impl Admit for Definitions {
 
     fn admit(&mut self, payload: &Bytes) -> Result<(), Rejection> {
         let edit = Edit::decode(payload.clone()).map_err(Rejection::Undecodable)?;
-        self.delta(&edit).map(drop)
+        self.add(&edit, &mut BTreeMap::new())
     }
 }
