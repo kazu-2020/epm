@@ -937,7 +937,19 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let mut sent: BTreeMap<&str, Vec<&Bytes>> = BTreeMap::new();
     let mut epochs: BTreeMap<usize, u64> = BTreeMap::new();
     let mut applied: BTreeSet<(u64, Sequence)> = BTreeSet::new();
+    let mut recalculated_so_far: BTreeMap<u64, Sequence> = BTreeMap::new();
+    let mut acked_so_far: BTreeMap<u64, BTreeSet<Sequence>> = BTreeMap::new();
     let history = &outcome.history;
+    let (segments, _) = replay(&outcome.store);
+    let written_by: BTreeMap<Sequence, u64> = segments
+        .values()
+        .flat_map(|segment| {
+            segment
+                .commits
+                .iter()
+                .map(|commit| (commit.sequence, segment.epoch.0))
+        })
+        .collect();
     let granted = |flag: fn(bool, bool) -> bool| -> BTreeSet<u64> {
         history
             .iter()
@@ -1017,13 +1029,35 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
             Record::Rejected { .. } => {
                 seen.insert("storeRejectedPut");
             }
+            Record::Recalculated { epoch, sequence } => {
+                // Not None before the first record: every owner recalculates from Commit Sequence 0, so its first batch starts there.
+                let first = recalculated_so_far
+                    .insert(*epoch, *sequence)
+                    .map_or(Sequence(0), Sequence::next);
+                let acked = acked_so_far.get(epoch).map_or(0, |acked| {
+                    acked
+                        .range(first..=*sequence)
+                        .filter(|acked| written_by.get(acked) == Some(epoch))
+                        .count()
+                });
+                if acked >= 2 {
+                    seen.insert("batchHeldTwoAckedCommits");
+                }
+            }
+            Record::Acked {
+                epoch, sequence, ..
+            } => {
+                acked_so_far.entry(*epoch).or_default().insert(*sequence);
+                if recalculates.contains(epoch) && recalculated_so_far.get(epoch) < Some(sequence) {
+                    seen.insert("ackBeforeRecalculated");
+                }
+            }
             _ => {}
         }
     }
     if acknowledged(&outcome.history).len() >= 2 {
         seen.insert("twoAcknowledged");
     }
-    let (segments, _) = replay(&outcome.store);
     if segments
         .values()
         .any(|segment| segment.epoch.0 >= 2 && !segment.commits.is_empty())
