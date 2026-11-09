@@ -1,0 +1,34 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[features]
+apply_before_commit = []
+skip_commit = []
+apply_twice = []
+swap_commits = []
+
+[dependencies]
+bytes = "1.12.1"
+change_log = { path = "../storage/change_log" }
+column_engine = { path = "../compute_engine/column_engine" }
+datagen = { path = "../compute_engine/datagen" }
+dimension = { path = "../compute_engine/dimension" }
+evaluator = { path = "../compute_engine/evaluator" }
+formula = { path = "../compute_engine/formula" }
+measure = { path = "../compute_engine/measure" }
+object_store = { version = "0.14.2", default-features = false }
+tokio = { version = "1.54.1", features = ["macros", "rt", "sync"] }
+ulid = "3.0.0"
+
+[dev-dependencies]
+async-trait = "0.1.92"
+futures-util = "0.3.34"
+oracle = { path = "../compute_engine/oracle" }
+tokio = { version = "1.54.1", features = ["rt", "test-util", "time"] }
+
+[profile.dev.package."*"]
+opt-level = 1
