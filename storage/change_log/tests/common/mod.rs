@@ -86,7 +86,7 @@ pub struct Started {
     pub exit: BoxFuture<'static, Result<Exit, String>>,
     pub submit: Submit,
     pub passed_on: Option<mpsc::UnboundedReceiver<Commit>>,
-    pub recalculated: Option<watch::Receiver<Option<Sequence>>>,
+    pub recalculated: Option<BoxStream<'static, Sequence>>,
 }
 
 #[derive(Debug)]
@@ -434,16 +434,17 @@ impl Cluster {
                 }
             }));
         }
-        if let Some(mut recalculated) = recalculated.clone() {
+        let recalculated = recalculated.map(|mut recalculated| {
+            let (latest, receiver) = watch::channel(None);
             let history = Arc::clone(&self.history);
             self.recorders.push(tokio::spawn(async move {
-                while recalculated.changed().await.is_ok() {
-                    if let Some(sequence) = *recalculated.borrow_and_update() {
-                        record(&history, Record::Recalculated { epoch, sequence });
-                    }
+                while let Some(sequence) = recalculated.next().await {
+                    record(&history, Record::Recalculated { epoch, sequence });
+                    latest.send_replace(Some(sequence));
                 }
             }));
-        }
+            receiver
+        });
         let history = Arc::clone(&self.history);
         self.owners[server] = Some(tokio::spawn(async move {
             let ended = match AssertUnwindSafe(exit).catch_unwind().await {

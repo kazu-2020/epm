@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export DST_SEEDS="${1:-2000}"
 
-# Not a test of the history checker: skip_commit, apply_twice and swap_commits break it only through the order guard in Engine::apply.
+# Not a test of the history checker: skip_commit, apply_twice and swap_commits break it only through the order guard in Engine::apply_batch.
 mutations=(apply_before_commit skip_commit apply_twice swap_commits change_log/no_fence change_log/no_epoch_check)
 declare -A must_break=(
   [apply_before_commit]="engineAppliesEveryCommit recalculatedGrowsWithinLog"

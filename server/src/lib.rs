@@ -1,109 +1,26 @@
+mod apply;
 mod edit;
+mod owner;
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use change_log::{Admit, Commit, Epoch, Sequence, Submission};
+use change_log::{Admit, Commit, Sequence};
 use datagen::Workspace;
 use dimension::Dimension;
 use evaluator::EvaluateError;
 use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
 use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureUlid};
-use object_store::ObjectStore;
-use tokio::sync::{mpsc, watch};
 
 pub use crate::edit::{DecodeError, Edit};
+pub use crate::owner::{Calculation, Handle, Lag, Owner, ReadError, Settings, SubmitError};
 
 #[derive(Debug, PartialEq)]
 pub enum Exit {
     ChangeLog(change_log::Exit),
     Engine(EngineAlarm),
-}
-
-// shortcut: every new owner rebuilds the engine from the start of the log; add snapshots when start-up time matters.
-pub async fn run(
-    store: Arc<dyn ObjectStore>,
-    workspace: &str,
-    epoch: Epoch,
-    engine: Engine,
-    requests: mpsc::Receiver<Submission<Rejection>>,
-    recalculated: watch::Sender<Option<Sequence>>,
-) -> Exit {
-    let (accepted, accepted_requests) = mpsc::channel(1);
-    let (committed, commits) = mpsc::unbounded_channel();
-    let definitions = engine.definitions.clone();
-    // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
-    tokio::select! {
-        biased;
-        exit = change_log::serve(store, workspace, epoch, definitions, accepted_requests, committed) => {
-            Exit::ChangeLog(exit)
-        }
-        alarm = recalculate(engine, requests, accepted, commits, recalculated) => {
-            Exit::Engine(alarm)
-        }
-    }
-}
-
-async fn recalculate(
-    mut engine: Engine,
-    mut requests: mpsc::Receiver<Submission<Rejection>>,
-    accepted: mpsc::Sender<Submission<Rejection>>,
-    mut commits: mpsc::UnboundedReceiver<Commit>,
-    recalculated: watch::Sender<Option<Sequence>>,
-) -> EngineAlarm {
-    let mut accepted = Some(accepted);
-    loop {
-        tokio::select! {
-            biased;
-            Some(commit) = commits.recv() => {
-                // Not after the edit: yielding first lets the tasks that wait for this commit's ACK run before the engine works on it.
-                tokio::task::yield_now().await;
-                if cfg!(feature = "skip_commit") && commit.sequence == Sequence(1) {
-                    continue;
-                }
-                if cfg!(feature = "swap_commits")
-                    && let Ok(later) = commits.try_recv()
-                    && let Err(alarm) = engine.apply_batch(&[later])
-                {
-                    return alarm;
-                }
-                engine = match engine.apply_batch(std::slice::from_ref(&commit)) {
-                    Ok(engine) => engine,
-                    Err(alarm) => return alarm,
-                };
-                if cfg!(feature = "apply_twice")
-                    && let Err(alarm) = engine.apply_batch(std::slice::from_ref(&commit))
-                {
-                    return alarm;
-                }
-                recalculated.send_replace(Some(commit.sequence));
-            }
-            submission = requests.recv(), if accepted.is_some() => match submission {
-                Some(submission) => {
-                    if cfg!(feature = "apply_before_commit") {
-                        let early = Commit {
-                            request_id: submission.request.request_id.clone(),
-                            sequence: engine.next,
-                            payload: submission.request.payload.clone(),
-                        };
-                        engine = match engine.apply_batch(std::slice::from_ref(&early)) {
-                            Ok(engine) => engine,
-                            Err(alarm) => return alarm,
-                        };
-                        recalculated.send_replace(Some(early.sequence));
-                    }
-                    if let Some(accepted) = &accepted {
-                        // Not an error: the owner stopped, and run returns its exit.
-                        let _ = accepted.send(submission).await;
-                    }
-                }
-                None => accepted = None,
-            },
-            else => std::future::pending::<()>().await,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +62,7 @@ pub enum Rejection {
     Undecodable(DecodeError),
     NotAnInput(MeasureUlid),
     Coordinate(MeasureError),
+    Busy(Lag),
 }
 
 #[derive(Debug, PartialEq)]

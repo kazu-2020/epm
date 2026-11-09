@@ -4,24 +4,24 @@ mod common;
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use change_log::{Commit, Epoch};
+use change_log::{Commit, Epoch, Request};
 use datagen::Workspace;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::{Dimension, MemberId};
 use formula::CheckedExpression;
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt, stream};
 use measure::{Measure, MeasureDefinition};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use oracle::Oracle;
-use server::{Edit, Engine, Exit, run};
-use tokio::sync::{mpsc, watch};
+use server::{Calculation, Edit, Engine, Exit, Owner, Settings};
 
 const DEFAULT_SEEDS: u64 = 2000;
+const CALCULATION: Duration = Duration::from_millis(250);
 
 const TINY: Size = Size {
     products: 2,
@@ -123,29 +123,36 @@ struct Owners {
 
 impl common::Server for Owners {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
-        let (requests, receiver) = mpsc::channel(64);
-        let (recalculated, recalculated_receiver) = watch::channel(None);
-        let engine = self.engine.clone();
+        let settings = Settings {
+            calculation: Calculation::Inline(CALCULATION),
+            ..Settings::default()
+        };
+        let (owner, handle) = Owner::new(self.engine.clone(), settings);
+        let recalculated = stream::unfold(handle.published(), |mut published| async move {
+            published.changed().await.ok()?;
+            let sequence = published.borrow_and_update().recalculated();
+            Some((sequence, published))
+        })
+        .filter_map(std::future::ready);
+        let submit: common::Submit = Arc::new(move |request: Request| {
+            let handle = handle.clone();
+            async move {
+                let edit = Edit::decode(request.payload).expect("the simulation sends edits");
+                handle.submit(request.request_id, &edit).await.ok()
+            }
+            .boxed()
+        });
         let exit = async move {
-            match run(
-                store,
-                &workspace,
-                Epoch(epoch),
-                engine,
-                receiver,
-                recalculated,
-            )
-            .await
-            {
+            match owner.run(store, &workspace, Epoch(epoch)).await {
                 Exit::ChangeLog(exit) => Ok(exit),
                 Exit::Engine(alarm) => Err(format!("{alarm:?}")),
             }
         };
         common::Started {
             exit: exit.boxed(),
-            submit: common::submit_to(requests),
+            submit,
             passed_on: None,
-            recalculated: Some(recalculated_receiver),
+            recalculated: Some(recalculated.boxed()),
         }
     }
 
