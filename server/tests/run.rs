@@ -1,7 +1,8 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use change_log::{Epoch, Request, RequestId, Sequence, Submission, serve};
+use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Submission, serve};
 use datagen::representative::{self, Size};
 use dimension::MemberId;
 use measure::MeasureUlid;
@@ -23,7 +24,7 @@ const TINY: Size = Size {
 const WORKSPACE: &str = "ws";
 
 struct Owner {
-    requests: mpsc::Sender<Submission>,
+    requests: mpsc::Sender<Submission<Infallible>>,
     recalculated: watch::Receiver<Option<Sequence>>,
     exit: JoinHandle<Exit>,
 }
@@ -54,7 +55,7 @@ fn edit(measure: u128, value: Option<f64>) -> Bytes {
 }
 
 async fn submit(
-    requests: &mpsc::Sender<Submission>,
+    requests: &mpsc::Sender<Submission<Infallible>>,
     name: &str,
     payload: Bytes,
 ) -> Result<Sequence, oneshot::error::RecvError> {
@@ -70,7 +71,8 @@ async fn submit(
         })
         .await
         .expect("the owner is running");
-    ack.await
+    let Ok(sequence) = ack.await?;
+    Ok(sequence)
 }
 
 impl Owner {
@@ -141,8 +143,9 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
     let (requests, receiver) = mpsc::channel(1);
     let (committed, _passed_on) = mpsc::unbounded_channel();
     let writer = Arc::clone(&store);
-    let unchecked =
-        tokio::spawn(async move { serve(writer, WORKSPACE, Epoch(1), receiver, committed).await });
+    let unchecked = tokio::spawn(async move {
+        serve(writer, WORKSPACE, Epoch(1), AdmitAll, receiver, committed).await
+    });
     assert_eq!(
         submit(&requests, "garbage", Bytes::from_static(b"\x09")).await,
         Ok(Sequence(0))

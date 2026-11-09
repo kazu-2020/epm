@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
-use change_log::{Commit, Epoch, Submission};
+use change_log::{Commit, Epoch};
 use datagen::Workspace;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
@@ -122,14 +122,9 @@ struct Owners {
 }
 
 impl common::Server for Owners {
-    fn start(
-        &self,
-        store: Arc<dyn ObjectStore>,
-        workspace: String,
-        epoch: u64,
-        requests: mpsc::Receiver<Submission>,
-    ) -> common::Started {
-        let (recalculated, receiver) = watch::channel(None);
+    fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
+        let (requests, receiver) = mpsc::channel(64);
+        let (recalculated, recalculated_receiver) = watch::channel(None);
         let engine = self.engine.clone();
         let exit = async move {
             match run(
@@ -137,7 +132,7 @@ impl common::Server for Owners {
                 &workspace,
                 Epoch(epoch),
                 engine,
-                requests,
+                receiver,
                 recalculated,
             )
             .await
@@ -148,8 +143,9 @@ impl common::Server for Owners {
         };
         common::Started {
             exit: exit.boxed(),
+            submit: common::submit_to(requests),
             passed_on: None,
-            recalculated: Some(receiver),
+            recalculated: Some(recalculated_receiver),
         }
     }
 

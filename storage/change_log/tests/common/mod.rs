@@ -8,7 +8,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use change_log::{
-    Alarm, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Slot, Submission, serve,
+    AdmitAll, Alarm, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Slot, Submission,
+    serve,
 };
 use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
@@ -33,19 +34,44 @@ const LATEST_REPLY: Duration = Duration::from_secs(1);
 const ACK_LOST_PERCENT: u64 = 20;
 const CRASH_AFTER_ACK_PERCENT: u64 = 10;
 
+pub type Submit = Arc<dyn Fn(Request) -> BoxFuture<'static, Option<Sequence>> + Send + Sync>;
+
+pub fn submit_to<R: Send + 'static>(requests: mpsc::Sender<Submission<R>>) -> Submit {
+    Arc::new(move |request| {
+        let requests = requests.clone();
+        async move {
+            let (acknowledged, ack) = oneshot::channel();
+            requests
+                .send(Submission {
+                    request,
+                    acknowledged,
+                })
+                .await
+                .ok()?;
+            ack.await.ok()?.ok()
+        }
+        .boxed()
+    })
+}
+
 pub trait Server: Send + Sync {
-    fn start(
-        &self,
-        store: Arc<dyn ObjectStore>,
-        workspace: String,
-        epoch: u64,
-        requests: mpsc::Receiver<Submission>,
-    ) -> Started {
+    fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> Started {
+        let (requests, receiver) = mpsc::channel(64);
         let (committed, passed_on) = mpsc::unbounded_channel();
+        let exit = async move {
+            Ok(serve(
+                store,
+                &workspace,
+                Epoch(epoch),
+                AdmitAll,
+                receiver,
+                committed,
+            )
+            .await)
+        };
         Started {
-            exit:
-                async move { Ok(serve(store, &workspace, Epoch(epoch), requests, committed).await) }
-                    .boxed(),
+            exit: exit.boxed(),
+            submit: submit_to(requests),
             passed_on: Some(passed_on),
             recalculated: None,
         }
@@ -58,6 +84,7 @@ pub trait Server: Send + Sync {
 
 pub struct Started {
     pub exit: BoxFuture<'static, Result<Exit, String>>,
+    pub submit: Submit,
     pub passed_on: Option<mpsc::UnboundedReceiver<Commit>>,
     pub recalculated: Option<watch::Receiver<Option<Sequence>>>,
 }
@@ -364,7 +391,7 @@ impl ObjectStore for Faults {
     }
 }
 
-type Granted = Option<(u64, mpsc::Sender<Submission>)>;
+type Granted = Option<(u64, Submit)>;
 type Owners = Vec<watch::Receiver<Granted>>;
 
 struct Cluster {
@@ -383,21 +410,23 @@ impl Cluster {
         self.crash(server);
         self.epoch += 1;
         let epoch = self.epoch;
-        let (sender, receiver) = mpsc::channel(64);
         let store = Arc::clone(&self.store);
-        let started = self
-            .server
-            .start(store, self.workspace.clone(), epoch, receiver);
+        let Started {
+            exit,
+            submit,
+            passed_on,
+            recalculated,
+        } = self.server.start(store, self.workspace.clone(), epoch);
         record(
             &self.history,
             Record::Granted {
                 server,
                 epoch,
-                passes_on: started.passed_on.is_some(),
-                recalculates: started.recalculated.is_some(),
+                passes_on: passed_on.is_some(),
+                recalculates: recalculated.is_some(),
             },
         );
-        if let Some(mut passed_on) = started.passed_on {
+        if let Some(mut passed_on) = passed_on {
             let history = Arc::clone(&self.history);
             self.recorders.push(tokio::spawn(async move {
                 while let Some(commit) = passed_on.recv().await {
@@ -405,7 +434,7 @@ impl Cluster {
                 }
             }));
         }
-        if let Some(mut recalculated) = started.recalculated.clone() {
+        if let Some(mut recalculated) = recalculated.clone() {
             let history = Arc::clone(&self.history);
             self.recorders.push(tokio::spawn(async move {
                 while recalculated.changed().await.is_ok() {
@@ -417,7 +446,7 @@ impl Cluster {
         }
         let history = Arc::clone(&self.history);
         self.owners[server] = Some(tokio::spawn(async move {
-            let ended = match AssertUnwindSafe(started.exit).catch_unwind().await {
+            let ended = match AssertUnwindSafe(exit).catch_unwind().await {
                 Ok(Ok(exit)) => Record::Exited {
                     server,
                     epoch,
@@ -432,8 +461,8 @@ impl Cluster {
             };
             record(&history, ended);
         }));
-        self.servers[server].send_replace(Some((epoch, sender)));
-        started.recalculated
+        self.servers[server].send_replace(Some((epoch, submit)));
+        recalculated
     }
 
     fn crash_if_granted(&mut self, server: usize, epoch: u64) {
@@ -457,25 +486,12 @@ impl Cluster {
     }
 }
 
-async fn submit(
-    owner: &mpsc::Sender<Submission>,
-    name: &str,
-    payload: Bytes,
-    wait: Duration,
-) -> Option<Sequence> {
-    let (acknowledged, ack) = oneshot::channel();
+async fn submit(owner: &Submit, name: &str, payload: Bytes, wait: Duration) -> Option<Sequence> {
     let request = Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
         payload,
     };
-    owner
-        .send(Submission {
-            request,
-            acknowledged,
-        })
-        .await
-        .ok()?;
-    timeout(wait, ack).await.ok()?.ok()
+    timeout(wait, owner(request)).await.ok()?
 }
 
 async fn client(

@@ -1,10 +1,13 @@
+use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use change_log::{Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Submission, serve};
+use change_log::{
+    AdmitAll, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Submission, serve,
+};
 use futures_util::TryStreamExt;
 use futures_util::stream::BoxStream;
 use object_store::memory::InMemory;
@@ -19,7 +22,7 @@ use tokio::task::JoinHandle;
 const WORKSPACE: &str = "ws";
 
 struct Owner {
-    requests: mpsc::Sender<Submission>,
+    requests: mpsc::Sender<Submission<Infallible>>,
     committed: mpsc::UnboundedReceiver<Commit>,
     exit: JoinHandle<Exit>,
 }
@@ -28,8 +31,9 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64) -> Owner {
     let (requests, receiver) = mpsc::channel(16);
     let (sender, committed) = mpsc::unbounded_channel();
     let store = Arc::clone(store);
-    let exit =
-        tokio::spawn(async move { serve(store, WORKSPACE, Epoch(epoch), receiver, sender).await });
+    let exit = tokio::spawn(async move {
+        serve(store, WORKSPACE, Epoch(epoch), AdmitAll, receiver, sender).await
+    });
     Owner {
         requests,
         committed,
@@ -48,7 +52,7 @@ impl Owner {
 }
 
 async fn submit(
-    requests: &mpsc::Sender<Submission>,
+    requests: &mpsc::Sender<Submission<Infallible>>,
     name: &str,
 ) -> Result<Sequence, oneshot::error::RecvError> {
     let (acknowledged, ack) = oneshot::channel();
@@ -63,7 +67,8 @@ async fn submit(
         })
         .await
         .expect("the owner is running");
-    ack.await
+    let Ok(sequence) = ack.await?;
+    Ok(sequence)
 }
 
 fn name(request_id: &RequestId) -> String {

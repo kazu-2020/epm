@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+use std::convert::Infallible;
 
 use bytes::Bytes;
 
@@ -34,7 +35,7 @@ pub enum Event {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Effect {
+pub enum Effect<R> {
     Put {
         slot: Slot,
         body: Bytes,
@@ -47,6 +48,10 @@ pub enum Effect {
     Ack {
         request_id: RequestId,
         sequence: Sequence,
+    },
+    Rejected {
+        request_id: RequestId,
+        reason: R,
     },
     Stop,
     Alarm(Alarm),
@@ -61,9 +66,27 @@ pub enum Alarm {
     PermanentStoreError { key: String, status: u16 },
 }
 
+pub trait Admit {
+    type Rejection: Clone;
+
+    fn admit(&mut self, payload: &Bytes) -> Result<(), Self::Rejection>;
+}
+
 #[derive(Debug)]
-pub struct Owner {
+pub struct AdmitAll;
+
+impl Admit for AdmitAll {
+    type Rejection = Infallible;
+
+    fn admit(&mut self, _payload: &Bytes) -> Result<(), Infallible> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct Owner<A> {
     epoch: Epoch,
+    admit: A,
     phase: Phase,
 }
 
@@ -118,10 +141,11 @@ enum Outcome {
     OtherContent(Write),
 }
 
-impl Owner {
-    pub fn new(epoch: Epoch) -> Owner {
+impl<A: Admit> Owner<A> {
+    pub fn new(epoch: Epoch, admit: A) -> Owner<A> {
         Owner {
             epoch,
+            admit,
             phase: Phase::Loading {
                 waiting: Vec::new(),
             },
@@ -129,18 +153,24 @@ impl Owner {
     }
 
     #[must_use]
-    pub fn step(&mut self, event: Event) -> Vec<Effect> {
+    pub fn step(&mut self, event: Event) -> Vec<Effect<A::Rejection>> {
         let mut effects = Vec::new();
         let phase = std::mem::replace(&mut self.phase, Phase::Stopped);
-        self.phase = transition(self.epoch, phase, event, &mut effects);
+        self.phase = transition(self.epoch, &mut self.admit, phase, event, &mut effects);
         effects
     }
 }
 
-fn transition(epoch: Epoch, phase: Phase, event: Event, effects: &mut Vec<Effect>) -> Phase {
+fn transition<A: Admit>(
+    epoch: Epoch,
+    admit: &mut A,
+    phase: Phase,
+    event: Event,
+    effects: &mut Vec<Effect<A::Rejection>>,
+) -> Phase {
     match (phase, event) {
         (Phase::Loading { waiting }, Event::Loaded { slots }) => {
-            load(epoch, &slots, waiting, effects)
+            load(epoch, admit, &slots, waiting, effects)
         }
         (Phase::Loading { mut waiting }, Event::Request(request)) => {
             waiting.push(request);
@@ -174,9 +204,9 @@ fn transition(epoch: Epoch, phase: Phase, event: Event, effects: &mut Vec<Effect
                 fence,
                 waiting,
             },
-            Outcome::Committed(fence) => ready(view, next(fence.slot), waiting, effects),
+            Outcome::Committed(fence) => ready(view, next(fence.slot), waiting, admit, effects),
             Outcome::OlderEpoch(taken, found) => {
-                view.add(&found.commits, effects);
+                view.add_older(&found.commits, admit, effects);
                 let fence = Write::new(epoch, next(taken.slot), Vec::new());
                 effects.push(fence.put());
                 Phase::Fencing {
@@ -189,7 +219,7 @@ fn transition(epoch: Epoch, phase: Phase, event: Event, effects: &mut Vec<Effect
             Outcome::OtherContent(fence) => other_content(fence, effects),
         },
         (Phase::Ready(mut ready), Event::Request(request)) => {
-            ready.receive(request, effects);
+            ready.receive(request, admit, effects);
             Phase::Ready(ready)
         }
         (Phase::Ready(mut ready), Event::Flush) => {
@@ -232,11 +262,12 @@ fn transition(epoch: Epoch, phase: Phase, event: Event, effects: &mut Vec<Effect
     }
 }
 
-fn load(
+fn load<A: Admit>(
     epoch: Epoch,
+    admit: &mut A,
     slots: &BTreeMap<Slot, Segment>,
     waiting: Vec<Request>,
-    effects: &mut Vec<Effect>,
+    effects: &mut Vec<Effect<A::Rejection>>,
 ) -> Phase {
     let last = slots.last_key_value();
     if !cfg!(feature = "no_epoch_check") && last.is_some_and(|(_, segment)| segment.epoch >= epoch)
@@ -244,9 +275,9 @@ fn load(
         return stop(effects);
     }
     let free = last.map_or(Slot(0), |(slot, _)| next(*slot));
-    let view = replay(slots, effects);
+    let view = replay(slots, admit, effects);
     if cfg!(feature = "no_fence") {
-        return ready(view, free, waiting, effects);
+        return ready(view, free, waiting, admit, effects);
     }
     let fence = Write::new(epoch, free, Vec::new());
     effects.push(fence.put());
@@ -257,18 +288,28 @@ fn load(
     }
 }
 
-fn replay(slots: &BTreeMap<Slot, Segment>, effects: &mut Vec<Effect>) -> View {
+fn replay<A: Admit>(
+    slots: &BTreeMap<Slot, Segment>,
+    admit: &mut A,
+    effects: &mut Vec<Effect<A::Rejection>>,
+) -> View {
     let mut view = View::default();
     for (expected, (slot, segment)) in (0..).zip(slots) {
         if slot.0 != expected {
             break;
         }
-        view.add(&segment.commits, effects);
+        view.add_older(&segment.commits, admit, effects);
     }
     view
 }
 
-fn ready(view: View, next: Slot, waiting: Vec<Request>, effects: &mut Vec<Effect>) -> Phase {
+fn ready<A: Admit>(
+    view: View,
+    next: Slot,
+    waiting: Vec<Request>,
+    admit: &mut A,
+    effects: &mut Vec<Effect<A::Rejection>>,
+) -> Phase {
     let mut ready = Ready {
         view,
         next,
@@ -276,17 +317,17 @@ fn ready(view: View, next: Slot, waiting: Vec<Request>, effects: &mut Vec<Effect
         in_flight: [const { None }; MAX_IN_FLIGHT],
     };
     for request in waiting {
-        ready.receive(request, effects);
+        ready.receive(request, admit, effects);
     }
     Phase::Ready(ready)
 }
 
-fn stop(effects: &mut Vec<Effect>) -> Phase {
+fn stop<R>(effects: &mut Vec<Effect<R>>) -> Phase {
     effects.push(Effect::Stop);
     Phase::Stopped
 }
 
-fn other_content(write: Write, effects: &mut Vec<Effect>) -> Phase {
+fn other_content<R>(write: Write, effects: &mut Vec<Effect<R>>) -> Phase {
     effects.push(Effect::Alarm(Alarm::OtherContentInOwnEpoch {
         slot: write.slot,
     }));
@@ -297,7 +338,12 @@ fn next(slot: Slot) -> Slot {
     Slot(slot.0 + 1)
 }
 
-fn advance(epoch: Epoch, mut write: Write, event: Event, effects: &mut Vec<Effect>) -> Outcome {
+fn advance<R>(
+    epoch: Epoch,
+    mut write: Write,
+    event: Event,
+    effects: &mut Vec<Effect<R>>,
+) -> Outcome {
     match event {
         Event::PutSucceeded { .. } => Outcome::Committed(write),
         Event::PutFailed { failure, .. } => {
@@ -330,7 +376,12 @@ fn advance(epoch: Epoch, mut write: Write, event: Event, effects: &mut Vec<Effec
 }
 
 impl Ready {
-    fn receive(&mut self, request: Request, effects: &mut Vec<Effect>) {
+    fn receive<A: Admit>(
+        &mut self,
+        request: Request,
+        admit: &mut A,
+        effects: &mut Vec<Effect<A::Rejection>>,
+    ) {
         let request_id = &request.request_id;
         if !cfg!(feature = "no_deduplication")
             && let Some(&sequence) = self.view.sequences.get(request_id)
@@ -349,12 +400,19 @@ impl Ready {
                 .flatten()
                 .flat_map(|write| &write.commits)
                 .any(|commit| commit.request_id == *request_id);
-        if !in_batch && !in_put {
-            self.batch.push(request);
+        if in_batch || in_put {
+            return;
+        }
+        match admit.admit(&request.payload) {
+            Ok(()) => self.batch.push(request),
+            Err(reason) => effects.push(Effect::Rejected {
+                request_id: request.request_id,
+                reason,
+            }),
         }
     }
 
-    fn flush(&mut self, epoch: Epoch, effects: &mut Vec<Effect>) {
+    fn flush<R>(&mut self, epoch: Epoch, effects: &mut Vec<Effect<R>>) {
         if self.batch.is_empty() {
             return;
         }
@@ -379,7 +437,20 @@ impl Ready {
 }
 
 impl View {
-    fn add(&mut self, commits: &[Commit], effects: &mut Vec<Effect>) {
+    fn add_older<A: Admit>(
+        &mut self,
+        commits: &[Commit],
+        admit: &mut A,
+        effects: &mut Vec<Effect<A::Rejection>>,
+    ) {
+        self.add(commits, effects);
+        for commit in commits {
+            // Not checked: an older owner admitted these commits in this order, and the engine raises an alarm for a bad one.
+            let _ = admit.admit(&commit.payload);
+        }
+    }
+
+    fn add<R>(&mut self, commits: &[Commit], effects: &mut Vec<Effect<R>>) {
         for commit in commits {
             self.sequences
                 .insert(commit.request_id.clone(), commit.sequence);
@@ -400,7 +471,7 @@ impl Write {
         }
     }
 
-    fn put(&self) -> Effect {
+    fn put<R>(&self) -> Effect<R> {
         Effect::Put {
             slot: self.slot,
             body: self.body.clone(),
@@ -423,10 +494,15 @@ mod replay;
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
 
-    impl Owner {
-        fn step_and_flush(&mut self, event: Event) -> Vec<Effect> {
+    type Effect = super::Effect<Infallible>;
+
+    impl<A: Admit> Owner<A> {
+        fn step_and_flush(&mut self, event: Event) -> Vec<super::Effect<A::Rejection>> {
             let mut effects = self.step(event);
             effects.extend(self.step(Event::Flush));
             effects
@@ -463,11 +539,11 @@ mod tests {
         }
     }
 
-    fn put(effects: &[Effect]) -> (Slot, Segment, u32) {
+    fn put<R>(effects: &[super::Effect<R>]) -> (Slot, Segment, u32) {
         let puts: Vec<_> = effects
             .iter()
             .filter_map(|effect| match effect {
-                Effect::Put {
+                super::Effect::Put {
                     slot,
                     body,
                     attempt,
@@ -479,15 +555,15 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(puts.len(), 1, "one put in {effects:?}");
+        assert_eq!(puts.len(), 1, "one put");
         puts.into_iter().next().expect("one put")
     }
 
-    fn acks(effects: &[Effect]) -> Vec<RequestId> {
+    fn acks<R>(effects: &[super::Effect<R>]) -> Vec<RequestId> {
         effects
             .iter()
             .filter_map(|effect| match effect {
-                Effect::Ack { request_id, .. } => Some(request_id.clone()),
+                super::Effect::Ack { request_id, .. } => Some(request_id.clone()),
                 _ => None,
             })
             .collect()
@@ -534,19 +610,18 @@ mod tests {
         }
     }
 
-    fn ready_owner(store: &mut Store, epoch: u64) -> Owner {
-        let mut owner = Owner::new(Epoch(epoch));
+    fn ready_owner<A: Admit>(store: &mut Store, epoch: u64, admit: A) -> Owner<A> {
+        let mut owner = Owner::new(Epoch(epoch), admit);
         let (slot, fence, _) = put(&owner.step_and_flush(store.loaded()));
         assert!(fence.commits.is_empty());
-        let effects = owner.step_and_flush(store.put(slot, fence));
-        assert_eq!(effects, vec![]);
+        assert!(owner.step_and_flush(store.put(slot, fence)).is_empty());
         owner
     }
 
     #[test]
     fn a_new_owner_fences_the_next_slot_and_then_writes_after_it() {
         let mut store = Store::default();
-        let mut owner = Owner::new(Epoch(1));
+        let mut owner = Owner::new(Epoch(1), AdmitAll);
         assert_eq!(
             put(&owner.step_and_flush(store.loaded())),
             (
@@ -581,7 +656,7 @@ mod tests {
     #[test]
     fn requests_that_arrive_during_a_put_form_the_next_batch() {
         let mut store = Store::default();
-        let mut owner = ready_owner(&mut store, 1);
+        let mut owner = ready_owner(&mut store, 1, AdmitAll);
         let (first_slot, first, _) = put(&owner.step_and_flush(request("r1")));
         assert_eq!(owner.step_and_flush(request("r2")), vec![]);
         assert_eq!(owner.step_and_flush(request("r3")), vec![]);
@@ -603,7 +678,7 @@ mod tests {
     #[test]
     fn a_request_already_held_is_not_written_again() {
         let mut store = Store::default();
-        let mut owner = ready_owner(&mut store, 1);
+        let mut owner = ready_owner(&mut store, 1, AdmitAll);
         let (slot, segment, _) = put(&owner.step_and_flush(request("r1")));
         assert_eq!(
             owner.step_and_flush(request("r1")),
@@ -621,6 +696,109 @@ mod tests {
         );
     }
 
+    #[derive(Clone, Default)]
+    struct Checked(Rc<RefCell<Vec<Bytes>>>);
+
+    impl Admit for Checked {
+        type Rejection = &'static str;
+
+        fn admit(&mut self, payload: &Bytes) -> Result<(), &'static str> {
+            self.0.borrow_mut().push(payload.clone());
+            if payload.as_ref() == b"bad" {
+                return Err("bad");
+            }
+            Ok(())
+        }
+    }
+
+    impl Checked {
+        fn payloads(&self) -> Vec<Bytes> {
+            self.0.borrow().clone()
+        }
+    }
+
+    fn carrying(name: &'static str, payload: &'static str) -> Request {
+        Request {
+            request_id: id(name),
+            payload: Bytes::from_static(payload.as_bytes()),
+        }
+    }
+
+    fn committed_as(name: &'static str, sequence: u64, payload: &'static str) -> Commit {
+        Commit {
+            request_id: id(name),
+            sequence: Sequence(sequence),
+            payload: Bytes::from_static(payload.as_bytes()),
+        }
+    }
+
+    #[test]
+    fn only_a_new_request_is_checked_and_a_rejected_one_takes_no_sequence() {
+        let mut store = Store::default();
+        let checked = Checked::default();
+        let mut owner = ready_owner(&mut store, 1, checked.clone());
+        let (slot, segment, _) = put(&owner.step_and_flush(Event::Request(carrying("r1", "good"))));
+        assert_eq!(
+            owner.step_and_flush(Event::Request(carrying("r2", "bad"))),
+            vec![super::Effect::Rejected {
+                request_id: id("r2"),
+                reason: "bad"
+            }]
+        );
+        assert_eq!(
+            owner.step_and_flush(Event::Request(carrying("r1", "bad"))),
+            vec![],
+            "a request in the put in flight is not checked again"
+        );
+        assert_eq!(
+            acks(&owner.step_and_flush(store.put(slot, segment))),
+            vec![id("r1")]
+        );
+        let (_, segment, _) = put(&owner.step_and_flush(Event::Request(carrying("r3", "good"))));
+        assert_eq!(
+            segment.commits,
+            vec![committed_as("r3", 1, "good")],
+            "the rejected request took no Commit Sequence"
+        );
+        assert_eq!(checked.payloads(), ["good", "bad", "good"]);
+    }
+
+    #[test]
+    fn a_new_owner_checks_the_commits_of_older_owners_in_sequence_order() {
+        let mut store = Store::default();
+        store.put(
+            Slot(0),
+            Segment {
+                epoch: Epoch(1),
+                commits: vec![committed_as("r1", 0, "first"), committed_as("r2", 1, "bad")],
+            },
+        );
+        let checked = Checked::default();
+        let mut owner = Owner::new(Epoch(3), checked.clone());
+        let (fence_slot, fence, _) = put(&owner.step_and_flush(store.loaded()));
+        store.put(
+            fence_slot,
+            Segment {
+                epoch: Epoch(2),
+                commits: vec![committed_as("r3", 2, "third")],
+            },
+        );
+        assert_eq!(
+            owner.step_and_flush(store.put(fence_slot, fence)),
+            vec![super::Effect::Get { slot: fence_slot }]
+        );
+        let effects = owner.step_and_flush(store.read_back(fence_slot));
+        assert_eq!(
+            effects[0],
+            super::Effect::Committed(committed_as("r3", 2, "third"))
+        );
+        assert_eq!(
+            checked.payloads(),
+            ["first", "bad", "third"],
+            "every commit, a bad one too"
+        );
+    }
+
     #[test]
     fn requests_before_the_fence_succeeds_wait_for_it() {
         let mut store = Store::default();
@@ -635,7 +813,7 @@ mod tests {
                 }],
             },
         );
-        let mut owner = Owner::new(Epoch(2));
+        let mut owner = Owner::new(Epoch(2), AdmitAll);
         assert_eq!(owner.step_and_flush(request("r1")), vec![]);
         let (slot, fence, _) = put(&owner.step_and_flush(store.loaded()));
         assert_eq!(owner.step_and_flush(request("r2")), vec![]);
@@ -664,22 +842,22 @@ mod tests {
             },
         );
         assert_eq!(
-            Owner::new(Epoch(2)).step_and_flush(store.loaded()),
+            Owner::new(Epoch(2), AdmitAll).step_and_flush(store.loaded()),
             vec![Effect::Stop]
         );
         assert_eq!(
-            Owner::new(Epoch(3)).step_and_flush(store.loaded()),
+            Owner::new(Epoch(3), AdmitAll).step_and_flush(store.loaded()),
             vec![Effect::Stop],
             "a reload takes a new epoch"
         );
-        let (slot, _, _) = put(&Owner::new(Epoch(4)).step_and_flush(store.loaded()));
+        let (slot, _, _) = put(&Owner::new(Epoch(4), AdmitAll).step_and_flush(store.loaded()));
         assert_eq!(slot, Slot(2));
     }
 
     #[test]
     fn a_read_back_decides_by_the_epoch_and_checks_the_content() {
         let mut store = Store::default();
-        let mut owner = ready_owner(&mut store, 2);
+        let mut owner = ready_owner(&mut store, 2, AdmitAll);
         let (slot, written, _) = put(&owner.step_and_flush(request("r1")));
         let failed = |slot| Event::PutFailed {
             slot,
@@ -723,7 +901,7 @@ mod tests {
     #[test]
     fn other_content_under_the_own_epoch_raises_an_alarm() {
         let mut store = Store::default();
-        let mut owner = ready_owner(&mut store, 2);
+        let mut owner = ready_owner(&mut store, 2, AdmitAll);
         let (slot, _, _) = put(&owner.step_and_flush(request("r1")));
         assert_eq!(
             owner.step_and_flush(Event::PutFailed {
@@ -744,7 +922,7 @@ mod tests {
             vec![Effect::Alarm(Alarm::OtherContentInOwnEpoch { slot })]
         );
 
-        let mut fencing = Owner::new(Epoch(3));
+        let mut fencing = Owner::new(Epoch(3), AdmitAll);
         let (slot, _, _) = put(&fencing.step_and_flush(store.loaded()));
         assert_eq!(
             fencing.step_and_flush(Event::PutFailed {
@@ -774,7 +952,7 @@ mod tests {
     #[test]
     fn a_data_write_that_finds_an_older_epoch_raises_an_alarm() {
         let mut store = Store::default();
-        let mut owner = ready_owner(&mut store, 2);
+        let mut owner = ready_owner(&mut store, 2, AdmitAll);
         let (slot, _, _) = put(&owner.step_and_flush(request("r1")));
         assert_eq!(
             owner.step_and_flush(Event::PutFailed {
@@ -802,7 +980,7 @@ mod tests {
     #[test]
     fn an_empty_read_back_resends_the_same_bytes() {
         let mut store = Store::default();
-        let mut owner = ready_owner(&mut store, 1);
+        let mut owner = ready_owner(&mut store, 1, AdmitAll);
         let effects = owner.step_and_flush(request("r1"));
         let Effect::Put {
             slot,
@@ -834,7 +1012,7 @@ mod tests {
     #[test]
     fn events_for_other_slots_or_stages_change_nothing() {
         let mut store = Store::default();
-        let mut owner = ready_owner(&mut store, 1);
+        let mut owner = ready_owner(&mut store, 1, AdmitAll);
         let (slot, _, _) = put(&owner.step_and_flush(request("r1")));
         assert_eq!(
             owner.step_and_flush(Event::ReadBack { slot, found: None }),
@@ -851,7 +1029,7 @@ mod tests {
             vec![id("r1")]
         );
 
-        let mut fencing = Owner::new(Epoch(2));
+        let mut fencing = Owner::new(Epoch(2), AdmitAll);
         let (slot, _, _) = put(&fencing.step_and_flush(store.loaded()));
         assert_eq!(
             fencing.step_and_flush(Event::ReadBack { slot, found: None }),
@@ -873,9 +1051,9 @@ mod tests {
     #[test]
     fn old_owner_takes_slot_first() {
         let mut store = Store::default();
-        let mut a = ready_owner(&mut store, 1);
+        let mut a = ready_owner(&mut store, 1, AdmitAll);
         let (a_slot, a_write, _) = put(&a.step_and_flush(request("r1")));
-        let mut b = Owner::new(Epoch(2));
+        let mut b = Owner::new(Epoch(2), AdmitAll);
         let (b_slot, b_fence, _) = put(&b.step_and_flush(store.loaded()));
         assert_eq!(b_slot, Slot(1));
         let a_reply = store.put(a_slot, a_write);
@@ -923,7 +1101,7 @@ mod tests {
     #[test]
     fn own_resend_acknowledged() {
         let mut store = Store::default();
-        let mut owner = ready_owner(&mut store, 1);
+        let mut owner = ready_owner(&mut store, 1, AdmitAll);
         let (slot, first, 0) = put(&owner.step_and_flush(request("r1"))) else {
             panic!("first attempt")
         };
@@ -960,7 +1138,7 @@ mod tests {
                 commits: vec![commit("r1", 0)],
             },
         );
-        let mut owner = Owner::new(Epoch(3));
+        let mut owner = Owner::new(Epoch(3), AdmitAll);
         let effects = owner.step_and_flush(store.loaded());
         assert_eq!(effects[0], committed("r1", 0), "read on load");
         let (fence_slot, fence, _) = put(&effects);

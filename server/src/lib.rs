@@ -1,9 +1,10 @@
 mod edit;
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::sync::Arc;
 
-use change_log::{Commit, Epoch, Sequence, Submission};
+use change_log::{AdmitAll, Commit, Epoch, Sequence, Submission};
 use datagen::Workspace;
 use dimension::Dimension;
 use evaluator::EvaluateError;
@@ -26,7 +27,7 @@ pub async fn run(
     workspace: &str,
     epoch: Epoch,
     engine: Engine,
-    requests: mpsc::Receiver<Submission>,
+    requests: mpsc::Receiver<Submission<Infallible>>,
     recalculated: watch::Sender<Option<Sequence>>,
 ) -> Exit {
     let (accepted, accepted_requests) = mpsc::channel(1);
@@ -34,7 +35,7 @@ pub async fn run(
     // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
     tokio::select! {
         biased;
-        exit = change_log::serve(store, workspace, epoch, accepted_requests, committed) => {
+        exit = change_log::serve(store, workspace, epoch, AdmitAll, accepted_requests, committed) => {
             Exit::ChangeLog(exit)
         }
         alarm = recalculate(engine, requests, accepted, commits, recalculated) => {
@@ -45,8 +46,8 @@ pub async fn run(
 
 async fn recalculate(
     mut engine: Engine,
-    mut requests: mpsc::Receiver<Submission>,
-    accepted: mpsc::Sender<Submission>,
+    mut requests: mpsc::Receiver<Submission<Infallible>>,
+    accepted: mpsc::Sender<Submission<Infallible>>,
     mut commits: mpsc::UnboundedReceiver<Commit>,
     recalculated: watch::Sender<Option<Sequence>>,
 ) -> EngineAlarm {
