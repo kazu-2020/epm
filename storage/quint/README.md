@@ -35,12 +35,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 ## 担当の動き
 
-- 新しい担当は LIST で末尾を探し、末尾の位置のエポックが自分と同じか新しければ止まる。そうでなければ、その次の位置に空のフェンスを置く。位置の順にエポックは減らないので、末尾のエポックを見れば足りる。
-- 412 を受けたら、その位置を読んでエポックで判定する。自分のエポックなら自分の書き込みとして成功、自分より新しいエポックなら止まる。自分より古いエポックはフェンスのときだけ起こりうる。そのときは、取られた位置の中身を自分の view と重複排除の集合に足してから、次の位置でフェンスをやり直す。データの書き込みで古いエポックを見たら止まる。
-- 1つのエポックの担当は1つで、1つの位置には1回しか書かない(再送は同じ中身)。だからエポックが同じなら自分の書き込みと言える。読み込み直すときも、担当は必ず新しいエポックをもらう。この前提は性質 `oneContentPerSlotPerEpoch` で確かめる。
-- 重複排除の集合は、確定したログの Request ID と、PUT 中(ACK 前)の Request ID の和。flush で batch を空にするので、PUT 中のものを入れないと同じ Request ID が次の位置にもう1回入る。
-- 変更ログは位置 0 から最初の穴までを並べたもの。
-- S3 の SDK や `object_store` crate が 5xx のあとに自動で再送し、1回目が入っていた場合も、「412 のあとに読んで自分の書き込みと分かる」経路になる(`witnessNoOwnResendRejected` で届くことを確かめる)。
+担当の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` に、その動きは `seqlog.qnt` の action にある。変更ログは位置 0 から最初の穴までを並べたものとして扱う。
 
 ## 検査する性質
 
@@ -69,29 +64,13 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 | 担当の交代は配置コントローラーがエポックを1つ増やして行う。古い担当は交代を知らないまま動き続けうる。再起動した担当も、読み込み直す担当も、新しいエポックをもらう | 設計ドキュメント「変更ログ」タブ。SlateDB も開くたびに `writer_epoch` を1つ上げる |
 | LIST と末尾の読み取りを、1つの操作として扱う。間に新しい担当が書いた場合は、フェンスの 412 の経路で止まる | モデルを小さくするための置き換え |
 
-## 結果(seed 1、5万回、最大30ステップ)
+## 守りを外したときに破れる性質
 
-`check.sh` は、表の性質だけを指定して実行し、破れることを確かめる。ほかの性質も破れている場合がある。「破れず」は、すべての性質を指定して反例が見つからなかったという意味。
-
-| 外した守り(モジュール名、変える値) | 破れる性質 |
-| --- | --- |
-| なし(`seqlog_designed`) | 破れず。到達確認の4つは届いた |
-| If-None-Match(`seqlog_blind_put`、`ifNoneMatch`) | `refinesChangeLog`、`segmentsNeverChange`、`viewIsLogPrefix` |
-| 結果不明を成功とみなさない(`seqlog_unknown_as_success`、`readsBackUnknown`) | `refinesChangeLog`、`viewIsLogPrefix` |
-| Request ID による重複排除(`seqlog_no_deduplication`、`deduplication`) | `refinesChangeLog` |
-| PUT 中の Request ID も重複とみなす(`seqlog_no_inflight_deduplication`、`inFlightDeduplication`) | `refinesChangeLog` |
-| 新しい担当がフェンスを置く(`seqlog_no_fence`、`fence`) | `newestOwnerSeesAcknowledged`。ログは壊れない |
-| 起動時に末尾のエポックが自分より新しければ止まる(`seqlog_no_epoch_check`、`epochCheck`) | `staleEpochNeverCommits`。ログは壊れない |
-| 1つの担当が同時に送る PUT は1つ(`seqlog_two_in_flight`、`oneInFlight`) | `refinesChangeLog`(固定の手順で確認)、`staleEpochNeverCommits`、`slotsContiguous`、`viewIsLogPrefix` |
-| 412 のあとに読む(`seqlog_rejected_as_fenced`、`headsAfterRejection`) | 破れず |
+どの変異でどの性質が破れるかは `check.sh` の `breaks` に、破れないものは `holds` にある。2つの守りには、コードから分からない理由がある。
 
 `seqlog_two_in_flight` は、位置の列に書くこの方式に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、位置 N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの位置に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。また、2つの応答が位置と逆の順に届くと、両方ともログに入っていても `view` の順がログと食い違う。これは `viewIsLogPrefix` だけが捕まえる。
 
 `seqlog_rejected_as_fenced` は安全性を壊さない。412 で読まずに止まると、自分の書き込みが入っていても ACK しないだけで、ログは壊れない。412 のあとに読むのは、再送のたびに担当が止まらないためのもの(活性)で、安全性のためではない。止まった担当が確定済みのコミットを ACK しない場面は、固定の手順 `ownResendRejectedTest` で確かめる。
-
-## 決めたこと
-
-モデルから決めた守りと、その理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` に置く。
 
 ## 入れていないもの
 
@@ -104,8 +83,6 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 ## コードとの対応
 
-Rust の実装は `storage/change_log/` にある。担当の状態機械 `Owner::step` が Quint の action に対応し、`mutations.sh` が上の表の変異を Rust のシミュレーションで確かめる。
+Rust の実装は `storage/change_log/` にある。担当の状態機械 `Owner::step` が Quint の action に対応し、`mutations.sh` が `check.sh` と同じ変異を Rust のシミュレーションで確かめる。
 
-`storage/change_log/src/owner/replay.rs` は、`seqlog_replay.qnt` のランダムなトレースを [quint-connect](https://crates.io/crates/quint-connect) で `Owner::step` に1ステップずつ渡し、各ステップのあとでモデルと Rust の状態(ストア、各担当、ACK 済みの集合)が同じかを確かめる。`cargo test` で動き、`quint` が PATH に要る。失敗したときは表示される `QUINT_SEED=<値>` を付けて同じトレースを再生する。
-
-再生が確かめるのは「モデルが選んだ手順を、Rust も同じ結果で進める」ことだけである。モデルで起きない手順を Rust が選べるか(たとえば PUT 中に次の PUT を送る `two_in_flight`)は確かめない。それは `mutations.sh` のシミュレーションが捕まえる。
+`storage/change_log/src/owner/replay.rs` は、`seqlog_replay.qnt` のトレースを [quint-connect](https://crates.io/crates/quint-connect) で `Owner::step` に再生し、各ステップのあとでモデルと状態を比べる。モデルで起きない手順(`two_in_flight` など)は確かめず、`mutations.sh` が捕まえる。`cargo test` で動き、`quint` が PATH に要る。失敗したら表示される `QUINT_SEED=<値>` を付けて再生する。

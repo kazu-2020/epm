@@ -4,7 +4,7 @@
 
 ## 決めたこと
 
-変更ログは S3 に置く。担当はセグメントを `{ワークスペース}/log/{位置}` に If-None-Match で PUT し、200 なら ACK する。担当は次の守りを持つ。根拠は `storage/quint/seqlog.qnt` のモデルで、守りを1つずつ外すと性質が破れることを確かめた(結果は `storage/quint/README.md`)。Rust の実装 `storage/change_log/` でも、同じ変異をシミュレーションがどれかの性質の破れとして捕まえる。破れる性質はモデルと違うことがある。たとえばフェンスを外すと、モデルでは `newestOwnerSeesAcknowledged` が破れ、シミュレーションでは `dataWriteNeverSeesOlderEpoch` が破れる。
+変更ログは S3 に置く。担当はセグメントを `{ワークスペース}/log/{位置}` に If-None-Match で PUT し、200 なら ACK する。担当は次の守りを持つ。根拠は `storage/quint/seqlog.qnt` のモデルで、守りを1つずつ外すと性質が破れることを確かめた(どの性質が破れるかは `storage/quint/check.sh` の `breaks`)。Rust の実装 `storage/change_log/` でも、同じ変異をシミュレーションがどれかの性質の破れとして捕まえる。破れる性質はモデルと違うことがある。たとえばフェンスを外すと、モデルでは `newestOwnerSeesAcknowledged` が破れ、シミュレーションでは `dataWriteNeverSeesOlderEpoch` が破れる。
 
 - **すべての書き込みを If-None-Match にする。** 1つの位置には1回しか入らない。
 - **結果が分からない書き込みは、読み直して判定する。** 応答が来ないとき、409 のとき、412 のときに、その位置を読む。空なら同じ中身で再送する。自分のエポックで同じ中身なら成功とみなす。自分より新しいエポックなら止まる。412 を「ほかの担当に取られた」証拠にはしない。自分の再送が先に通った結果でもありうる。
