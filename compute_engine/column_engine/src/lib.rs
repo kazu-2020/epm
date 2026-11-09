@@ -65,6 +65,10 @@ fn apply(
                 region = region.without(axis);
             }
         }
+        let region = match changed.remove(&ulid) {
+            Some(earlier) => earlier.union(&region),
+            None => region,
+        };
         changed.insert(ulid, region);
     }
     measures[index] = measures[index]
