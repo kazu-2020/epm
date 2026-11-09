@@ -234,8 +234,7 @@ impl Engine {
             .collect();
         column_engine::edit(
             &mut self.measures,
-            edit.measure,
-            delta,
+            [(edit.measure, delta)],
             &formulas,
             &dimensions,
         )

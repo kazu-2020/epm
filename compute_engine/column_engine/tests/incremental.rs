@@ -319,8 +319,7 @@ fn edit_and_compare(model: &Model) {
             .expect("the delta fits");
         column_engine::edit(
             &mut measures,
-            inputs[input].ulid(),
-            edited,
+            [(inputs[input].ulid(), edited)],
             &formulas,
             &dimensions,
         )
