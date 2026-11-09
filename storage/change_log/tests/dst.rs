@@ -8,13 +8,22 @@ use object_store::memory::InMemory;
 
 const DEFAULT_SEEDS: u64 = 2000;
 
+struct ChangeLog;
+
+impl common::Server for ChangeLog {}
+
 fn simulate(seed: u64) -> common::Outcome {
     tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)
         .build()
         .expect("a runtime")
-        .block_on(common::simulate(Arc::new(InMemory::new()), "ws", seed))
+        .block_on(common::simulate(
+            Arc::new(ChangeLog),
+            Arc::new(InMemory::new()),
+            "ws",
+            seed,
+        ))
 }
 
 fn seeds() -> Vec<u64> {

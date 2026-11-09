@@ -53,6 +53,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 | `newestOwnerSeesAcknowledged` | いちばん新しいエポックを持つ受け付け中の担当は、ACK 済みのコミットをすべて見ている。縛るのはこの担当だけで、交代を知らずに受け付けを続ける古い担当は縛らない。読み取りの操作もモデルにない |
 | `oneContentPerSlotPerEpoch` | 1つのエポックは1つの位置に1つの中身しか書かない |
 | `dataWriteNeverSeesOlderEpoch` | データの書き込みが 412 のあとに自分より古いエポックを見ることはない |
+| `viewIsLogPrefix` | いちばん新しいエポックを持つ受け付け中の担当の `view`(Rust の `Effect::Committed` で渡した列)は、ログの先頭部分に一致する。ACK 済みの集合では見えない、順序の入れ替わりも反例になる |
 
 `witness` で始まる4つは、到達するはずの状態(2件の ACK、担当交代後の担当が書いた位置、自分の再送が先に通ったための 412、古い担当の停止)に本当に届くかの確認。届かないと、上の性質は何も調べずに通ってしまう。
 
@@ -75,16 +76,16 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 | 外した守り(モジュール名、変える値) | 破れる性質 |
 | --- | --- |
 | なし(`seqlog_designed`) | 破れず。到達確認の4つは届いた |
-| If-None-Match(`seqlog_blind_put`、`ifNoneMatch`) | `refinesChangeLog`、`segmentsNeverChange` |
-| 結果不明を成功とみなさない(`seqlog_unknown_as_success`、`readsBackUnknown`) | `refinesChangeLog` |
+| If-None-Match(`seqlog_blind_put`、`ifNoneMatch`) | `refinesChangeLog`、`segmentsNeverChange`、`viewIsLogPrefix` |
+| 結果不明を成功とみなさない(`seqlog_unknown_as_success`、`readsBackUnknown`) | `refinesChangeLog`、`viewIsLogPrefix` |
 | Request ID による重複排除(`seqlog_no_deduplication`、`deduplication`) | `refinesChangeLog` |
 | PUT 中の Request ID も重複とみなす(`seqlog_no_inflight_deduplication`、`inFlightDeduplication`) | `refinesChangeLog` |
 | 新しい担当がフェンスを置く(`seqlog_no_fence`、`fence`) | `newestOwnerSeesAcknowledged`。ログは壊れない |
 | 起動時に末尾のエポックが自分より新しければ止まる(`seqlog_no_epoch_check`、`epochCheck`) | `staleEpochNeverCommits`。ログは壊れない |
-| 1つの担当が同時に送る PUT は1つ(`seqlog_two_in_flight`、`oneInFlight`) | `refinesChangeLog`(固定の手順で確認)、`staleEpochNeverCommits`、`slotsContiguous` |
+| 1つの担当が同時に送る PUT は1つ(`seqlog_two_in_flight`、`oneInFlight`) | `refinesChangeLog`(固定の手順で確認)、`staleEpochNeverCommits`、`slotsContiguous`、`viewIsLogPrefix` |
 | 412 のあとに読む(`seqlog_rejected_as_fenced`、`headsAfterRejection`) | 破れず |
 
-`seqlog_two_in_flight` は、位置の列に書くこの方式に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、位置 N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの位置に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。
+`seqlog_two_in_flight` は、位置の列に書くこの方式に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、位置 N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの位置に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。また、2つの応答が位置と逆の順に届くと、両方ともログに入っていても `view` の順がログと食い違う。これは `viewIsLogPrefix` だけが捕まえる。
 
 `seqlog_rejected_as_fenced` は安全性を壊さない。412 で読まずに止まると、自分の書き込みが入っていても ACK しないだけで、ログは壊れない。412 のあとに読むのは、再送のたびに担当が止まらないためのもの(活性)で、安全性のためではない。止まった担当が確定済みのコミットを ACK しない場面は、固定の手順 `ownResendRejectedTest` で確かめる。
 
