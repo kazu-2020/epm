@@ -204,6 +204,19 @@ async fn apply(
     payload: PutPayload,
     options: PutOptions,
 ) -> object_store::Result<PutResult> {
+    // Not run in the owner's task: a real store can apply a PUT that a crashed owner never saw finish.
+    tokio::spawn(apply_and_record(inner, history, location, payload, options))
+        .await
+        .expect("a PUT does not panic")
+}
+
+async fn apply_and_record(
+    inner: Arc<dyn ObjectStore>,
+    history: History,
+    location: Path,
+    payload: PutPayload,
+    options: PutOptions,
+) -> object_store::Result<PutResult> {
     let body = Bytes::from(payload.clone());
     let result = inner.put_opts(&location, payload, options).await;
     let applied = match &result {
@@ -211,7 +224,8 @@ async fn apply(
         Err(object_store::Error::AlreadyExists { .. }) => {
             let key = location.to_string();
             record(&history, Record::Rejected { key });
-            false
+            // Not taken as "not applied" either: the bytes can be there from an earlier try whose reply was lost.
+            read(inner.as_ref(), &location).await.as_ref() == Some(&body)
         }
         // Not taken as "not applied": a real store can apply a PUT whose reply failed.
         Err(_) => read(inner.as_ref(), &location).await.as_ref() == Some(&body),
