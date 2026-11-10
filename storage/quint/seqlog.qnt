@@ -83,7 +83,7 @@ module seqlog {
     val free = lastSlot(slots) + 1
     val fence = { server: server, slot: free, epoch: self.epoch, requests: List(), attempt: 0 }
     val loaded = { ...self, next: free + 1, view: replay(slots) }
-    val stale = guards.epochCheck and lastSlot(slots) >= 0 and slots.get(lastSlot(slots)).epoch > self.epoch
+    val stale = guards.epochCheck and lastSlot(slots) >= 0 and slots.get(lastSlot(slots)).epoch >= self.epoch
     all {
       self.phase == Loading,
       if (stale) stop(server)
