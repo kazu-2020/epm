@@ -7,7 +7,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use change_log::{Admit, Commit, Sequence};
+use change_log::{Commit, Sequence};
 use datagen::Workspace;
 use dimension::Dimension;
 use evaluator::EvaluateError;
@@ -58,11 +58,16 @@ pub enum FormulaError {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Rejection {
+pub enum Invalid {
     Undecodable(DecodeError),
     NotAnInput(MeasureUlid),
     Coordinate(MeasureError),
-    Busy(Lag),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Rejection {
+    Invalid(Invalid),
+    Busy { behind: u64 },
 }
 
 #[derive(Debug, PartialEq)]
@@ -71,13 +76,12 @@ pub enum EngineAlarm {
         expected: Sequence,
         found: Sequence,
     },
-    Undecodable {
+    Invalid {
         sequence: Sequence,
-        error: DecodeError,
+        invalid: Invalid,
     },
-    Rejected {
-        sequence: Sequence,
-        rejection: Rejection,
+    Panicked {
+        sequences: RangeInclusive<Sequence>,
     },
     Failed {
         sequences: RangeInclusive<Sequence>,
@@ -157,14 +161,9 @@ impl Engine {
                     found: sequence,
                 });
             }
-            let edit = Edit::decode(commit.payload.clone())
-                .map_err(|error| EngineAlarm::Undecodable { sequence, error })?;
             self.definitions
-                .add(&edit, &mut deltas)
-                .map_err(|rejection| EngineAlarm::Rejected {
-                    sequence,
-                    rejection,
-                })?;
+                .add(&commit.payload, &mut deltas)
+                .map_err(|invalid| EngineAlarm::Invalid { sequence, invalid })?;
             next = sequence.next();
         }
         let dimensions: Vec<&Dimension> = self.dimensions.iter().collect();
@@ -199,27 +198,25 @@ impl Engine {
 }
 
 impl Definitions {
-    fn add(&self, edit: &Edit, deltas: &mut BTreeMap<MeasureUlid, Delta>) -> Result<(), Rejection> {
+    pub fn check(&self, payload: &Bytes) -> Result<(), Invalid> {
+        self.add(payload, &mut BTreeMap::new())
+    }
+
+    fn add(
+        &self,
+        payload: &Bytes,
+        deltas: &mut BTreeMap<MeasureUlid, Delta>,
+    ) -> Result<(), Invalid> {
+        let edit = Edit::decode(payload.clone()).map_err(Invalid::Undecodable)?;
         let empty = self
             .inputs
             .get(&edit.measure)
-            .ok_or(Rejection::NotAnInput(edit.measure))?;
+            .ok_or(Invalid::NotAnInput(edit.measure))?;
         let delta = deltas.entry(edit.measure).or_insert_with(|| empty.clone());
         match edit.value {
             Some(value) => delta.set(&edit.coordinate, value),
             None => delta.delete(&edit.coordinate),
         }
-        .map_err(Rejection::Coordinate)
+        .map_err(Invalid::Coordinate)
     }
-}
-
-impl Admit for Definitions {
-    type Rejection = Rejection;
-
-    fn admit(&mut self, payload: &Bytes) -> Result<(), Rejection> {
-        let edit = Edit::decode(payload.clone()).map_err(Rejection::Undecodable)?;
-        self.add(&edit, &mut BTreeMap::new())
-    }
-
-    fn replay(&mut self, _payload: &Bytes) {}
 }

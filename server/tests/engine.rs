@@ -1,11 +1,11 @@
 use bytes::Bytes;
-use change_log::{Admit, Commit, RequestId, Sequence};
+use change_log::{Commit, RequestId, Sequence};
 use datagen::Workspace;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
-use server::{DecodeError, Edit, Engine, EngineAlarm, FormulaError, Rejection};
+use server::{DecodeError, Edit, Engine, EngineAlarm, FormulaError, Invalid};
 use ulid::Ulid;
 
 const TINY: Size = Size {
@@ -80,37 +80,37 @@ fn a_formula_error_shows_before_any_request() {
     ));
 }
 
-fn admit(payload: &Bytes) -> Result<(), Rejection> {
-    engine().definitions().clone().admit(payload)
+fn check(payload: &Bytes) -> Result<(), Invalid> {
+    engine().definitions().check(payload)
 }
 
 #[test]
-fn only_a_cell_of_an_input_measure_is_admitted() {
+fn only_a_cell_of_an_input_measure_passes_the_check() {
     assert_eq!(
-        admit(&quantity([0, 1, 1, 0, 1], Some(2.5)).encode()),
+        check(&quantity([0, 1, 1, 0, 1], Some(2.5)).encode()),
         Ok(())
     );
-    assert_eq!(admit(&quantity([0, 1, 1, 0, 1], None).encode()), Ok(()));
+    assert_eq!(check(&quantity([0, 1, 1, 0, 1], None).encode()), Ok(()));
     assert_eq!(
-        admit(&Bytes::from_static(b"\x09")),
-        Err(Rejection::Undecodable(DecodeError::Version(9)))
+        check(&Bytes::from_static(b"\x09")),
+        Err(Invalid::Undecodable(DecodeError::Version(9)))
     );
     let mut result = quantity([0, 1, 1, 0, 1], Some(2.5));
     result.measure = SALES;
-    assert_eq!(admit(&result.encode()), Err(Rejection::NotAnInput(SALES)));
+    assert_eq!(check(&result.encode()), Err(Invalid::NotAnInput(SALES)));
     let mut short = quantity([0, 1, 1, 0, 1], Some(2.5));
     short.coordinate.pop();
     assert_eq!(
-        admit(&short.encode()),
-        Err(Rejection::Coordinate(MeasureError::CoordinateLength {
+        check(&short.encode()),
+        Err(Invalid::Coordinate(MeasureError::CoordinateLength {
             expected: 5,
             found: 4
         }))
     );
     let versions = 3;
     assert!(matches!(
-        admit(&quantity([0, versions, 1, 0, 1], Some(2.5)).encode()),
-        Err(Rejection::Coordinate(MeasureError::MemberOutOfRange { member, .. }))
+        check(&quantity([0, versions, 1, 0, 1], Some(2.5)).encode()),
+        Err(Invalid::Coordinate(MeasureError::MemberOutOfRange { member, .. }))
             if member == MemberId(versions)
     ));
 }
@@ -197,18 +197,18 @@ fn a_commit_that_does_not_pass_the_check_is_an_alarm() {
     garbage.payload = Bytes::from_static(b"\x09");
     assert_eq!(
         engine.apply_batch(&[good.clone(), garbage]).err(),
-        Some(EngineAlarm::Undecodable {
+        Some(EngineAlarm::Invalid {
             sequence: Sequence(1),
-            error: DecodeError::Version(9)
+            invalid: Invalid::Undecodable(DecodeError::Version(9))
         })
     );
     let mut result = quantity([0, 0, 1, 0, 0], Some(1.0));
     result.measure = SALES;
     assert_eq!(
         engine.apply_batch(&[good, commit(1, &result)]).err(),
-        Some(EngineAlarm::Rejected {
+        Some(EngineAlarm::Invalid {
             sequence: Sequence(1),
-            rejection: Rejection::NotAnInput(SALES)
+            invalid: Invalid::NotAnInput(SALES)
         })
     );
 }

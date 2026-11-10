@@ -9,8 +9,8 @@ use measure::{MeasureError, MeasureUlid};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use server::{
-    Calculation, DecodeError, Edit, Engine, EngineAlarm, Exit, Handle, Lag, Owner, ReadError,
-    Rejection, Settings, SubmitError,
+    Calculation, DecodeError, Edit, Engine, EngineAlarm, Exit, Handle, Invalid, Lag, Owner,
+    ReadError, Rejection, Settings, SubmitError,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -105,7 +105,9 @@ async fn only_checked_edits_enter_the_log_and_a_newer_owner_recalculates_them() 
     result.measure = SALES;
     assert_eq!(
         a.handle.submit(id("result"), &result).await,
-        Err(SubmitError::Rejected(Rejection::NotAnInput(SALES)))
+        Err(SubmitError::Rejected(Rejection::Invalid(
+            Invalid::NotAnInput(SALES)
+        )))
     );
     assert_eq!(
         a.handle.submit(id("r2"), &quantity(None)).await,
@@ -148,17 +150,19 @@ async fn a_rejected_edit_returns_its_reason() {
     result.measure = SALES;
     assert_eq!(
         owner.handle.submit(id("result"), &result).await,
-        Err(SubmitError::Rejected(Rejection::NotAnInput(SALES)))
+        Err(SubmitError::Rejected(Rejection::Invalid(
+            Invalid::NotAnInput(SALES)
+        )))
     );
     let mut short = quantity(Some(1.0));
     short.coordinate.pop();
     assert_eq!(
         owner.handle.submit(id("short"), &short).await,
-        Err(SubmitError::Rejected(Rejection::Coordinate(
-            MeasureError::CoordinateLength {
+        Err(SubmitError::Rejected(Rejection::Invalid(
+            Invalid::Coordinate(MeasureError::CoordinateLength {
                 expected: 5,
                 found: 4
-            }
+            })
         )))
     );
     assert_eq!(
@@ -181,7 +185,7 @@ async fn a_rejected_edit_returns_its_reason() {
     );
     assert_eq!(
         owner.handle.submit(id("r2"), &quantity(Some(2.0))).await,
-        Err(SubmitError::Rejected(Rejection::Busy(behind)))
+        Err(SubmitError::Rejected(Rejection::Busy { behind: 1 }))
     );
     assert_eq!(
         owner.handle.read(Sequence(0), &[]).await,
@@ -191,6 +195,40 @@ async fn a_rejected_edit_returns_its_reason() {
         owner.handle.submit(id("r2"), &quantity(Some(2.0))).await,
         Ok(Sequence(1)),
         "the engine caught up"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn edits_that_arrive_together_are_rejected_one_by_one_when_the_owner_is_busy() {
+    let owner = start(&store(), 1, slow(1));
+    let edit = quantity(Some(1.0));
+    let (r1, r2, r3) = tokio::join!(
+        owner.handle.submit(id("r1"), &edit),
+        owner.handle.submit(id("r2"), &edit),
+        owner.handle.submit(id("r3"), &edit),
+    );
+    assert_eq!((r1, r2), (Ok(Sequence(0)), Ok(Sequence(1))));
+    assert_eq!(
+        r3,
+        Err(SubmitError::Rejected(Rejection::Busy { behind: 2 })),
+        "r1 and r2 count before their PUT ends"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_owner_counts_the_commits_of_an_older_owner_that_it_did_not_recalculate() {
+    let store = store();
+    let a = start(&store, 1, Settings::default());
+    for (sequence, name) in (0..).zip(["r1", "r2"]) {
+        assert_eq!(
+            a.handle.submit(id(name), &quantity(Some(1.0))).await,
+            Ok(Sequence(sequence))
+        );
+    }
+    let b = start(&store, 2, slow(1));
+    assert_eq!(
+        b.handle.submit(id("r3"), &quantity(Some(2.0))).await,
+        Err(SubmitError::Rejected(Rejection::Busy { behind: 2 }))
     );
 }
 
@@ -269,9 +307,9 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
     let b = start(&store, 2, Settings::default());
     assert_eq!(
         b.exit.await.expect("B ends"),
-        Exit::Engine(EngineAlarm::Undecodable {
+        Exit::Engine(EngineAlarm::Invalid {
             sequence: Sequence(0),
-            error: DecodeError::Version(9)
+            invalid: Invalid::Undecodable(DecodeError::Version(9))
         })
     );
     assert_eq!(b.handle.lag().recalculated, None);
