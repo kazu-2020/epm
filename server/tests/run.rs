@@ -107,8 +107,8 @@ async fn only_checked_edits_enter_the_log_and_a_newer_owner_recalculates_them() 
         "the rejected edit took no Commit Sequence"
     );
     assert_eq!(
-        a.handle.read(Sequence(1), &cells()).await,
-        Ok((Sequence(1), vec![None, None]))
+        a.handle.read(Some(Sequence(1)), &cells()).await,
+        Ok((Some(Sequence(1)), vec![None, None]))
     );
 
     let b = start(&store, 2, Settings::default());
@@ -116,8 +116,12 @@ async fn only_checked_edits_enter_the_log_and_a_newer_owner_recalculates_them() 
         b.handle.submit(id("r3"), &quantity(Some(5.0))).await,
         Ok(Sequence(2))
     );
-    let (recalculated, values) = b.handle.read(Sequence(2), &cells()).await.expect("B reads");
-    assert_eq!(recalculated, Sequence(2));
+    let (recalculated, values) = b
+        .handle
+        .read(Some(Sequence(2)), &cells())
+        .await
+        .expect("B reads");
+    assert_eq!(recalculated, Some(Sequence(2)));
     assert_eq!(values[0], Some(5.0));
     assert!(values[1].is_some(), "the sales formula sees the quantity");
     assert_eq!(
@@ -180,8 +184,8 @@ async fn a_rejected_edit_returns_its_reason() {
         Err(SubmitError::Rejected(Rejection::Busy { behind: 1 }))
     );
     assert_eq!(
-        owner.handle.read(Sequence(0), &[]).await,
-        Ok((Sequence(0), vec![]))
+        owner.handle.read(Some(Sequence(0)), &[]).await,
+        Ok((Some(Sequence(0)), vec![]))
     );
     assert_eq!(
         owner.handle.submit(id("r2"), &quantity(Some(2.0))).await,
@@ -225,10 +229,33 @@ async fn a_new_owner_counts_the_commits_of_an_older_owner_that_it_did_not_recalc
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_read_without_a_sequence_returns_the_published_values_and_does_not_wait() {
+    let owner = start(&store(), 1, slow(1000));
+    let seeded = owner.handle.read(None, &cells()).await;
+    assert!(matches!(seeded, Ok((None, _))), "{seeded:?}");
+    assert_eq!(
+        owner.handle.submit(id("r1"), &quantity(None)).await,
+        Ok(Sequence(0))
+    );
+    let started = Instant::now();
+    assert_eq!(
+        owner.handle.read(None, &cells()).await,
+        seeded,
+        "the values from before r1"
+    );
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(
+        owner.handle.read(Some(Sequence(0)), &cells()).await,
+        Ok((Some(Sequence(0)), vec![None, None]))
+    );
+    assert_eq!(started.elapsed(), CALCULATION);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence() {
     let owner = start(&store(), 1, slow(1000));
     assert_eq!(
-        owner.handle.read(Sequence(0), &cells()).await,
+        owner.handle.read(Some(Sequence(0)), &cells()).await,
         Err(ReadError::NotCommitted(Lag {
             committed: None,
             recalculated: None
@@ -248,15 +275,15 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
         "no ACK waited for a recalculation"
     );
     assert_eq!(
-        owner.handle.read(Sequence(3), &cells()).await,
+        owner.handle.read(Some(Sequence(3)), &cells()).await,
         Err(ReadError::NotCommitted(Lag {
             committed: Some(Sequence(2)),
             recalculated: None
         }))
     );
     assert_eq!(
-        owner.handle.read(Sequence(1), &cells()).await,
-        Ok((Sequence(2), vec![None, None])),
+        owner.handle.read(Some(Sequence(1)), &cells()).await,
+        Ok((Some(Sequence(2)), vec![None, None])),
         "the values as of r3, a sequence after the one asked for"
     );
     assert_eq!(
@@ -267,7 +294,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     assert_eq!(
         owner
             .handle
-            .read(Sequence(0), &[(SALES, vec![MemberId(0)])])
+            .read(Some(Sequence(0)), &[(SALES, vec![MemberId(0)])])
             .await,
         Err(ReadError::Coordinate(MeasureError::CoordinateLength {
             expected: 5,
@@ -276,8 +303,12 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     );
     let unknown = MeasureUlid(Ulid(999));
     assert_eq!(
-        owner.handle.read(Sequence(0), &[(unknown, vec![])]).await,
-        Err(ReadError::NoMeasure(unknown))
+        owner
+            .handle
+            .read(Some(Sequence(9)), &[(unknown, vec![])])
+            .await,
+        Err(ReadError::NoMeasure(unknown)),
+        "not NotCommitted: no retry can read this measure"
     );
 }
 
@@ -306,7 +337,7 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
     );
     assert_eq!(b.handle.lag().recalculated, None);
     assert_eq!(
-        b.handle.read(Sequence(0), &[]).await,
+        b.handle.read(Some(Sequence(0)), &[]).await,
         Err(ReadError::Stopped)
     );
     assert_eq!(
