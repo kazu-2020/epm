@@ -243,17 +243,24 @@ fn recalculation_witnesses(outcome: &common::Outcome) -> BTreeSet<&'static str> 
         })
         .collect();
     let mut recalculates: BTreeSet<u64> = BTreeSet::new();
+    let mut epochs: BTreeMap<usize, u64> = BTreeMap::new();
+    let mut crashed: BTreeSet<u64> = BTreeSet::new();
     let mut recalculated_so_far: BTreeMap<u64, Sequence> = BTreeMap::new();
     let mut acked_so_far: BTreeMap<u64, BTreeSet<Sequence>> = BTreeMap::new();
     for record in &outcome.history {
         match record {
             Record::Granted {
+                server,
                 epoch,
-                recalculates: true,
+                recalculates: granted,
                 ..
             } => {
-                recalculates.insert(*epoch);
+                epochs.insert(*server, *epoch);
+                if *granted {
+                    recalculates.insert(*epoch);
+                }
             }
+            Record::Crashed { server } => crashed.extend(epochs.get(server)),
             Record::Recalculated { epoch, sequence } => {
                 // Not None before the first record: every owner recalculates from Commit Sequence 0, so its first batch starts there.
                 let first = recalculated_so_far
@@ -279,6 +286,12 @@ fn recalculation_witnesses(outcome: &common::Outcome) -> BTreeSet<&'static str> 
             }
             _ => {}
         }
+    }
+    let newest_acked = |epoch: &u64| acked_so_far.get(epoch).and_then(BTreeSet::last);
+    if crashed.iter().any(|epoch| {
+        recalculates.contains(epoch) && newest_acked(epoch) > recalculated_so_far.get(epoch)
+    }) {
+        seen.insert("crashBeforeRecalculated");
     }
     seen
 }

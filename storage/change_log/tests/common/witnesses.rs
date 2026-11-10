@@ -13,22 +13,17 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let mut applied: BTreeSet<(u64, Sequence)> = BTreeSet::new();
     let history = &outcome.history;
     let (segments, _) = replay(&outcome.store);
-    let granted = |flag: fn(bool, bool) -> bool| -> BTreeSet<u64> {
-        history
-            .iter()
-            .filter_map(|record| match record {
-                Record::Granted {
-                    epoch,
-                    passes_on,
-                    recalculates,
-                    ..
-                } if flag(*passes_on, *recalculates) => Some(*epoch),
-                _ => None,
-            })
-            .collect()
-    };
-    let passes_on = granted(|passes_on, _| passes_on);
-    let recalculates = granted(|_, recalculates| recalculates);
+    let passes_on: BTreeSet<u64> = history
+        .iter()
+        .filter_map(|record| match record {
+            Record::Granted {
+                epoch,
+                passes_on: true,
+                ..
+            } => Some(*epoch),
+            _ => None,
+        })
+        .collect();
     let replied: BTreeSet<(u64, Sequence)> = history
         .iter()
         .filter_map(|record| match record {
@@ -39,24 +34,6 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
             _ => None,
         })
         .collect();
-    let newest = |pick: fn(&Record) -> Option<(u64, Sequence)>| {
-        let mut newest: BTreeMap<u64, Sequence> = BTreeMap::new();
-        for (epoch, sequence) in history.iter().filter_map(pick) {
-            let entry = newest.entry(epoch).or_insert(sequence);
-            *entry = (*entry).max(sequence);
-        }
-        newest
-    };
-    let acked = newest(|record| match record {
-        Record::Acked {
-            epoch, sequence, ..
-        } => Some((*epoch, *sequence)),
-        _ => None,
-    });
-    let recalculated = newest(|record| match record {
-        Record::Recalculated { epoch, sequence } => Some((*epoch, *sequence)),
-        _ => None,
-    });
     for record in history {
         match record {
             Record::Sent { key, body } => sent.entry(key).or_default().push(body),
@@ -78,9 +55,6 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
                     .any(|written| written.0 == epoch && !replied.contains(written))
                 {
                     seen.insert("crashAfterApplyBeforeReply");
-                }
-                if recalculates.contains(&epoch) && acked.get(&epoch) > recalculated.get(&epoch) {
-                    seen.insert("crashBeforeRecalculated");
                 }
             }
             Record::Exited {
