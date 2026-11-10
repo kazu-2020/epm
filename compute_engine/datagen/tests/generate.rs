@@ -126,7 +126,7 @@ fn the_representative_model_declares_its_axes_in_key_order() {
         products: 4,
         customers: 3,
         departments_per_kind: 2,
-        quantity_cells: 20,
+        quantity_cells: 130,
         account_fill: 0.5,
     };
     let workspace = datagen::representative::generate(&size, 1);
@@ -151,4 +151,10 @@ fn the_representative_model_declares_its_axes_in_key_order() {
             definition.name
         );
     }
+    let quantity = workspace
+        .inputs
+        .iter()
+        .find(|input| input.definition().name == "数量")
+        .expect("the quantity is an input");
+    assert_eq!(quantity.len(), size.quantity_cells);
 }

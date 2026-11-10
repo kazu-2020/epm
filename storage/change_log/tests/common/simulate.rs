@@ -16,7 +16,7 @@ use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};
 
@@ -55,14 +55,8 @@ pub trait Server: Send + Sync {
             submit: Arc::new(move |request: Request| {
                 let requests = requests.clone();
                 async move {
-                    let (acknowledged, ack) = oneshot::channel();
-                    requests
-                        .send(Submission {
-                            request,
-                            acknowledged,
-                        })
-                        .await
-                        .ok()?;
+                    let (submission, ack) = Submission::new(request);
+                    requests.send(submission).await.ok()?;
                     ack.await.ok()?.ok()
                 }
                 .boxed()

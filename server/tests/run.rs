@@ -12,7 +12,7 @@ use server::{
     Calculation, DecodeError, Edit, Engine, EngineAlarm, Exit, Handle, Invalid, Lag, Owner,
     ReadError, Rejection, Settings, SubmitError,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use ulid::Ulid;
@@ -78,16 +78,12 @@ async fn submit_bytes(
     name: &str,
     payload: Bytes,
 ) -> Option<Sequence> {
-    let (acknowledged, ack) = oneshot::channel();
-    let request = Request {
+    let (submission, ack) = Submission::new(Request {
         request_id: id(name),
         payload,
-    };
+    });
     requests
-        .send(Submission {
-            request,
-            acknowledged,
-        })
+        .send(submission)
         .await
         .expect("the owner is running");
     ack.await.ok()?.ok()

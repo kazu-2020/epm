@@ -20,6 +20,19 @@ pub struct Submission<R> {
     pub acknowledged: oneshot::Sender<Result<Sequence, R>>,
 }
 
+impl<R> Submission<R> {
+    pub fn new(request: Request) -> (Self, oneshot::Receiver<Result<Sequence, R>>) {
+        let (acknowledged, ack) = oneshot::channel();
+        (
+            Self {
+                request,
+                acknowledged,
+            },
+            ack,
+        )
+    }
+}
+
 type Waiters<R> = BTreeMap<RequestId, Vec<oneshot::Sender<Result<Sequence, R>>>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,9 +212,9 @@ async fn read(store: &dyn ObjectStore, path: &Path, slot: Slot) -> Result<Option
     }
 }
 
-const PERMANENT: &[u16] = &[401, 403, 501];
+const PERMANENT: &[u16] = &[301, 401, 403, 501];
 // Not 404 for PUT and GET: a missing key gets 404 too. A LIST gets 404 only for a missing bucket.
-const PERMANENT_FOR_LIST: &[u16] = &[401, 403, 404, 501];
+const PERMANENT_FOR_LIST: &[u16] = &[301, 401, 403, 404, 501];
 
 fn permanent(error: &object_store::Error, path: &Path, statuses: &[u16]) -> Result<(), Alarm> {
     let status = match error {
@@ -209,21 +222,37 @@ fn permanent(error: &object_store::Error, path: &Path, statuses: &[u16]) -> Resu
         _ => status(error),
     };
     match status {
-        Some(status) if statuses.contains(&status) => Err(Alarm::PermanentStoreError {
-            key: path.to_string(),
-            status,
-        }),
+        Some(status) if statuses.contains(&status) || wrong_region(error, status) => {
+            Err(Alarm::PermanentStoreError {
+                key: path.to_string(),
+                status,
+            })
+        }
         _ => Ok(()),
     }
 }
 
+// Not all of 400: S3 also sends 400 for ExpiredToken and RequestTimeout, and a retry can fix them.
+fn wrong_region(error: &object_store::Error, status: u16) -> bool {
+    status == 400
+        && messages(error).any(|text| text.contains("<Code>AuthorizationHeaderMalformed</Code>"))
+}
+
 // Not a downcast: object_store 0.14 keeps RetryError private and wraps a failed S3 LIST in Generic.
 fn status(error: &object_store::Error) -> Option<u16> {
-    iter::successors(Some(error as &dyn error::Error), |error| error.source()).find_map(|error| {
-        let text = error.to_string();
+    messages(error).find_map(|text| {
+        // Not the status prefix: object_store 0.14 makes a bare 301 a BareRedirect, with no status.
+        if text.starts_with("Received redirect without LOCATION") {
+            return Some(301);
+        }
         let rest = text.strip_prefix("Server returned non-2xx status code: ")?;
         rest.get(..3)?.parse::<u16>().ok()
     })
+}
+
+fn messages(error: &object_store::Error) -> impl Iterator<Item = String> + '_ {
+    iter::successors(Some(error as &dyn error::Error), |error| error.source())
+        .map(|error| error.to_string())
 }
 
 fn backoff(attempt: u32) -> Duration {
