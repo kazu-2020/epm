@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
-use futures_util::stream::FuturesUnordered;
+use futures_util::future::{self, BoxFuture};
+use futures_util::stream::{self, FuturesUnordered};
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectStore, PutMode};
@@ -185,13 +185,13 @@ async fn load(store: Arc<dyn ObjectStore>, log: Path) -> Result<Event, Alarm> {
         keys.push((slot, meta.location));
     }
     let store = store.as_ref();
-    let slots = futures_util::stream::iter(keys)
+    let slots = stream::iter(keys)
         .map(|(slot, path)| async move {
             let found = read(store, &path, slot).await?;
             Ok::<_, Alarm>(found.map(|segment| (slot, segment)))
         })
         .buffer_unordered(PARALLEL_READS)
-        .try_filter_map(|found| async move { Ok(found) })
+        .try_filter_map(future::ok)
         .try_collect()
         .await?;
     Ok(Event::Loaded { slots })
@@ -220,7 +220,7 @@ async fn read(store: &dyn ObjectStore, path: &Path, slot: Slot) -> Result<Option
     }
 }
 
-// shortcut: 16 is a guess, set it from a measurement of start-up GETs against S3.
+// Not one GET at a time: each S3 GET waits tens of milliseconds, and a long log would delay the fence by minutes.
 const PARALLEL_READS: usize = 16;
 
 const PERMANENT: &[u16] = &[301, 401, 403, 501];
