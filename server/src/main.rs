@@ -42,13 +42,6 @@ async fn main() -> ExitCode {
     let started = Instant::now();
     let engine = Engine::new(representative::generate(&SIZE, SEED)).expect("valid formulas");
     eprintln!("engine ready in {:?}", started.elapsed());
-    let (handle, owner) = server::start(
-        engine,
-        Settings::default(),
-        store,
-        arguments.workspace.clone(),
-        Epoch(arguments.epoch),
-    );
     let listener = match tokio::net::TcpListener::bind(&arguments.listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -59,6 +52,13 @@ async fn main() -> ExitCode {
     eprintln!(
         "workspace {} epoch {} listening on {}",
         arguments.workspace, arguments.epoch, arguments.listen
+    );
+    let (handle, owner) = server::start(
+        engine,
+        Settings::default(),
+        store,
+        arguments.workspace,
+        Epoch(arguments.epoch),
     );
     // Not a restart in this process after an exit: the same epoch must not write again (ADR 0006).
     tokio::select! {

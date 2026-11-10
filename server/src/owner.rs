@@ -113,11 +113,11 @@ pub fn start(
         #[cfg(feature = "apply_before_commit")]
         commits: commits.clone(),
     };
-    let calculator = match settings.calculation {
-        Calculation::Threads(threads) => Calculator::Thread(pool(threads)),
-        Calculation::Inline(cost) => Calculator::Inline(cost),
-    };
     let run = async move {
+        let calculator = match settings.calculation {
+            Calculation::Threads(threads) => Calculator::Thread(pool(threads)),
+            Calculation::Inline(cost) => Calculator::Inline(cost),
+        };
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
         tokio::select! {
             biased;
@@ -146,17 +146,17 @@ async fn apply(
             biased;
             Some(commit) = commits.recv() => {
                 committed_count.fetch_max(commit.sequence.0 + 1, Ordering::SeqCst);
-                let mut received = vec![commit];
+                let mut batch = vec![commit];
                 if cfg!(feature = "skip_commit") {
-                    received.retain(|commit| commit.sequence != Sequence(1));
+                    batch.retain(|commit| commit.sequence != Sequence(1));
                 }
                 if cfg!(feature = "swap_commits") && let Ok(later) = commits.try_recv() {
-                    received.insert(0, later);
+                    batch.insert(0, later);
                 }
                 if cfg!(feature = "apply_twice") {
-                    received.extend(received.clone());
+                    batch.extend(batch.clone());
                 }
-                received.into_iter().map(Event::Committed).collect()
+                batch.into_iter().map(Event::Committed).collect()
             }
             result = async { calculation.as_mut().expect("a calculation runs").await }, if calculation.is_some() => {
                 calculation = None;
