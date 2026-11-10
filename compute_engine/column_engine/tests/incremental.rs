@@ -1,7 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 
 use column_engine::Region;
-use datagen::Workspace;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::{Dimension, DimensionUlid, MemberId};
@@ -10,6 +9,7 @@ use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use ulid::Ulid;
+use workspace::Workspace;
 
 const SMALL: Size = Size {
     products: 30,

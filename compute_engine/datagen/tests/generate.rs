@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt32Type;
-use datagen::{Configuration, Workspace};
+use datagen::Configuration;
 use dimension::Dimension;
 use measure::MeasureDefinition;
+use workspace::Workspace;
 
 fn configuration(seed: u64) -> Configuration {
     Configuration {
@@ -56,7 +57,7 @@ fn every_formula_parses_resolves_and_passes_the_axis_check() {
                     .map(|formula| formula.result.clone()),
             )
             .collect();
-        for (index, datagen::Formula { result, text }) in workspace.formulas.iter().enumerate() {
+        for (index, workspace::Formula { result, text }) in workspace.formulas.iter().enumerate() {
             let parsed = formula::parse(text);
             assert_eq!(parsed.errors, [], "seed {seed}: {text}");
             let resolved = formula::resolve(&parsed.expression, &measures, &dimensions);

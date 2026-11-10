@@ -16,3 +16,4 @@ rayon = "1.12.0"
 datagen = { path = "../datagen" }
 rand = "0.10.3"
 ulid = "3.0.0"
+workspace = { path = "../workspace" }
