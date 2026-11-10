@@ -142,39 +142,42 @@ async fn apply(
     let mut applier = Applier::new(engine);
     let mut calculation = None;
     loop {
-        let events = tokio::select! {
+        let event = tokio::select! {
             biased;
             Some(commit) = commits.recv() => {
-                committed_count.fetch_max(commit.sequence.0 + 1, Ordering::SeqCst);
+                // Not one commit at a time: a new owner receives the whole log at once, and a batch of only its first commit would add one recalculation.
                 let mut batch = vec![commit];
+                while let Ok(commit) = commits.try_recv() {
+                    batch.push(commit);
+                }
+                let last = batch.last().expect("the batch starts with a commit").sequence;
+                committed_count.fetch_max(last.0 + 1, Ordering::SeqCst);
                 if cfg!(feature = "skip_commit") {
                     batch.retain(|commit| commit.sequence != Sequence(1));
                 }
-                if cfg!(feature = "swap_commits") && let Ok(later) = commits.try_recv() {
-                    batch.insert(0, later);
+                if cfg!(feature = "swap_commits") && batch.len() > 1 {
+                    batch.swap(0, 1);
                 }
                 if cfg!(feature = "apply_twice") {
                     batch.extend(batch.clone());
                 }
-                batch.into_iter().map(Event::Committed).collect()
+                Event::Committed(batch)
             }
             result = async { calculation.as_mut().expect("a calculation runs").await }, if calculation.is_some() => {
                 calculation = None;
-                vec![Event::Finished(result)]
+                Event::Finished(result)
             }
             else => std::future::pending().await,
         };
-        for event in events {
-            for effect in applier.step(event) {
-                match effect {
-                    Effect::Calculate { engine, commits } => {
-                        calculation = Some(calculator.calculate(engine, commits));
-                    }
-                    Effect::Publish(engine) => {
-                        published.send_replace(engine);
-                    }
-                    Effect::Alarm(alarm) => return alarm,
+        for effect in applier.step(event) {
+            match effect {
+                Effect::Calculate { engine, commits } => {
+                    calculation = Some(calculator.calculate(engine, commits));
                 }
+                Effect::Publish(engine) => {
+                    published.send_replace(engine);
+                }
+                Effect::Alarm(alarm) => return alarm,
             }
         }
     }

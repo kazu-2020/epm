@@ -235,6 +235,26 @@ async fn a_new_owner_counts_the_commits_of_an_older_owner_that_it_did_not_recalc
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_new_owner_recalculates_the_whole_log_in_one_batch() {
+    let store = store();
+    let a = start(&store, 1, Settings::default());
+    for (sequence, name) in (0..).zip(["r1", "r2", "r3"]) {
+        assert_eq!(
+            a.handle.submit(id(name), &quantity(Some(1.0))).await,
+            Ok(Sequence(sequence))
+        );
+    }
+    let started = Instant::now();
+    let b = start(&store, 2, slow(1000));
+    b.handle
+        .published()
+        .wait_for(|engine| engine.recalculated() == Some(Sequence(2)))
+        .await
+        .expect("B recalculates the log");
+    assert_eq!(started.elapsed(), CALCULATION);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_read_without_a_sequence_returns_the_published_values_and_does_not_wait() {
     let owner = start(&store(), 1, slow(1000));
     let seeded = owner.handle.read(None, &cells()).await;
