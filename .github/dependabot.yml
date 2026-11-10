@@ -8,3 +8,31 @@ updates:
     directory: /.github/actions/actionlint
     schedule:
       interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /storage/rustfs
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /storage/quint
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /storage/s3
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directories: [/server, /compute_engine/formula/fuzz]
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+  # Not the default strategy: server/Cargo.lock also locks these crates, and a requirement change here breaks --locked in server.
+  - package-ecosystem: cargo
+    directories: [/compute_engine, /storage/change_log]
+    versioning-strategy: lockfile-only
+    schedule:
+      interval: weekly
+    groups:
+      cargo-shared:
+        patterns: ["*"]

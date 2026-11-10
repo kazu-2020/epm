@@ -25,7 +25,7 @@ jobs:
       id-token: write
     with:
       name: s3-latency
-      files: storage/s3/latency.py
+      files: storage/s3/latency.py storage/s3/requirements.txt
       script: storage/s3/ec2.sh
       summary: storage/s3/summary.sh
       instance: ${{ inputs.instance }}

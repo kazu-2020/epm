@@ -2,7 +2,7 @@
 apt-get -o DPkg::Lock::Timeout=600 install -y python3-venv
 python3 -m venv /root/venv
 # Not the boto3 of Ubuntu 24.04: it is older than the IfNoneMatch argument of PutObject.
-/root/venv/bin/pip install boto3==1.43.100
+/root/venv/bin/pip install -r bin/requirements.txt
 
 # boto3 reads AWS_DEFAULT_REGION, not AWS_REGION, and does not ask IMDS. Without it, the first request goes to us-east-1.
 export AWS_DEFAULT_REGION=ap-northeast-1
