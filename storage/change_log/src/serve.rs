@@ -228,7 +228,7 @@ fn wrong_region(error: &object_store::Error, status: u16) -> bool {
 // Not a downcast: object_store 0.14 keeps RetryError private and wraps a failed S3 LIST in Generic.
 fn status(error: &object_store::Error) -> Option<u16> {
     messages(error).find_map(|text| {
-        // A 301 without Location becomes BareRedirect, and BareRedirect has no status.
+        // Not the status prefix: object_store 0.14 makes a bare 301 a BareRedirect, with no status.
         if text.starts_with("Received redirect without LOCATION") {
             return Some(301);
         }

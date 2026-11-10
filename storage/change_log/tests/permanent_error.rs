@@ -135,11 +135,8 @@ fn statuses(list: u16, put: u16, get: u16) -> Statuses {
     }
 }
 
-fn list_error(status: u16, code: &'static str) -> Statuses {
-    Statuses {
-        code,
-        ..statuses(status, 200, 200)
-    }
+fn with_code(statuses: Statuses, code: &'static str) -> Statuses {
+    Statuses { code, ..statuses }
 }
 
 #[tokio::test]
@@ -152,13 +149,27 @@ async fn a_permanent_error_stops_the_owner_with_an_alarm() {
         (statuses(501, 200, 200), true, "ws/log", 501, &["LIST"]),
         (statuses(301, 200, 200), true, "ws/log", 301, &["LIST"]),
         (
-            list_error(400, "AuthorizationHeaderMalformed"),
+            with_code(statuses(400, 200, 200), "AuthorizationHeaderMalformed"),
             true,
             "ws/log",
             400,
             &["LIST"],
         ),
         (statuses(200, 403, 200), true, slot, 403, &["LIST", "PUT"]),
+        (
+            with_code(statuses(200, 400, 200), "AuthorizationHeaderMalformed"),
+            true,
+            slot,
+            400,
+            &["LIST", "PUT"],
+        ),
+        (
+            statuses(200, 500, 301),
+            true,
+            slot,
+            301,
+            &["LIST", "PUT", "GET"],
+        ),
         (
             statuses(200, 500, 403),
             true,
@@ -187,9 +198,13 @@ async fn a_transient_error_is_retried() {
     let cases = [
         (statuses(503, 200, 200), "LIST", "a server error"),
         (statuses(200, 500, 404), "PUT", "a GET of a missing key"),
-        (list_error(400, "ExpiredToken"), "LIST", "an expired token"),
         (
-            list_error(400, "RequestTimeout"),
+            with_code(statuses(400, 200, 200), "ExpiredToken"),
+            "LIST",
+            "an expired token",
+        ),
+        (
+            with_code(statuses(400, 200, 200), "RequestTimeout"),
             "LIST",
             "a request timeout",
         ),
