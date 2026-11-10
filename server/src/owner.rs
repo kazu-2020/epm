@@ -279,6 +279,7 @@ impl Handle {
         let mut published = self.published.clone();
         let engine = Arc::clone(
             &*published
+        // Not left to the apply loop: this ACK can reach the caller before the loop receives the commit, and a read of this sequence would be refused.
                 .wait_for(|engine| engine.next > at_least)
                 .await
                 .map_err(|_| ReadError::Stopped)?,
