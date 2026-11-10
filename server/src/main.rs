@@ -5,7 +5,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use change_log::Epoch;
 use datagen::representative::{self, Size};
 use object_store::aws::AmazonS3Builder;
-use server::{Engine, Owner, Settings};
+use server::{Engine, Settings};
 
 // shortcut: the workspace definition is fixed in code because the log does not hold it, put it in the log when users define their own.
 const SIZE: Size = Size::TINY;
@@ -42,7 +42,13 @@ async fn main() -> ExitCode {
     let started = Instant::now();
     let engine = Engine::new(representative::generate(&SIZE, SEED)).expect("valid formulas");
     eprintln!("engine ready in {:?}", started.elapsed());
-    let (owner, handle) = Owner::new(engine, Settings::default());
+    let (handle, owner) = server::start(
+        engine,
+        Settings::default(),
+        store,
+        arguments.workspace.clone(),
+        Epoch(arguments.epoch),
+    );
     let listener = match tokio::net::TcpListener::bind(&arguments.listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -56,7 +62,7 @@ async fn main() -> ExitCode {
     );
     // Not a restart in this process after an exit: the same epoch must not write again (ADR 0006).
     tokio::select! {
-        exit = owner.run(store, &arguments.workspace, Epoch(arguments.epoch)) => {
+        exit = owner => {
             eprintln!("the owner stopped: {exit:?}");
             ExitCode::FAILURE
         }

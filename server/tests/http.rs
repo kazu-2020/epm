@@ -10,7 +10,7 @@ use datagen::representative::{self, Size};
 use measure::MeasureUlid;
 use object_store::memory::InMemory;
 use serde_json::{Value, json};
-use server::{Calculation, Engine, Owner, Settings};
+use server::{Calculation, Engine, Settings};
 use tower::ServiceExt;
 use ulid::Ulid;
 
@@ -31,8 +31,14 @@ fn app(settings: Settings) -> App {
         .find(|measure| measure.ulid() == QUANTITY)
         .and_then(|quantity| quantity.cells().next())
         .expect("the seed has a quantity");
-    let (owner, handle) = Owner::new(engine, settings);
-    tokio::spawn(owner.run(Arc::new(InMemory::new()), "ws", Epoch(1)));
+    let (handle, owner) = server::start(
+        engine,
+        settings,
+        Arc::new(InMemory::new()),
+        "ws".to_owned(),
+        Epoch(1),
+    );
+    tokio::spawn(owner);
     App {
         router: server::http::router(handle),
         coordinate: coordinate.iter().map(|member| member.0).collect(),

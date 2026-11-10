@@ -62,23 +62,13 @@ pub enum ReadError {
     Stopped,
 }
 
-pub struct Owner {
-    calculation: Calculation,
-    admission: Admission,
-    requests: mpsc::Receiver<Submission<Rejection>>,
-    passed_on: mpsc::UnboundedSender<Commit>,
-    commits: mpsc::UnboundedReceiver<Commit>,
-    published: watch::Sender<Arc<Engine>>,
-    committed_count: Arc<AtomicU64>,
-}
-
 #[derive(Clone)]
 pub struct Handle {
     requests: mpsc::Sender<Submission<Rejection>>,
     published: watch::Receiver<Arc<Engine>>,
     committed_count: Arc<AtomicU64>,
     #[cfg(feature = "apply_before_commit")]
-    passed_on: mpsc::UnboundedSender<Commit>,
+    commits: mpsc::UnboundedSender<Commit>,
 }
 
 struct Admission {
@@ -95,66 +85,51 @@ enum Calculator {
 
 type Calculating = Pin<Box<dyn Future<Output = Result<Engine, EngineAlarm>> + Send>>;
 
-impl Owner {
-    pub fn new(engine: Engine, settings: Settings) -> (Owner, Handle) {
-        let (requests, waiting) = mpsc::channel(WAITING_REQUESTS);
-        let (passed_on, commits) = mpsc::unbounded_channel();
-        let engine_next = engine.next.0;
-        let committed_count = Arc::new(AtomicU64::new(engine_next));
-        let definitions = engine.definitions.clone();
-        let (published, engines) = watch::channel(Arc::new(engine));
-        let admission = Admission {
-            definitions,
-            published: engines.clone(),
-            accepted_count: engine_next,
-            busy_after: settings.busy_after,
-        };
-        let handle = Handle {
-            requests,
-            published: engines,
-            committed_count: Arc::clone(&committed_count),
-            #[cfg(feature = "apply_before_commit")]
-            passed_on: passed_on.clone(),
-        };
-        let owner = Owner {
-            calculation: settings.calculation,
-            admission,
-            requests: waiting,
-            passed_on,
-            commits,
-            published,
-            committed_count,
-        };
-        (owner, handle)
-    }
-
-    // shortcut: every new owner rebuilds the engine from the start of the log; add snapshots when start-up time matters.
-    pub async fn run(self, store: Arc<dyn ObjectStore>, workspace: &str, epoch: Epoch) -> Exit {
-        let Owner {
-            calculation,
-            admission,
-            requests,
-            passed_on,
-            commits,
-            published,
-            committed_count,
-        } = self;
-        let engine = Arc::clone(&published.borrow());
-        let calculator = match calculation {
-            Calculation::Threads(threads) => Calculator::Thread(pool(threads)),
-            Calculation::Inline(cost) => Calculator::Inline(cost),
-        };
+// shortcut: every new owner rebuilds the engine from the start of the log; add snapshots when start-up time matters.
+pub fn start(
+    engine: Engine,
+    settings: Settings,
+    store: Arc<dyn ObjectStore>,
+    workspace: String,
+    epoch: Epoch,
+) -> (Handle, impl Future<Output = Exit>) {
+    let (requests, waiting) = mpsc::channel(WAITING_REQUESTS);
+    let (commits, received) = mpsc::unbounded_channel();
+    let engine_next = engine.next.0;
+    let committed_count = Arc::new(AtomicU64::new(engine_next));
+    let definitions = engine.definitions.clone();
+    let engine = Arc::new(engine);
+    let (published, engines) = watch::channel(Arc::clone(&engine));
+    let admission = Admission {
+        definitions,
+        published: engines.clone(),
+        accepted_count: engine_next,
+        busy_after: settings.busy_after,
+    };
+    let handle = Handle {
+        requests,
+        published: engines,
+        committed_count: Arc::clone(&committed_count),
+        #[cfg(feature = "apply_before_commit")]
+        commits: commits.clone(),
+    };
+    let calculator = match settings.calculation {
+        Calculation::Threads(threads) => Calculator::Thread(pool(threads)),
+        Calculation::Inline(cost) => Calculator::Inline(cost),
+    };
+    let run = async move {
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
         tokio::select! {
             biased;
-            exit = change_log::serve(store, workspace, epoch, admission, requests, passed_on) => {
+            exit = change_log::serve(store, &workspace, epoch, admission, waiting, commits) => {
                 Exit::ChangeLog(exit)
             }
-            alarm = apply(engine, commits, &calculator, &published, &committed_count) => {
+            alarm = apply(engine, received, &calculator, &published, &committed_count) => {
                 Exit::Engine(alarm)
             }
         }
-    }
+    };
+    (handle, run)
 }
 
 async fn apply(
@@ -258,7 +233,7 @@ impl Handle {
     ) -> Result<Sequence, SubmitError> {
         let payload = edit.encode();
         #[cfg(feature = "apply_before_commit")]
-        let _ = self.passed_on.send(Commit {
+        let _ = self.commits.send(Commit {
             request_id: request_id.clone(),
             sequence: self.published.borrow().next,
             payload: payload.clone(),
