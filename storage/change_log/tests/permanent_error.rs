@@ -18,6 +18,7 @@ struct Statuses {
     list: u16,
     put: u16,
     get: u16,
+    code: &'static str,
 }
 
 fn fake_s3(statuses: Statuses) -> (String, Arc<Mutex<Vec<String>>>) {
@@ -59,9 +60,11 @@ fn fake_s3(statuses: Statuses) -> (String, Arc<Mutex<Vec<String>>>) {
                 .expect("the record")
                 .push(operation.to_owned());
             let body = if operation == "LIST" && status == 200 {
-                EMPTY_LIST
+                EMPTY_LIST.to_owned()
+            } else if statuses.code.is_empty() {
+                String::new()
             } else {
-                ""
+                format!("<Error><Code>{}</Code></Error>", statuses.code)
             };
             write!(
                 stream,
@@ -124,7 +127,19 @@ async fn run(
 }
 
 fn statuses(list: u16, put: u16, get: u16) -> Statuses {
-    Statuses { list, put, get }
+    Statuses {
+        list,
+        put,
+        get,
+        code: "",
+    }
+}
+
+fn list_error(status: u16, code: &'static str) -> Statuses {
+    Statuses {
+        code,
+        ..statuses(status, 200, 200)
+    }
 }
 
 #[tokio::test]
@@ -135,6 +150,14 @@ async fn a_permanent_error_stops_the_owner_with_an_alarm() {
         (statuses(401, 200, 200), true, "ws/log", 401, &["LIST"]),
         (statuses(404, 200, 200), true, "ws/log", 404, &["LIST"]),
         (statuses(501, 200, 200), true, "ws/log", 501, &["LIST"]),
+        (statuses(301, 200, 200), true, "ws/log", 301, &["LIST"]),
+        (
+            list_error(400, "AuthorizationHeaderMalformed"),
+            true,
+            "ws/log",
+            400,
+            &["LIST"],
+        ),
         (statuses(200, 403, 200), true, slot, 403, &["LIST", "PUT"]),
         (
             statuses(200, 500, 403),
@@ -164,6 +187,12 @@ async fn a_transient_error_is_retried() {
     let cases = [
         (statuses(503, 200, 200), "LIST", "a server error"),
         (statuses(200, 500, 404), "PUT", "a GET of a missing key"),
+        (list_error(400, "ExpiredToken"), "LIST", "an expired token"),
+        (
+            list_error(400, "RequestTimeout"),
+            "LIST",
+            "a request timeout",
+        ),
     ];
     for (statuses, operation, reason) in cases {
         let (exit, seen) = run(statuses, true, Duration::from_millis(500)).await;
