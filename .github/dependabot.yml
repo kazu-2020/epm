@@ -27,6 +27,7 @@ updates:
     groups:
       cargo:
         patterns: ["*"]
+        update-types: [minor, patch]
   # Not the default strategy: server/Cargo.lock also locks these crates, and a requirement change here breaks --locked in server.
   - package-ecosystem: cargo
     directories: [/compute_engine, /storage/change_log]

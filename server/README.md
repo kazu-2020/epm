@@ -9,7 +9,7 @@ Start only one process for each workspace at a time. The server has no authentic
 RustFS is an S3-compatible store for local work. Start it with Docker and make a bucket:
 
 ```bash
-docker compose -f storage/rustfs/compose.yaml up -d
+docker compose -f ../storage/rustfs/compose.yaml up -d
 curl --aws-sigv4 aws:amz:us-east-1:s3 --user demo:demo-secret -X PUT http://127.0.0.1:9000/epm-demo
 ```
 

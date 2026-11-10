@@ -1,4 +1,5 @@
 {
+  "private": true,
   "dependencies": {
     "@informalsystems/quint": "0.33.1"
   }
