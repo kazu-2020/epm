@@ -36,24 +36,6 @@ const CRASH_AFTER_ACK_PERCENT: u64 = 10;
 
 pub type Submit = Arc<dyn Fn(Request) -> BoxFuture<'static, Option<Sequence>> + Send + Sync>;
 
-pub fn submit_to<R: Send + 'static>(requests: mpsc::Sender<Submission<R>>) -> Submit {
-    Arc::new(move |request| {
-        let requests = requests.clone();
-        async move {
-            let (acknowledged, ack) = oneshot::channel();
-            requests
-                .send(Submission {
-                    request,
-                    acknowledged,
-                })
-                .await
-                .ok()?;
-            ack.await.ok()?.ok()
-        }
-        .boxed()
-    })
-}
-
 pub trait Server: Send + Sync {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> Started {
         let (requests, receiver) = mpsc::channel(64);
@@ -71,7 +53,21 @@ pub trait Server: Send + Sync {
         };
         Started {
             exit: exit.boxed(),
-            submit: submit_to(requests),
+            submit: Arc::new(move |request: Request| {
+                let requests = requests.clone();
+                async move {
+                    let (acknowledged, ack) = oneshot::channel();
+                    requests
+                        .send(Submission {
+                            request,
+                            acknowledged,
+                        })
+                        .await
+                        .ok()?;
+                    ack.await.ok()?.ok()
+                }
+                .boxed()
+            }),
             passed_on: Some(passed_on),
             recalculated: None,
         }
