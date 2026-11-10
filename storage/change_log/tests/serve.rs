@@ -56,16 +56,12 @@ async fn submit(
     requests: &mpsc::Sender<Submission<Infallible>>,
     name: &str,
 ) -> Result<Sequence, oneshot::error::RecvError> {
-    let (acknowledged, ack) = oneshot::channel();
-    let request = Request {
+    let (submission, ack) = Submission::new(Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
         payload: Bytes::from_static(b"payload"),
-    };
+    });
     requests
-        .send(Submission {
-            request,
-            acknowledged,
-        })
+        .send(submission)
         .await
         .expect("the owner is running");
     let Ok(sequence) = ack.await?;
@@ -292,16 +288,12 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
     });
     let mut answers = Vec::new();
     for payload in ["bad", "good"] {
-        let (acknowledged, ack) = oneshot::channel();
-        let request = Request {
+        let (submission, ack) = Submission::new(Request {
             request_id: RequestId(Bytes::from_static(b"r1")),
             payload: Bytes::from_static(payload.as_bytes()),
-        };
+        });
         requests
-            .send(Submission {
-                request,
-                acknowledged,
-            })
+            .send(submission)
             .await
             .expect("the owner is running");
         answers.push(ack);
