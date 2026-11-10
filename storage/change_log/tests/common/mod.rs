@@ -37,10 +37,10 @@ const CRASH_AFTER_ACK_PERCENT: u64 = 10;
 pub type Submit =
     Arc<dyn Fn(Request) -> BoxFuture<'static, Option<Result<Sequence, Refusal>>> + Send + Sync>;
 
+// Not built in the change_log simulations: AdmitAll never refuses, only the server does.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    // Not built in the change_log simulations: AdmitAll never refuses, only the server does.
-    #[allow(dead_code)]
     Busy,
     Invalid,
 }
@@ -529,35 +529,38 @@ async fn client(
                 }
                 None => None,
             };
-            if let Some((_, Err(reason))) = reply {
-                record(
-                    &history,
-                    Record::Refused {
-                        request: name.clone(),
-                        reason,
-                    },
-                );
-                if reason == Refusal::Invalid {
-                    break;
+            match reply {
+                None => {}
+                Some((_, Err(reason))) => {
+                    record(
+                        &history,
+                        Record::Refused {
+                            request: name.clone(),
+                            reason,
+                        },
+                    );
+                    if let Refusal::Invalid = reason {
+                        break;
+                    }
                 }
-            }
-            if let Some((epoch, Ok(sequence))) = reply {
-                record(
-                    &history,
-                    Record::Acked {
-                        request: name.clone(),
-                        epoch,
-                        sequence,
-                    },
-                );
-                if rng.percent(CRASH_AFTER_ACK_PERCENT) {
-                    crashes
-                        .send((server, epoch))
-                        .expect("the simulation takes crashes");
-                }
-                let ack_lost = rng.percent(ACK_LOST_PERCENT);
-                if !ack_lost {
-                    break;
+                Some((epoch, Ok(sequence))) => {
+                    record(
+                        &history,
+                        Record::Acked {
+                            request: name.clone(),
+                            epoch,
+                            sequence,
+                        },
+                    );
+                    if rng.percent(CRASH_AFTER_ACK_PERCENT) {
+                        crashes
+                            .send((server, epoch))
+                            .expect("the simulation takes crashes");
+                    }
+                    let ack_lost = rng.percent(ACK_LOST_PERCENT);
+                    if !ack_lost {
+                        break;
+                    }
                 }
             }
             sleep(rng.up_to(Duration::from_millis(200))).await;
