@@ -67,7 +67,7 @@ pub enum Alarm {
 }
 
 pub trait Admit {
-    type Rejection: Clone;
+    type Rejection;
 
     fn admit(&mut self, payload: &Bytes) -> Result<(), Self::Rejection>;
 
