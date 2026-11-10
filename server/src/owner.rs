@@ -149,6 +149,8 @@ impl Owner {
             Calculation::Threads(threads) => Calculator::Thread(
                 rayon::ThreadPoolBuilder::new()
                     .num_threads(threads.get())
+                    // Not the default handler: it aborts the process, and a panic in one batch must stop only this owner.
+                    .panic_handler(drop::<Box<dyn std::any::Any + Send>>)
                     .build()
                     .expect("the engine pool starts"),
             ),
