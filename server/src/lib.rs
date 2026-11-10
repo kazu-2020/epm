@@ -17,7 +17,7 @@ use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
 use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureUlid};
 
 pub use crate::edit::{DecodeError, Edit};
-pub use crate::owner::{Calculation, Handle, Lag, Owner, ReadError, Settings, SubmitError};
+pub use crate::owner::{Calculation, Handle, Lag, ReadError, Settings, SubmitError, start};
 
 #[derive(Debug, PartialEq)]
 pub enum Exit {
