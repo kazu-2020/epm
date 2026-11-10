@@ -29,7 +29,7 @@ pub enum Exit {
     Closed,
 }
 
-// shortcut: unbounded, so a slow engine never delays an ACK; bound it by the lag of the engine once the server measures it.
+// Not a bounded channel for commits: a full channel would delay ACKs, and the server rejects requests as Busy while its engine is far behind.
 pub async fn serve<A: Admit>(
     store: Arc<dyn ObjectStore>,
     workspace: &str,
