@@ -8,6 +8,7 @@ use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
+use object_store::throttle::{ThrottleConfig, ThrottledStore};
 use server::{
     Calculation, DecodeError, Edit, Engine, EngineAlarm, Exit, Handle, Invalid, Lag, ReadError,
     Rejection, Settings, SubmitError,
@@ -290,6 +291,29 @@ async fn a_read_without_a_sequence_returns_the_published_values_and_does_not_wai
         Ok((Some(Sequence(0)), vec![None, None]))
     );
     assert_eq!(started.elapsed(), CALCULATION);
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_a_read_of_a_sequence_waits_for_the_log() {
+    let listing = Duration::from_secs(3);
+    let config = ThrottleConfig {
+        wait_list_per_call: listing,
+        ..ThrottleConfig::default()
+    };
+    let store: Arc<dyn ObjectStore> = Arc::new(ThrottledStore::new(InMemory::new(), config));
+    let owner = start(&store, 1, Settings::default());
+    let started = Instant::now();
+    let seeded = owner.handle.read(None, &cells()).await;
+    assert!(matches!(seeded, Ok((None, _))), "{seeded:?}");
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(
+        owner.handle.read(Some(Sequence(0)), &[]).await,
+        Err(ReadError::NotCommitted(Lag {
+            committed: None,
+            recalculated: None
+        }))
+    );
+    assert_eq!(started.elapsed(), listing);
 }
 
 #[tokio::test(start_paused = true)]
