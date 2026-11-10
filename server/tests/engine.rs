@@ -182,6 +182,23 @@ fn a_batch_gives_the_values_of_its_commits_one_by_one() {
 }
 
 #[test]
+fn edits_to_one_cell_keep_one_delta_entry_however_many_batches_arrive() {
+    let coordinate = [0, 1, 1, 0, 1];
+    let mut engine = engine();
+    for sequence in 0..20 {
+        let edit = quantity(coordinate, Some(sequence as f64));
+        engine = applied(&engine, &[commit(sequence, &edit)]);
+    }
+    let input = engine
+        .measures()
+        .iter()
+        .find(|candidate| candidate.ulid() == QUANTITY)
+        .expect("the engine holds the measure");
+    assert_eq!(input.delta_len(), 1);
+    assert_eq!(cell(&engine, QUANTITY, &coordinate), Some(19.0));
+}
+
+#[test]
 fn a_commit_that_does_not_pass_the_check_is_an_alarm() {
     let engine = engine();
     let good = commit(0, &quantity([0, 0, 1, 0, 0], Some(1.0)));
