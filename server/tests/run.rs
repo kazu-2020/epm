@@ -141,7 +141,7 @@ async fn only_checked_edits_enter_the_log_and_a_newer_owner_recalculates_them() 
 
 #[tokio::test(start_paused = true)]
 async fn a_rejected_edit_returns_its_reason() {
-    let owner = start(&store(), 1, slow(0));
+    let owner = start(&store(), 1, Settings::default());
     let mut result = quantity(Some(1.0));
     result.measure = SALES;
     assert_eq!(
@@ -161,6 +161,11 @@ async fn a_rejected_edit_returns_its_reason() {
             })
         )))
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_busy_owner_rejects_new_edits_and_still_acknowledges_resends() {
+    let owner = start(&store(), 1, slow(0));
     assert_eq!(
         owner.handle.submit(id("r1"), &quantity(Some(1.0))).await,
         Ok(Sequence(0))
