@@ -4,14 +4,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use change_log::{Commit, Epoch, Request, RequestId, Sequence, Submission};
+use bytes::Bytes;
+use change_log::{Admit, Commit, Epoch, Request, RequestId, Sequence, Submission};
 use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
 use object_store::ObjectStore;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::apply::{Applier, Effect, Event};
-use crate::{Edit, Engine, EngineAlarm, Exit, Rejection};
+use crate::{Definitions, Edit, Engine, EngineAlarm, Exit, Rejection};
 
 const WAITING_REQUESTS: usize = 64;
 
@@ -69,6 +70,7 @@ pub enum ReadError {
 
 pub struct Owner {
     calculation: Calculation,
+    admission: Admission,
     requests: mpsc::Receiver<Submission<Rejection>>,
     passed_on: mpsc::UnboundedSender<Commit>,
     commits: mpsc::UnboundedReceiver<Commit>,
@@ -81,9 +83,15 @@ pub struct Handle {
     requests: mpsc::Sender<Submission<Rejection>>,
     published: watch::Receiver<Arc<Engine>>,
     committed_count: Arc<AtomicU64>,
-    busy_after: u64,
     #[cfg(feature = "apply_before_commit")]
     passed_on: mpsc::UnboundedSender<Commit>,
+}
+
+struct Admission {
+    definitions: Definitions,
+    published: watch::Receiver<Arc<Engine>>,
+    committed_count: Arc<AtomicU64>,
+    busy_after: u64,
 }
 
 type Job = (
@@ -104,17 +112,24 @@ impl Owner {
         let (requests, waiting) = mpsc::channel(WAITING_REQUESTS);
         let (passed_on, commits) = mpsc::unbounded_channel();
         let committed_count = Arc::new(AtomicU64::new(engine.next.0));
+        let definitions = engine.definitions.clone();
         let (published, engines) = watch::channel(Arc::new(engine));
+        let admission = Admission {
+            definitions,
+            published: engines.clone(),
+            committed_count: Arc::clone(&committed_count),
+            busy_after: settings.busy_after,
+        };
         let handle = Handle {
             requests,
             published: engines,
             committed_count: Arc::clone(&committed_count),
-            busy_after: settings.busy_after,
             #[cfg(feature = "apply_before_commit")]
             passed_on: passed_on.clone(),
         };
         let owner = Owner {
             calculation: settings.calculation,
+            admission,
             requests: waiting,
             passed_on,
             commits,
@@ -128,6 +143,7 @@ impl Owner {
     pub async fn run(self, store: Arc<dyn ObjectStore>, workspace: &str, epoch: Epoch) -> Exit {
         let Owner {
             calculation,
+            admission,
             requests,
             passed_on,
             commits,
@@ -135,7 +151,6 @@ impl Owner {
             committed_count,
         } = self;
         let engine = Arc::clone(&published.borrow());
-        let definitions = engine.definitions.clone();
         let calculator = match calculation {
             Calculation::Threads(threads) => Calculator::Thread(engine_thread(threads)),
             Calculation::Inline(cost) => Calculator::Inline(cost),
@@ -143,7 +158,7 @@ impl Owner {
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner. The engine thread can finish its batch, but its result is dropped.
         tokio::select! {
             biased;
-            exit = change_log::serve(store, workspace, epoch, definitions, requests, passed_on) => {
+            exit = change_log::serve(store, workspace, epoch, admission, requests, passed_on) => {
                 Exit::ChangeLog(exit)
             }
             alarm = apply(engine, commits, &calculator, &published, &committed_count) => {
@@ -246,10 +261,6 @@ impl Handle {
         request_id: RequestId,
         edit: &Edit,
     ) -> Result<Sequence, SubmitError> {
-        let lag = self.lag();
-        if lag.behind() > self.busy_after {
-            return Err(SubmitError::Rejected(Rejection::Busy(lag)));
-        }
         let payload = edit.encode();
         #[cfg(feature = "apply_before_commit")]
         let _ = self.passed_on.send(Commit {
@@ -313,16 +324,36 @@ impl Handle {
     }
 
     pub fn lag(&self) -> Lag {
-        // Not the committed count first: a batch that finishes between the two reads would show more recalculated than committed.
-        let recalculated = self.published.borrow().recalculated();
-        let committed_count = self.committed_count.load(Ordering::SeqCst);
-        Lag {
-            committed: committed_count.checked_sub(1).map(Sequence),
-            recalculated,
-        }
+        lag(&self.published, &self.committed_count)
     }
 
     pub fn published(&self) -> watch::Receiver<Arc<Engine>> {
         self.published.clone()
+    }
+}
+
+impl Admit for Admission {
+    type Rejection = Rejection;
+
+    fn admit(&mut self, payload: &Bytes) -> Result<(), Rejection> {
+        let lag = lag(&self.published, &self.committed_count);
+        if lag.behind() > self.busy_after {
+            return Err(Rejection::Busy(lag));
+        }
+        self.definitions.admit(payload)
+    }
+
+    fn replay(&mut self, payload: &Bytes) {
+        self.definitions.replay(payload);
+    }
+}
+
+fn lag(published: &watch::Receiver<Arc<Engine>>, committed_count: &AtomicU64) -> Lag {
+    // Not the committed count first: a batch that finishes between the two reads would show more recalculated than committed.
+    let recalculated = published.borrow().recalculated();
+    let committed_count = committed_count.load(Ordering::SeqCst);
+    Lag {
+        committed: committed_count.checked_sub(1).map(Sequence),
+        recalculated,
     }
 }

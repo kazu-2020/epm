@@ -175,6 +175,11 @@ async fn a_rejected_edit_returns_its_reason() {
         "the ACK came before the recalculation"
     );
     assert_eq!(
+        owner.handle.submit(id("r1"), &quantity(Some(1.0))).await,
+        Ok(Sequence(0)),
+        "a resend of a committed edit gets its ACK while the owner is busy"
+    );
+    assert_eq!(
         owner.handle.submit(id("r2"), &quantity(Some(2.0))).await,
         Err(SubmitError::Rejected(Rejection::Busy(behind)))
     );
