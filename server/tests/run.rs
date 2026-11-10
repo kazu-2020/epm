@@ -235,6 +235,21 @@ async fn a_new_owner_counts_the_commits_of_an_older_owner_that_it_did_not_recalc
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_new_owner_waits_for_the_log_before_it_answers_a_read_of_a_committed_sequence() {
+    let store = store();
+    let a = start(&store, 1, Settings::default());
+    for (sequence, name) in (0..).zip(["r1", "r2"]) {
+        assert_eq!(
+            a.handle.submit(id(name), &quantity(Some(1.0))).await,
+            Ok(Sequence(sequence))
+        );
+    }
+    let b = start(&store, 2, Settings::default());
+    let read = b.handle.read(Some(Sequence(1)), &cells()).await;
+    assert!(matches!(read, Ok((Some(Sequence(1)), _))), "{read:?}");
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_new_owner_recalculates_the_whole_log_in_one_batch() {
     let store = store();
     let a = start(&store, 1, Settings::default());

@@ -67,6 +67,7 @@ pub struct Handle {
     requests: mpsc::Sender<Submission<Rejection>>,
     published: watch::Receiver<Arc<Engine>>,
     committed_count: Arc<AtomicU64>,
+    readiness: watch::Receiver<bool>,
     #[cfg(feature = "apply_before_commit")]
     commits: mpsc::UnboundedSender<Commit>,
 }
@@ -76,6 +77,8 @@ struct Admission {
     published: watch::Receiver<Arc<Engine>>,
     accepted_count: u64,
     busy_after: u64,
+    committed_count: Arc<AtomicU64>,
+    readiness: watch::Sender<bool>,
 }
 
 enum Calculator {
@@ -100,16 +103,20 @@ pub fn start(
     let definitions = engine.definitions.clone();
     let engine = Arc::new(engine);
     let (published, engines) = watch::channel(Arc::clone(&engine));
+    let (readiness, ready) = watch::channel(false);
     let admission = Admission {
         definitions,
         published: engines.clone(),
         accepted_count: engine_next,
         busy_after: settings.busy_after,
+        committed_count: Arc::clone(&committed_count),
+        readiness,
     };
     let handle = Handle {
         requests,
         published: engines,
         committed_count: Arc::clone(&committed_count),
+        readiness: ready,
         #[cfg(feature = "apply_before_commit")]
         commits: commits.clone(),
     };
@@ -266,6 +273,14 @@ impl Handle {
     ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
         // Not only after the wait: a read that can never succeed would get NotCommitted, and the caller would try it again.
         values(&self.published.borrow(), cells)?;
+        if at_least.is_some() {
+            // Not NotCommitted at once: a new owner counts the commits of the log only when it has read the log, and a committed sequence would look uncommitted.
+            self.readiness
+                .clone()
+                .wait_for(|ready| *ready)
+                .await
+                .map_err(|_| ReadError::Stopped)?;
+        }
         let lag = self.lag();
         if lag.committed < at_least {
             return Err(ReadError::NotCommitted(lag));
@@ -328,6 +343,11 @@ impl Admit for Admission {
 
     fn replay(&mut self, _payload: &Bytes) {
         self.accepted_count += 1;
+    }
+
+    fn ready(&mut self, next: Sequence) {
+        self.committed_count.fetch_max(next.0, Ordering::SeqCst);
+        self.readiness.send_replace(true);
     }
 }
 
