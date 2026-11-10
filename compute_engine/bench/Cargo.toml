@@ -4,10 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-arrow-array = "60.1.0"
 arrow-buffer = "60.1.0"
 arrow-ipc = "60.1.0"
-arrow-schema = "60.1.0"
 column_engine = { path = "../column_engine" }
 datagen = { path = "../datagen" }
 dimension = { path = "../dimension" }

@@ -74,7 +74,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 ## 入れていないもの
 
-- スナップショット、GC、Computed Sequence、Request ID の窓。
+- スナップショット、GC、再計算済み番号、Request ID の窓。
 - 複数のワークスペース、テナントの混入。キーの命名、ワークスペースごとのデータ鍵、IAM で守る。
 - 活性(いつか確定する、交代後にいつか書ける)。ランダムシミュレーションは活性を検査しない。
 - グループコミットにまとめる件数、ハッシュの鎖、Event ID、3分の打ち切り。

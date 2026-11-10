@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-arrow-array = "60.1.0"
 arrow-buffer = "60.1.0"
 dimension = { path = "../dimension" }
 evaluator = { path = "../evaluator" }
