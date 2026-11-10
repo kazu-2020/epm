@@ -80,6 +80,9 @@ pub enum EngineAlarm {
         sequence: Sequence,
         invalid: Invalid,
     },
+    Panicked {
+        sequences: RangeInclusive<Sequence>,
+    },
     Failed {
         sequences: RangeInclusive<Sequence>,
         error: EvaluateError,

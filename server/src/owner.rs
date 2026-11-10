@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::ops::RangeInclusive;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -140,14 +141,7 @@ impl Owner {
         } = self;
         let engine = Arc::clone(&published.borrow());
         let calculator = match calculation {
-            Calculation::Threads(threads) => Calculator::Thread(
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(threads.get())
-                    // Not the default handler: it aborts the process, and a panic in one batch must stop only this owner.
-                    .panic_handler(drop::<Box<dyn std::any::Any + Send>>)
-                    .build()
-                    .expect("the engine pool starts"),
-            ),
+            Calculation::Threads(threads) => Calculator::Thread(pool(threads)),
             Calculation::Inline(cost) => Calculator::Inline(cost),
         };
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
@@ -211,16 +205,39 @@ async fn apply(
     }
 }
 
+fn pool(threads: NonZeroUsize) -> rayon::ThreadPool {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads.get())
+        // Not the default handler: it aborts the process, and a panic in one batch must stop only this owner.
+        .panic_handler(drop::<Box<dyn std::any::Any + Send>>)
+        .build()
+        .expect("the engine pool starts")
+}
+
+fn on_pool(
+    pool: &rayon::ThreadPool,
+    sequences: RangeInclusive<Sequence>,
+    batch: impl FnOnce() -> Result<Engine, EngineAlarm> + Send + 'static,
+) -> Calculating {
+    let (finished, result) = oneshot::channel();
+    pool.spawn(move || {
+        // Not an error: the owner stopped and does not read the result.
+        let _ = finished.send(batch());
+    });
+    Box::pin(async move {
+        result
+            .await
+            .unwrap_or(Err(EngineAlarm::Panicked { sequences }))
+    })
+}
+
 impl Calculator {
     fn calculate(&self, engine: Arc<Engine>, commits: Vec<Commit>) -> Calculating {
         match self {
             Calculator::Thread(pool) => {
-                let (finished, result) = oneshot::channel();
-                pool.spawn(move || {
-                    // Not an error: the owner stopped and does not read the result.
-                    let _ = finished.send(engine.apply_batch(&commits));
-                });
-                Box::pin(async move { result.await.expect("the engine pool finishes every batch") })
+                let first = engine.next;
+                let last = commits.last().map_or(first, |commit| commit.sequence);
+                on_pool(pool, first..=last, move || engine.apply_batch(&commits))
             }
             Calculator::Inline(cost) => {
                 let cost = *cost;
@@ -262,6 +279,7 @@ impl Handle {
             .await
             .map_err(|_| SubmitError::Stopped)?
             .map_err(SubmitError::Rejected)?;
+        // Not left to the apply loop: this ACK can reach the caller before the loop receives the commit, and a read of this sequence would be refused.
         self.committed_count
             .fetch_max(sequence.0 + 1, Ordering::SeqCst);
         Ok(sequence)
@@ -279,7 +297,6 @@ impl Handle {
         let mut published = self.published.clone();
         let engine = Arc::clone(
             &*published
-        // Not left to the apply loop: this ACK can reach the caller before the loop receives the commit, and a read of this sequence would be refused.
                 .wait_for(|engine| engine.next > at_least)
                 .await
                 .map_err(|_| ReadError::Stopped)?,
@@ -340,5 +357,22 @@ fn lag(published: &watch::Receiver<Arc<Engine>>, committed_count: &AtomicU64) ->
     Lag {
         committed: committed_count.checked_sub(1).map(Sequence),
         recalculated,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_batch_that_panics_is_an_alarm_with_its_sequences() {
+        let sequences = Sequence(3)..=Sequence(4);
+        let calculating = on_pool(&pool(NonZeroUsize::MIN), sequences.clone(), || {
+            panic!("a bug in the calculation")
+        });
+        assert_eq!(
+            calculating.await.err(),
+            Some(EngineAlarm::Panicked { sequences })
+        );
     }
 }
