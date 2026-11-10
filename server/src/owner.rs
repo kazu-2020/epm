@@ -94,14 +94,8 @@ struct Admission {
     busy_after: u64,
 }
 
-type Job = (
-    Arc<Engine>,
-    Vec<Commit>,
-    oneshot::Sender<Result<Engine, EngineAlarm>>,
-);
-
 enum Calculator {
-    Thread(std::sync::mpsc::Sender<Job>),
+    Thread(rayon::ThreadPool),
     Inline(Duration),
 }
 
@@ -152,10 +146,15 @@ impl Owner {
         } = self;
         let engine = Arc::clone(&published.borrow());
         let calculator = match calculation {
-            Calculation::Threads(threads) => Calculator::Thread(engine_thread(threads)),
+            Calculation::Threads(threads) => Calculator::Thread(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads.get())
+                    .build()
+                    .expect("the engine pool starts"),
+            ),
             Calculation::Inline(cost) => Calculator::Inline(cost),
         };
-        // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner. The engine thread can finish its batch, but its result is dropped.
+        // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
         tokio::select! {
             biased;
             exit = change_log::serve(store, workspace, epoch, admission, requests, passed_on) => {
@@ -216,33 +215,16 @@ async fn apply(
     }
 }
 
-fn engine_thread(threads: NonZeroUsize) -> std::sync::mpsc::Sender<Job> {
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads.get())
-        .build()
-        .expect("the engine pool starts");
-    let (jobs, received) = std::sync::mpsc::channel::<Job>();
-    std::thread::spawn(move || {
-        for (engine, commits, finished) in received {
-            // Not an error: the owner stopped and does not read the result.
-            let _ = finished.send(pool.install(|| engine.apply_batch(&commits)));
-        }
-    });
-    jobs
-}
-
 impl Calculator {
     fn calculate(&self, engine: Arc<Engine>, commits: Vec<Commit>) -> Calculating {
         match self {
-            Calculator::Thread(jobs) => {
+            Calculator::Thread(pool) => {
                 let (finished, result) = oneshot::channel();
-                jobs.send((engine, commits, finished))
-                    .expect("the engine thread runs while the owner runs");
-                Box::pin(async move {
-                    result
-                        .await
-                        .expect("the engine thread finishes every batch")
-                })
+                pool.spawn(move || {
+                    // Not an error: the owner stopped and does not read the result.
+                    let _ = finished.send(engine.apply_batch(&commits));
+                });
+                Box::pin(async move { result.await.expect("the engine pool finishes every batch") })
             }
             Calculator::Inline(cost) => {
                 let cost = *cost;
