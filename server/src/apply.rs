@@ -84,16 +84,8 @@ mod tests {
 
     use super::*;
 
-    const TINY: Size = Size {
-        products: 2,
-        customers: 2,
-        departments_per_kind: 1,
-        quantity_cells: 50,
-        account_fill: 0.02,
-    };
-
     fn engine() -> Arc<Engine> {
-        Arc::new(Engine::new(representative::generate(&TINY, 7)).expect("valid formulas"))
+        Arc::new(Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas"))
     }
 
     fn committed(sequence: u64) -> Event {

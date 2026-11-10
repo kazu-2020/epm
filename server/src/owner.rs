@@ -283,36 +283,23 @@ impl Handle {
 
     pub async fn read(
         &self,
-        at_least: Sequence,
+        at_least: Option<Sequence>,
         cells: &[(MeasureUlid, Vec<MemberId>)],
-    ) -> Result<(Sequence, Vec<Option<f64>>), ReadError> {
+    ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
+        // Not only after the wait: a read that can never succeed would get NotCommitted, and the caller would try it again.
+        values(&self.published.borrow(), cells)?;
         let lag = self.lag();
-        if lag.committed < Some(at_least) {
+        if lag.committed < at_least {
             return Err(ReadError::NotCommitted(lag));
         }
         let mut published = self.published.clone();
         let engine = Arc::clone(
             &*published
-                .wait_for(|engine| engine.next > at_least)
+                .wait_for(|engine| engine.recalculated() >= at_least)
                 .await
                 .map_err(|_| ReadError::Stopped)?,
         );
-        let values = cells
-            .iter()
-            .map(|(measure, coordinate)| {
-                engine
-                    .measures
-                    .iter()
-                    .find(|candidate| candidate.ulid() == *measure)
-                    .ok_or(ReadError::NoMeasure(*measure))?
-                    .get(coordinate)
-                    .map_err(ReadError::Coordinate)
-            })
-            .collect::<Result<_, _>>()?;
-        let recalculated = engine
-            .recalculated()
-            .expect("the engine recalculated the sequence it waited for");
-        Ok((recalculated, values))
+        Ok((engine.recalculated(), values(&engine, cells)?))
     }
 
     pub fn lag(&self) -> Lag {
@@ -322,6 +309,24 @@ impl Handle {
     pub fn published(&self) -> watch::Receiver<Arc<Engine>> {
         self.published.clone()
     }
+}
+
+fn values(
+    engine: &Engine,
+    cells: &[(MeasureUlid, Vec<MemberId>)],
+) -> Result<Vec<Option<f64>>, ReadError> {
+    cells
+        .iter()
+        .map(|(measure, coordinate)| {
+            engine
+                .measures
+                .iter()
+                .find(|candidate| candidate.ulid() == *measure)
+                .ok_or(ReadError::NoMeasure(*measure))?
+                .get(coordinate)
+                .map_err(ReadError::Coordinate)
+        })
+        .collect()
 }
 
 impl Admit for Admission {

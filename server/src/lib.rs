@@ -2,6 +2,8 @@ mod apply;
 mod edit;
 mod owner;
 
+pub mod http;
+
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -143,6 +145,10 @@ impl Engine {
         })
     }
 
+    pub fn dimensions(&self) -> &[Dimension] {
+        &self.dimensions
+    }
+
     pub fn definitions(&self) -> &Definitions {
         &self.definitions
     }
@@ -196,6 +202,10 @@ impl Engine {
 }
 
 impl Definitions {
+    pub fn is_input(&self, measure: MeasureUlid) -> bool {
+        self.inputs.contains_key(&measure)
+    }
+
     pub fn check(&self, payload: &Bytes) -> Result<(), Invalid> {
         self.add(payload, &mut BTreeMap::new())
     }
