@@ -47,13 +47,6 @@ pub struct Lag {
     pub recalculated: Option<Sequence>,
 }
 
-impl Lag {
-    fn behind(&self) -> u64 {
-        let count = |sequence: Option<Sequence>| sequence.map_or(0, |sequence| sequence.0 + 1);
-        count(self.committed).saturating_sub(count(self.recalculated))
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub enum SubmitError {
     Rejected(Rejection),
@@ -90,7 +83,7 @@ pub struct Handle {
 struct Admission {
     definitions: Definitions,
     published: watch::Receiver<Arc<Engine>>,
-    committed_count: Arc<AtomicU64>,
+    accepted_count: u64,
     busy_after: u64,
 }
 
@@ -105,13 +98,14 @@ impl Owner {
     pub fn new(engine: Engine, settings: Settings) -> (Owner, Handle) {
         let (requests, waiting) = mpsc::channel(WAITING_REQUESTS);
         let (passed_on, commits) = mpsc::unbounded_channel();
-        let committed_count = Arc::new(AtomicU64::new(engine.next.0));
+        let engine_next = engine.next.0;
+        let committed_count = Arc::new(AtomicU64::new(engine_next));
         let definitions = engine.definitions.clone();
         let (published, engines) = watch::channel(Arc::new(engine));
         let admission = Admission {
             definitions,
             published: engines.clone(),
-            committed_count: Arc::clone(&committed_count),
+            accepted_count: engine_next,
             busy_after: settings.busy_after,
         };
         let handle = Handle {
@@ -320,15 +314,21 @@ impl Admit for Admission {
     type Rejection = Rejection;
 
     fn admit(&mut self, payload: &Bytes) -> Result<(), Rejection> {
-        let lag = lag(&self.published, &self.committed_count);
-        if lag.behind() > self.busy_after {
-            return Err(Rejection::Busy(lag));
+        let behind = self
+            .accepted_count
+            .saturating_sub(self.published.borrow().next.0);
+        if behind > self.busy_after {
+            return Err(Rejection::Busy { behind });
         }
-        self.definitions.admit(payload)
+        self.definitions
+            .check(payload)
+            .map_err(Rejection::Invalid)?;
+        self.accepted_count += 1;
+        Ok(())
     }
 
-    fn replay(&mut self, payload: &Bytes) {
-        self.definitions.replay(payload);
+    fn replay(&mut self, _payload: &Bytes) {
+        self.accepted_count += 1;
     }
 }
 
