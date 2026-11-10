@@ -25,15 +25,16 @@ pub fn evaluate(
 
 pub fn edit(
     measures: &mut [Measure],
-    edited: MeasureUlid,
-    delta: Delta,
+    deltas: impl IntoIterator<Item = (MeasureUlid, Delta)>,
     formulas: &[(MeasureUlid, &CheckedExpression)],
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {
     // Not edited in place: an error part way would leave results that disagree with their inputs.
     let mut next = measures.to_vec();
     let mut changed = HashMap::new();
-    apply(&mut next, edited, delta, &mut changed, dimensions)?;
+    for (edited, delta) in deltas {
+        apply(&mut next, edited, delta, &mut changed, dimensions)?;
+    }
     for &(result, expression) in formulas {
         let Some(region) = changed_region(expression, &changed, dimensions)? else {
             continue;
@@ -64,6 +65,10 @@ fn apply(
                 region = region.without(axis);
             }
         }
+        let region = match changed.remove(&ulid) {
+            Some(earlier) => earlier.union(&region),
+            None => region,
+        };
         changed.insert(ulid, region);
     }
     measures[index] = measures[index]

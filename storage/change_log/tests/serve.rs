@@ -1,12 +1,16 @@
+use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use change_log::{Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Submission, serve};
-use futures_util::TryStreamExt;
-use futures_util::stream::BoxStream;
+use change_log::{
+    Admit, AdmitAll, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Submission, serve,
+};
+use futures_util::stream::{self, BoxStream};
+use futures_util::{StreamExt, TryStreamExt};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
@@ -19,7 +23,7 @@ use tokio::task::JoinHandle;
 const WORKSPACE: &str = "ws";
 
 struct Owner {
-    requests: mpsc::Sender<Submission>,
+    requests: mpsc::Sender<Submission<Infallible>>,
     committed: mpsc::UnboundedReceiver<Commit>,
     exit: JoinHandle<Exit>,
 }
@@ -28,8 +32,9 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64) -> Owner {
     let (requests, receiver) = mpsc::channel(16);
     let (sender, committed) = mpsc::unbounded_channel();
     let store = Arc::clone(store);
-    let exit =
-        tokio::spawn(async move { serve(store, WORKSPACE, Epoch(epoch), receiver, sender).await });
+    let exit = tokio::spawn(async move {
+        serve(store, WORKSPACE, Epoch(epoch), AdmitAll, receiver, sender).await
+    });
     Owner {
         requests,
         committed,
@@ -48,7 +53,7 @@ impl Owner {
 }
 
 async fn submit(
-    requests: &mpsc::Sender<Submission>,
+    requests: &mpsc::Sender<Submission<Infallible>>,
     name: &str,
 ) -> Result<Sequence, oneshot::error::RecvError> {
     let (acknowledged, ack) = oneshot::channel();
@@ -63,7 +68,8 @@ async fn submit(
         })
         .await
         .expect("the owner is running");
-    ack.await
+    let Ok(sequence) = ack.await?;
+    Ok(sequence)
 }
 
 fn name(request_id: &RequestId) -> String {
@@ -138,6 +144,7 @@ struct Stalling {
     stall: Stall,
     put: usize,
     puts: AtomicUsize,
+    listed_after: Duration,
 }
 
 impl fmt::Display for Stalling {
@@ -187,7 +194,14 @@ impl ObjectStore for Stalling {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        self.inner.list(prefix)
+        let listed = self.inner.list(prefix);
+        let listed_after = self.listed_after;
+        stream::once(async move {
+            tokio::time::sleep(listed_after).await;
+            listed
+        })
+        .flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
@@ -212,6 +226,7 @@ async fn a_crash_while_a_put_waits_for_its_reply_loses_no_acknowledged_request()
             stall,
             put: 2,
             puts: AtomicUsize::new(0),
+            listed_after: Duration::ZERO,
         });
         let mut a = start(&store, 1);
         assert_eq!(submit(&a.requests, "r0").await, Ok(Sequence(0)));
@@ -244,4 +259,58 @@ async fn a_crash_while_a_put_waits_for_its_reply_loses_no_acknowledged_request()
             "{stall:?}: after the resend"
         );
     }
+}
+
+struct GoodOnly;
+
+impl Admit for GoodOnly {
+    type Rejection = &'static str;
+
+    fn admit(&mut self, payload: &Bytes) -> Result<(), &'static str> {
+        if payload.as_ref() == b"bad" {
+            return Err("bad");
+        }
+        Ok(())
+    }
+
+    fn replay(&mut self, _payload: &Bytes) {}
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
+    let store: Arc<dyn ObjectStore> = Arc::new(Stalling {
+        inner: InMemory::new(),
+        stall: Stall::BeforeApply,
+        put: usize::MAX,
+        puts: AtomicUsize::new(0),
+        listed_after: Duration::from_secs(1),
+    });
+    let (requests, receiver) = mpsc::channel(16);
+    let (committed, _passed_on) = mpsc::unbounded_channel();
+    let _owner = tokio::spawn(async move {
+        serve(store, WORKSPACE, Epoch(1), GoodOnly, receiver, committed).await
+    });
+    let mut answers = Vec::new();
+    for payload in ["bad", "good"] {
+        let (acknowledged, ack) = oneshot::channel();
+        let request = Request {
+            request_id: RequestId(Bytes::from_static(b"r1")),
+            payload: Bytes::from_static(payload.as_bytes()),
+        };
+        requests
+            .send(Submission {
+                request,
+                acknowledged,
+            })
+            .await
+            .expect("the owner is running");
+        answers.push(ack);
+    }
+    let [bad, good] = <[_; 2]>::try_from(answers).expect("two requests");
+    assert_eq!(bad.await, Ok(Err("bad")));
+    assert_eq!(
+        good.await,
+        Ok(Ok(Sequence(0))),
+        "the later request with the same Request ID was committed"
+    );
 }

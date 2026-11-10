@@ -1452,6 +1452,7 @@ dependencies = [
  "measure",
  "object_store",
  "oracle",
+ "rayon",
  "tokio",
  "ulid",
 ]

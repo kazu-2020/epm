@@ -129,6 +129,13 @@ impl Model {
             .expect("the region is found")
     }
 
+    fn formulas(&self) -> Vec<(MeasureUlid, &CheckedExpression)> {
+        self.checked
+            .iter()
+            .map(|(result, expression)| (result.ulid, expression))
+            .collect()
+    }
+
     fn recalculate_all(&self, inputs: Vec<Measure>) -> Vec<Measure> {
         let dimensions = self.dimensions();
         let mut measures = inputs;
@@ -282,11 +289,7 @@ fn edits_match_a_full_recalculation_when_results_declare_axes_out_of_key_order()
 
 fn edit_and_compare(model: &Model) {
     let dimensions = model.dimensions();
-    let formulas: Vec<(MeasureUlid, &CheckedExpression)> = model
-        .checked
-        .iter()
-        .map(|(result, expression)| (result.ulid, expression))
-        .collect();
+    let formulas = model.formulas();
     let mut inputs = model.workspace.inputs.clone();
     let mut measures = model.recalculate_all(inputs.clone());
     let mut random = StdRng::seed_from_u64(11);
@@ -319,20 +322,56 @@ fn edit_and_compare(model: &Model) {
             .expect("the delta fits");
         column_engine::edit(
             &mut measures,
-            inputs[input].ulid(),
-            edited,
+            [(inputs[input].ulid(), edited)],
             &formulas,
             &dimensions,
         )
         .expect("the edit recalculates");
-        let expected = model.recalculate_all(inputs.clone());
-        for (measure, expected) in measures.iter().zip(&expected) {
-            assert_eq!(
-                exact(&measure.cells().collect::<Vec<_>>()),
-                exact(&expected.cells().collect::<Vec<_>>()),
-                "{}",
-                measure.definition().name
-            );
-        }
+        assert_same_cells(&measures, &model.recalculate_all(inputs.clone()));
+    }
+}
+
+#[test]
+fn two_deltas_for_one_measure_recalculate_the_cells_of_both() {
+    let model = Model::new();
+    let dimensions = model.dimensions();
+    let formulas = model.formulas();
+    let mut inputs = model.workspace.inputs.clone();
+    let mut measures = model.recalculate_all(inputs.clone());
+    let quantity = model.measure("数量");
+    let input = inputs
+        .iter()
+        .position(|input| input.ulid() == quantity)
+        .expect("the quantity is an input");
+    let cells: Vec<(Vec<MemberId>, f64)> = inputs[input].cells().collect();
+    let (first, last) = (&cells[0].0, &cells[cells.len() - 1].0);
+    assert_ne!(first[0], last[0], "the two cells are in different periods");
+    let delta = |measure: &Measure, coordinate: &[MemberId]| {
+        let mut delta = measure.delta();
+        delta.set(coordinate, 1_234.5).expect("the coordinate fits");
+        delta
+    };
+    let deltas = [
+        (quantity, delta(&measures[input], first)),
+        (quantity, delta(&measures[input], last)),
+    ];
+    column_engine::edit(&mut measures, deltas, &formulas, &dimensions)
+        .expect("the edit recalculates");
+    for coordinate in [first, last] {
+        inputs[input] = inputs[input]
+            .apply(delta(&inputs[input], coordinate))
+            .expect("the delta fits");
+    }
+    assert_same_cells(&measures, &model.recalculate_all(inputs));
+}
+
+fn assert_same_cells(measures: &[Measure], expected: &[Measure]) {
+    for (measure, expected) in measures.iter().zip(expected) {
+        assert_eq!(
+            exact(&measure.cells().collect::<Vec<_>>()),
+            exact(&expected.cells().collect::<Vec<_>>()),
+            "{}",
+            measure.definition().name
+        );
     }
 }

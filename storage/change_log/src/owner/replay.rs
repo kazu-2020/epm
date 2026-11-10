@@ -111,7 +111,7 @@ impl Server {
         }
     }
 
-    fn of(owner: &Owner) -> Server {
+    fn of(owner: &Owner<AdmitAll>) -> Server {
         let epoch = owner.epoch.0;
         match &owner.phase {
             Phase::Loading { .. } => Server::empty(ModelPhase::Loading, epoch),
@@ -224,7 +224,7 @@ fn names(segment: &Segment) -> Vec<String> {
 
 #[derive(Default)]
 struct Replay {
-    owners: BTreeMap<String, Owner>,
+    owners: BTreeMap<String, Owner<AdmitAll>>,
     granted_epoch: u64,
     slots: BTreeMap<Slot, Segment>,
     writes_in_flight: BTreeMap<Write, Segment>,
@@ -242,7 +242,7 @@ impl Driver for Replay {
             init => *self = Replay::default(),
             grant(server: String) => {
                 self.granted_epoch += 1;
-                self.owners.insert(server.clone(), Owner::new(Epoch(self.granted_epoch)));
+                self.owners.insert(server.clone(), Owner::new(Epoch(self.granted_epoch), AdmitAll));
                 self.passed_on.insert(server, Sequence(0));
             },
             crash(server: String) => {
@@ -335,6 +335,7 @@ impl Replay {
                     }
                     self.acknowledged.insert(name(&request_id));
                 }
+                Effect::Rejected { reason, .. } => match reason {},
                 Effect::Get { .. } | Effect::Stop => {}
                 Effect::Alarm(alarm) => bail!("the owner raised {alarm:?}"),
             }

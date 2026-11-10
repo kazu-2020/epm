@@ -58,7 +58,7 @@ fn main() -> std::io::Result<()> {
                 .expect("the coordinate fits");
             let ulid = measures[input].ulid();
             let started = Instant::now();
-            column_engine::edit(&mut measures, ulid, delta, &order, &dimensions)
+            column_engine::edit(&mut measures, [(ulid, delta)], &order, &dimensions)
                 .expect("the edit recalculates");
             times.push(started.elapsed());
             eprintln!("{name}\t{edit}\t{:.3}s", started.elapsed().as_secs_f64());

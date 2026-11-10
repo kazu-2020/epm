@@ -4,24 +4,24 @@ mod common;
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use change_log::{Commit, Epoch, Submission};
+use change_log::{Commit, Epoch, Request};
 use datagen::Workspace;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::{Dimension, MemberId};
 use formula::CheckedExpression;
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt, stream};
 use measure::{Measure, MeasureDefinition};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use oracle::Oracle;
-use server::{Edit, Engine, Exit, run};
-use tokio::sync::{mpsc, watch};
+use server::{Calculation, Edit, Engine, Exit, Owner, Settings};
 
 const DEFAULT_SEEDS: u64 = 2000;
+const CALCULATION: Duration = Duration::from_millis(250);
 
 const TINY: Size = Size {
     products: 2,
@@ -122,34 +122,37 @@ struct Owners {
 }
 
 impl common::Server for Owners {
-    fn start(
-        &self,
-        store: Arc<dyn ObjectStore>,
-        workspace: String,
-        epoch: u64,
-        requests: mpsc::Receiver<Submission>,
-    ) -> common::Started {
-        let (recalculated, receiver) = watch::channel(None);
-        let engine = self.engine.clone();
+    fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
+        let settings = Settings {
+            calculation: Calculation::Inline(CALCULATION),
+            ..Settings::default()
+        };
+        let (owner, handle) = Owner::new(self.engine.clone(), settings);
+        let recalculated = stream::unfold(handle.published(), |mut published| async move {
+            published.changed().await.ok()?;
+            let sequence = published.borrow_and_update().recalculated();
+            Some((sequence, published))
+        })
+        .filter_map(std::future::ready);
+        let submit: common::Submit = Arc::new(move |request: Request| {
+            let handle = handle.clone();
+            async move {
+                let edit = Edit::decode(request.payload).expect("the simulation sends edits");
+                handle.submit(request.request_id, &edit).await.ok()
+            }
+            .boxed()
+        });
         let exit = async move {
-            match run(
-                store,
-                &workspace,
-                Epoch(epoch),
-                engine,
-                requests,
-                recalculated,
-            )
-            .await
-            {
+            match owner.run(store, &workspace, Epoch(epoch)).await {
                 Exit::ChangeLog(exit) => Ok(exit),
                 Exit::Engine(alarm) => Err(format!("{alarm:?}")),
             }
         };
         common::Started {
             exit: exit.boxed(),
+            submit,
             passed_on: None,
-            recalculated: Some(receiver),
+            recalculated: Some(recalculated.boxed()),
         }
     }
 
@@ -197,18 +200,21 @@ fn cells(measure: &Measure) -> Vec<(Vec<u32>, String)> {
     exact(&measure.cells().collect::<Vec<_>>())
 }
 
-fn recalculated_log(model: &Model, log: &[Commit]) -> Result<Engine, String> {
+fn recalculated_log(model: &Model, log: &[Commit], batch: usize) -> Result<Engine, String> {
     let mut engine = model.engine.clone();
-    for commit in log {
-        engine.apply(commit).map_err(|alarm| format!("{alarm:?}"))?;
+    for commits in log.chunks(batch) {
+        engine = engine
+            .apply_batch(commits)
+            .map_err(|alarm| format!("{alarm:?}"))?;
     }
     Ok(engine)
 }
 
-fn final_values(model: &Model, outcome: &common::Outcome) -> common::Violations {
+fn final_values(model: &Model, seed: u64, outcome: &common::Outcome) -> common::Violations {
     let (_, log) = common::replay(&outcome.store);
     let expected = model.recalculate_all(model.fold(&log));
-    let difference = match recalculated_log(model, &log) {
+    let batch = 1 + (seed % 4) as usize;
+    let difference = match recalculated_log(model, &log, batch) {
         Err(alarm) => Some(alarm),
         Ok(engine) => engine
             .measures()
@@ -251,7 +257,7 @@ fn seeds_keep_the_invariants() {
                         .map(|&seed| {
                             let outcome = simulate(model, seed);
                             let mut violations = common::check(&outcome);
-                            violations.extend(final_values(model, &outcome));
+                            violations.extend(final_values(model, seed, &outcome));
                             let witnesses = common::witnesses(&outcome);
                             (seed, violations, witnesses, common::counts(&outcome))
                         })
@@ -293,6 +299,8 @@ fn seeds_keep_the_invariants() {
     );
     if seeds.len() >= 100 {
         let expected = [
+            "ackBeforeRecalculated",
+            "batchHeldTwoAckedCommits",
             "commitAfterHandover",
             "crashAfterApplyBeforeReply",
             "crashBeforeRecalculated",
@@ -331,7 +339,8 @@ fn final_values_agree_with_duckdb() {
         let references: Vec<&Measure> = inputs.iter().collect();
         let mut oracle =
             Oracle::new(&model.dimensions(), &references).expect("DuckDB loads the inputs");
-        let engine = recalculated_log(&model, &log).expect("the engine applies the log");
+        let engine =
+            recalculated_log(&model, &log, log.len().max(1)).expect("the engine applies the log");
         let (engine_inputs, results) = engine.measures().split_at(inputs.len());
         for (input, expected) in engine_inputs.iter().zip(&inputs) {
             assert_eq!(cells(input), cells(expected), "seed {seed}");

@@ -12,13 +12,15 @@ use object_store::path::Path;
 use object_store::{ObjectStore, PutMode};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::owner::{Alarm, Effect, Event, Owner, PutFailure, Request};
+use crate::owner::{Admit, Alarm, Effect, Event, Owner, PutFailure, Request};
 use crate::segment::{Commit, Epoch, RequestId, Segment, Sequence, Slot};
 
-pub struct Submission {
+pub struct Submission<R> {
     pub request: Request,
-    pub acknowledged: oneshot::Sender<Sequence>,
+    pub acknowledged: oneshot::Sender<Result<Sequence, R>>,
 }
+
+type Waiters<R> = BTreeMap<RequestId, Vec<oneshot::Sender<Result<Sequence, R>>>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exit {
@@ -27,20 +29,21 @@ pub enum Exit {
     Closed,
 }
 
-// shortcut: unbounded, so a slow engine never delays an ACK; bound it by the lag of the engine once the server measures it.
-pub async fn serve(
+// Not a bounded channel for commits: a full channel would delay ACKs, and the server rejects requests as Busy while its engine is far behind.
+pub async fn serve<A: Admit>(
     store: Arc<dyn ObjectStore>,
     workspace: &str,
     epoch: Epoch,
-    mut requests: mpsc::Receiver<Submission>,
+    admit: A,
+    mut requests: mpsc::Receiver<Submission<A::Rejection>>,
     committed: mpsc::UnboundedSender<Commit>,
 ) -> Exit {
     let log = Path::from(workspace).join("log");
-    let mut owner = Owner::new(epoch);
+    let mut owner = Owner::new(epoch, admit);
     let mut io: FuturesUnordered<BoxFuture<'static, Result<Event, Alarm>>> =
         FuturesUnordered::new();
     io.push(load(Arc::clone(&store), log.clone()).boxed());
-    let mut waiters: BTreeMap<RequestId, Vec<oneshot::Sender<Sequence>>> = BTreeMap::new();
+    let mut waiters = Waiters::new();
     loop {
         let event = tokio::select! {
             biased;
@@ -78,17 +81,34 @@ pub async fn serve(
                 Effect::Ack {
                     request_id,
                     sequence,
-                } => {
-                    for acknowledged in waiters.remove(&request_id).into_iter().flatten() {
-                        // Not an error: a client that stopped waiting resends, and the view answers it.
-                        let _ = acknowledged.send(sequence);
-                    }
+                } => acknowledge(&mut waiters, &request_id, sequence),
+                Effect::Rejected { request_id, reason } => {
+                    reject(&mut waiters, &request_id, reason);
                 }
                 Effect::Stop => return Exit::Stopped,
                 Effect::Alarm(alarm) => return Exit::Alarm(alarm),
             }
         }
     }
+}
+
+fn acknowledge<R>(waiters: &mut Waiters<R>, request_id: &RequestId, sequence: Sequence) {
+    for acknowledged in waiters.remove(request_id).into_iter().flatten() {
+        // Not an error: a client that stopped waiting resends, and the view answers it.
+        let _ = acknowledged.send(Ok(sequence));
+    }
+}
+
+fn reject<R>(waiters: &mut Waiters<R>, request_id: &RequestId, reason: R) {
+    let Some(waiting) = waiters.get_mut(request_id) else {
+        return;
+    };
+    let oldest = waiting.remove(0);
+    if waiting.is_empty() {
+        waiters.remove(request_id);
+    }
+    // Not an error: a client that stopped waiting resends, and the owner checks it again.
+    let _ = oldest.send(Err(reason));
 }
 
 fn key(log: &Path, slot: Slot) -> Path {

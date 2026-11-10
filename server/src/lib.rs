@@ -1,18 +1,21 @@
+mod apply;
 mod edit;
+mod owner;
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use change_log::{Commit, Epoch, Sequence, Submission};
+use bytes::Bytes;
+use change_log::{Commit, Sequence};
 use datagen::Workspace;
 use dimension::Dimension;
 use evaluator::EvaluateError;
 use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
 use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureUlid};
-use object_store::ObjectStore;
-use tokio::sync::{mpsc, watch};
 
 pub use crate::edit::{DecodeError, Edit};
+pub use crate::owner::{Calculation, Handle, Lag, Owner, ReadError, Settings, SubmitError};
 
 #[derive(Debug, PartialEq)]
 pub enum Exit {
@@ -20,95 +23,18 @@ pub enum Exit {
     Engine(EngineAlarm),
 }
 
-// shortcut: every new owner rebuilds the engine from the start of the log; add snapshots when start-up time matters.
-pub async fn run(
-    store: Arc<dyn ObjectStore>,
-    workspace: &str,
-    epoch: Epoch,
-    engine: Engine,
-    requests: mpsc::Receiver<Submission>,
-    recalculated: watch::Sender<Option<Sequence>>,
-) -> Exit {
-    let (accepted, accepted_requests) = mpsc::channel(1);
-    let (committed, commits) = mpsc::unbounded_channel();
-    // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
-    tokio::select! {
-        biased;
-        exit = change_log::serve(store, workspace, epoch, accepted_requests, committed) => {
-            Exit::ChangeLog(exit)
-        }
-        alarm = recalculate(engine, requests, accepted, commits, recalculated) => {
-            Exit::Engine(alarm)
-        }
-    }
-}
-
-async fn recalculate(
-    mut engine: Engine,
-    mut requests: mpsc::Receiver<Submission>,
-    accepted: mpsc::Sender<Submission>,
-    mut commits: mpsc::UnboundedReceiver<Commit>,
-    recalculated: watch::Sender<Option<Sequence>>,
-) -> EngineAlarm {
-    let mut accepted = Some(accepted);
-    loop {
-        tokio::select! {
-            biased;
-            Some(commit) = commits.recv() => {
-                // Not after the edit: yielding first lets the tasks that wait for this commit's ACK run before the engine works on it.
-                tokio::task::yield_now().await;
-                if cfg!(feature = "skip_commit") && commit.sequence == Sequence(1) {
-                    continue;
-                }
-                if cfg!(feature = "swap_commits")
-                    && let Ok(later) = commits.try_recv()
-                    && let Err(alarm) = engine.apply(&later)
-                {
-                    return alarm;
-                }
-                if let Err(alarm) = engine.apply(&commit) {
-                    return alarm;
-                }
-                if cfg!(feature = "apply_twice") && let Err(alarm) = engine.apply(&commit) {
-                    return alarm;
-                }
-                recalculated.send_replace(Some(commit.sequence));
-            }
-            submission = requests.recv(), if accepted.is_some() => match submission {
-                Some(submission) => {
-                    let checked = Edit::decode(submission.request.payload.clone())
-                        .is_ok_and(|edit| engine.check(&edit).is_ok());
-                    if cfg!(feature = "apply_before_commit") && checked {
-                        let early = Commit {
-                            request_id: submission.request.request_id.clone(),
-                            sequence: engine.next,
-                            payload: submission.request.payload.clone(),
-                        };
-                        if let Err(alarm) = engine.apply(&early) {
-                            return alarm;
-                        }
-                        recalculated.send_replace(Some(early.sequence));
-                    }
-                    // shortcut: a rejected edit only drops its sender, so the client gets no reason until PR 3 adds HTTP.
-                    if checked && let Some(accepted) = &accepted {
-                        // Not an error: the owner stopped, and run returns its exit.
-                        let _ = accepted.send(submission).await;
-                    }
-                }
-                None => accepted = None,
-            },
-            else => std::future::pending::<()>().await,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Engine {
     dimensions: Arc<[Dimension]>,
     measures: Vec<Measure>,
-    formulas: Vec<(MeasureUlid, CheckedExpression)>,
-    inputs: BTreeSet<MeasureUlid>,
+    formulas: Arc<[(MeasureUlid, CheckedExpression)]>,
+    definitions: Definitions,
     next: Sequence,
+}
+
+#[derive(Clone, Debug)]
+pub struct Definitions {
+    inputs: BTreeMap<MeasureUlid, Delta>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -131,10 +57,17 @@ pub enum FormulaError {
     },
 }
 
-#[derive(Debug, PartialEq)]
-pub enum Rejection {
+#[derive(Clone, Debug, PartialEq)]
+pub enum Invalid {
+    Undecodable(DecodeError),
     NotAnInput(MeasureUlid),
     Coordinate(MeasureError),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Rejection {
+    Invalid(Invalid),
+    Busy { behind: u64 },
 }
 
 #[derive(Debug, PartialEq)]
@@ -143,16 +76,15 @@ pub enum EngineAlarm {
         expected: Sequence,
         found: Sequence,
     },
-    Undecodable {
+    Invalid {
         sequence: Sequence,
-        error: DecodeError,
+        invalid: Invalid,
     },
-    Rejected {
-        sequence: Sequence,
-        rejection: Rejection,
+    Panicked {
+        sequences: RangeInclusive<Sequence>,
     },
     Failed {
-        sequence: Sequence,
+        sequences: RangeInclusive<Sequence>,
         error: EvaluateError,
     },
 }
@@ -170,7 +102,12 @@ impl Engine {
             .map(|input| input.definition().clone())
             .chain(formulas.iter().map(|formula| formula.result.clone()))
             .collect();
-        let input_ulids = inputs.iter().map(Measure::ulid).collect();
+        let input_definitions = Definitions {
+            inputs: inputs
+                .iter()
+                .map(|input| (input.ulid(), input.delta()))
+                .collect(),
+        };
         let mut measures = inputs;
         let mut checked = Vec::with_capacity(formulas.len());
         for formula in &formulas {
@@ -200,69 +137,86 @@ impl Engine {
         Ok(Engine {
             dimensions: dimensions.into(),
             measures,
-            formulas: checked,
-            inputs: input_ulids,
+            formulas: checked.into(),
+            definitions: input_definitions,
             next: Sequence::default(),
         })
     }
 
-    pub fn check(&self, edit: &Edit) -> Result<(), Rejection> {
-        self.delta(edit).map(drop)
+    pub fn definitions(&self) -> &Definitions {
+        &self.definitions
     }
 
-    pub fn apply(&mut self, commit: &Commit) -> Result<(), EngineAlarm> {
-        let sequence = commit.sequence;
-        if sequence != self.next {
-            return Err(EngineAlarm::OutOfOrder {
-                expected: self.next,
-                found: sequence,
-            });
+    pub fn apply_batch(&self, commits: &[Commit]) -> Result<Engine, EngineAlarm> {
+        let (Some(first), Some(last)) = (commits.first(), commits.last()) else {
+            return Ok(self.clone());
+        };
+        let mut next = self.next;
+        let mut deltas = BTreeMap::new();
+        for commit in commits {
+            let sequence = commit.sequence;
+            if sequence != next {
+                return Err(EngineAlarm::OutOfOrder {
+                    expected: next,
+                    found: sequence,
+                });
+            }
+            self.definitions
+                .add(&commit.payload, &mut deltas)
+                .map_err(|invalid| EngineAlarm::Invalid { sequence, invalid })?;
+            next = sequence.next();
         }
-        let edit = Edit::decode(commit.payload.clone())
-            .map_err(|error| EngineAlarm::Undecodable { sequence, error })?;
-        let delta = self
-            .delta(&edit)
-            .map_err(|rejection| EngineAlarm::Rejected {
-                sequence,
-                rejection,
-            })?;
         let dimensions: Vec<&Dimension> = self.dimensions.iter().collect();
         let formulas: Vec<(MeasureUlid, &CheckedExpression)> = self
             .formulas
             .iter()
             .map(|(result, expression)| (*result, expression))
             .collect();
-        column_engine::edit(
-            &mut self.measures,
-            edit.measure,
-            delta,
-            &formulas,
-            &dimensions,
-        )
-        .map_err(|error| EngineAlarm::Failed { sequence, error })?;
-        self.next = sequence.next();
-        Ok(())
+        let mut measures = self.measures.clone();
+        column_engine::edit(&mut measures, deltas, &formulas, &dimensions).map_err(|error| {
+            EngineAlarm::Failed {
+                sequences: first.sequence..=last.sequence,
+                error,
+            }
+        })?;
+        Ok(Engine {
+            dimensions: Arc::clone(&self.dimensions),
+            measures,
+            formulas: Arc::clone(&self.formulas),
+            definitions: self.definitions.clone(),
+            next,
+        })
     }
 
     pub fn measures(&self) -> &[Measure] {
         &self.measures
     }
 
-    fn delta(&self, edit: &Edit) -> Result<Delta, Rejection> {
-        if !self.inputs.contains(&edit.measure) {
-            return Err(Rejection::NotAnInput(edit.measure));
-        }
-        let mut delta = self
-            .measures
-            .iter()
-            .find(|measure| measure.ulid() == edit.measure)
-            .expect("the engine holds every input measure")
-            .delta();
+    pub fn recalculated(&self) -> Option<Sequence> {
+        self.next.0.checked_sub(1).map(Sequence)
+    }
+}
+
+impl Definitions {
+    pub fn check(&self, payload: &Bytes) -> Result<(), Invalid> {
+        self.add(payload, &mut BTreeMap::new())
+    }
+
+    fn add(
+        &self,
+        payload: &Bytes,
+        deltas: &mut BTreeMap<MeasureUlid, Delta>,
+    ) -> Result<(), Invalid> {
+        let edit = Edit::decode(payload.clone()).map_err(Invalid::Undecodable)?;
+        let empty = self
+            .inputs
+            .get(&edit.measure)
+            .ok_or(Invalid::NotAnInput(edit.measure))?;
+        let delta = deltas.entry(edit.measure).or_insert_with(|| empty.clone());
         match edit.value {
             Some(value) => delta.set(&edit.coordinate, value),
             None => delta.delete(&edit.coordinate),
         }
-        .map_err(Rejection::Coordinate)?;
-        Ok(delta)
+        .map_err(Invalid::Coordinate)
     }
 }
