@@ -2,6 +2,7 @@ mod apply;
 mod edit;
 mod owner;
 
+pub mod http;
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
