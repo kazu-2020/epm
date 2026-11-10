@@ -172,13 +172,11 @@ impl Engine {
             .iter()
             .map(|(result, expression)| (*result, expression))
             .collect();
-        let mut measures = self.measures.clone();
-        column_engine::edit(&mut measures, deltas, &formulas, &dimensions).map_err(|error| {
-            EngineAlarm::Failed {
+        let measures = column_engine::edit(&self.measures, deltas, &formulas, &dimensions)
+            .map_err(|error| EngineAlarm::Failed {
                 sequences: first.sequence..=last.sequence,
                 error,
-            }
-        })?;
+            })?;
         Ok(Engine {
             dimensions: Arc::clone(&self.dimensions),
             measures,
