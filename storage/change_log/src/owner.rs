@@ -542,7 +542,7 @@ mod tests {
         }
     }
 
-    fn put<R>(effects: &[super::Effect<R>]) -> (Slot, Segment, u32) {
+    fn put<R: std::fmt::Debug>(effects: &[super::Effect<R>]) -> (Slot, Segment, u32) {
         let puts: Vec<_> = effects
             .iter()
             .filter_map(|effect| match effect {
@@ -558,7 +558,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(puts.len(), 1, "one put");
+        assert_eq!(puts.len(), 1, "one put in {effects:?}");
         puts.into_iter().next().expect("one put")
     }
 
@@ -613,7 +613,11 @@ mod tests {
         }
     }
 
-    fn ready_owner<A: Admit>(store: &mut Store, epoch: u64, admit: A) -> Owner<A> {
+    fn ready_owner<A: Admit<Rejection: std::fmt::Debug>>(
+        store: &mut Store,
+        epoch: u64,
+        admit: A,
+    ) -> Owner<A> {
         let mut owner = Owner::new(Epoch(epoch), admit);
         let (slot, fence, _) = put(&owner.step_and_flush(store.loaded()));
         assert!(fence.commits.is_empty());
