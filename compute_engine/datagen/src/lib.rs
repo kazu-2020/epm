@@ -16,6 +16,7 @@ use rand::seq::SliceRandom;
 use rand::{RngExt, SeedableRng};
 use rand_distr::Zipf;
 use ulid::Ulid;
+use workspace::Workspace;
 
 const LARGEST_MAGNITUDE_IN_CENTS: u32 = 1_000_000;
 
@@ -29,18 +30,6 @@ pub struct Configuration {
     pub zipf_exponent: f64,
     pub chain_length: usize,
     pub maximum_depth: usize,
-}
-
-pub struct Workspace {
-    pub dimensions: Vec<Dimension>,
-    pub inputs: Vec<Measure>,
-    pub formulas: Vec<Formula>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Formula {
-    pub result: MeasureDefinition,
-    pub text: String,
 }
 
 pub fn generate(configuration: &Configuration) -> Workspace {

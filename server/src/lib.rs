@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use change_log::{Commit, Sequence};
-use datagen::Workspace;
 use dimension::Dimension;
 use evaluator::EvaluateError;
 use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
 use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureUlid};
+use workspace::Workspace;
 
 pub use crate::edit::{DecodeError, Edit};
 pub use crate::owner::{Calculation, Handle, Lag, ReadError, Settings, SubmitError, start};

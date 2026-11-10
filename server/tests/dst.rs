@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use change_log::{Commit, Epoch, Request, Sequence};
 use common::Record;
-use datagen::Workspace;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::{Dimension, MemberId};
@@ -20,6 +19,7 @@ use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use oracle::Oracle;
 use server::{Calculation, Edit, Engine, Exit, Rejection, Settings, SubmitError};
+use workspace::Workspace;
 
 const DEFAULT_SEEDS: u64 = 2000;
 const CALCULATION: Duration = Duration::from_millis(250);

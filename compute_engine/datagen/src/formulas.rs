@@ -3,8 +3,9 @@ use formula::BinaryOperator;
 use measure::{Measure, MeasureDefinition, MeasureUlid};
 use rand::RngExt;
 use rand::seq::{IndexedRandom, index};
+use workspace::Formula;
 
-use crate::{Formula, Generator, dimension};
+use crate::{Generator, dimension};
 
 const NUMBERS: [&str; 7] = ["0", "1", "2", "3", "10", "0.5", "1.5"];
 

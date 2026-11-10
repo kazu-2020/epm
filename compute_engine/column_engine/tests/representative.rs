@@ -1,9 +1,9 @@
-use datagen::Formula;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::Dimension;
 use measure::{Measure, MeasureDefinition, MeasureUlid};
 use ulid::Ulid;
+use workspace::Formula;
 
 #[test]
 fn small_model_matches_the_evaluator_on_dense_paths() {

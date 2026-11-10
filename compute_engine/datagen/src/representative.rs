@@ -14,8 +14,7 @@ use rand::{RngExt, SeedableRng};
 use rand_distr::Zipf;
 use rayon::prelude::*;
 use ulid::Ulid;
-
-use crate::{Formula, Workspace};
+use workspace::{Formula, Workspace};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Size {

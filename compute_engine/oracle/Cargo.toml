@@ -14,3 +14,4 @@ column_engine = { path = "../column_engine" }
 datagen = { path = "../datagen" }
 evaluator = { path = "../evaluator" }
 proptest = "1.12.0"
+workspace = { path = "../workspace" }

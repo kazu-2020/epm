@@ -1,9 +1,10 @@
+use datagen::Configuration;
 use datagen::cases::exact;
-use datagen::{Configuration, Formula};
 use dimension::Dimension;
 use measure::{Measure, MeasureDefinition};
 use oracle::Oracle;
 use proptest::prelude::*;
+use workspace::Formula;
 
 fn configurations() -> impl Strategy<Value = Configuration> {
     (

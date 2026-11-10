@@ -1,12 +1,12 @@
 use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence};
-use datagen::Workspace;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
 use server::{DecodeError, Edit, Engine, EngineAlarm, FormulaError, Invalid};
 use ulid::Ulid;
+use workspace::Workspace;
 
 const QUANTITY: MeasureUlid = MeasureUlid(Ulid(100));
 const PRICE: MeasureUlid = MeasureUlid(Ulid(101));
