@@ -8,6 +8,7 @@ use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
+use object_store::throttle::{ThrottleConfig, ThrottledStore};
 use server::{
     Calculation, DecodeError, Edit, Engine, EngineAlarm, Exit, Handle, Invalid, Lag, ReadError,
     Rejection, Settings, SubmitError,
@@ -235,6 +236,41 @@ async fn a_new_owner_counts_the_commits_of_an_older_owner_that_it_did_not_recalc
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_new_owner_waits_for_the_log_before_it_answers_a_read_of_a_committed_sequence() {
+    let store = store();
+    let a = start(&store, 1, Settings::default());
+    for (sequence, name) in (0..).zip(["r1", "r2"]) {
+        assert_eq!(
+            a.handle.submit(id(name), &quantity(Some(1.0))).await,
+            Ok(Sequence(sequence))
+        );
+    }
+    let b = start(&store, 2, Settings::default());
+    let read = b.handle.read(Some(Sequence(1)), &cells()).await;
+    assert!(matches!(read, Ok((Some(Sequence(1)), _))), "{read:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_owner_recalculates_the_whole_log_in_one_batch() {
+    let store = store();
+    let a = start(&store, 1, Settings::default());
+    for (sequence, name) in (0..).zip(["r1", "r2", "r3"]) {
+        assert_eq!(
+            a.handle.submit(id(name), &quantity(Some(1.0))).await,
+            Ok(Sequence(sequence))
+        );
+    }
+    let started = Instant::now();
+    let b = start(&store, 2, slow(1000));
+    b.handle
+        .published()
+        .wait_for(|engine| engine.recalculated() == Some(Sequence(2)))
+        .await
+        .expect("B recalculates the log");
+    assert_eq!(started.elapsed(), CALCULATION);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_read_without_a_sequence_returns_the_published_values_and_does_not_wait() {
     let owner = start(&store(), 1, slow(1000));
     let seeded = owner.handle.read(None, &cells()).await;
@@ -255,6 +291,29 @@ async fn a_read_without_a_sequence_returns_the_published_values_and_does_not_wai
         Ok((Some(Sequence(0)), vec![None, None]))
     );
     assert_eq!(started.elapsed(), CALCULATION);
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_a_read_of_a_sequence_waits_for_the_log() {
+    let listing = Duration::from_secs(3);
+    let config = ThrottleConfig {
+        wait_list_per_call: listing,
+        ..ThrottleConfig::default()
+    };
+    let store: Arc<dyn ObjectStore> = Arc::new(ThrottledStore::new(InMemory::new(), config));
+    let owner = start(&store, 1, Settings::default());
+    let started = Instant::now();
+    let seeded = owner.handle.read(None, &cells()).await;
+    assert!(matches!(seeded, Ok((None, _))), "{seeded:?}");
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(
+        owner.handle.read(Some(Sequence(0)), &[]).await,
+        Err(ReadError::NotCommitted(Lag {
+            committed: None,
+            recalculated: None
+        }))
+    );
+    assert_eq!(started.elapsed(), listing);
 }
 
 #[tokio::test(start_paused = true)]

@@ -5,7 +5,7 @@ use change_log::Commit;
 use crate::{Engine, EngineAlarm};
 
 pub(crate) enum Event {
-    Committed(Commit),
+    Committed(Vec<Commit>),
     Finished(Result<Engine, EngineAlarm>),
 }
 
@@ -47,9 +47,11 @@ impl Applier {
 
 fn transition(state: State, event: Event, effects: &mut Vec<Effect>) -> State {
     match (state, event) {
-        (State::Idle(engine), Event::Committed(commit)) => calculate(engine, vec![commit], effects),
-        (State::Calculating { mut pending }, Event::Committed(commit)) => {
-            pending.push(commit);
+        (State::Idle(engine), Event::Committed(commits)) if !commits.is_empty() => {
+            calculate(engine, commits, effects)
+        }
+        (State::Calculating { mut pending }, Event::Committed(commits)) => {
+            pending.extend(commits);
             State::Calculating { pending }
         }
         (State::Calculating { pending }, Event::Finished(Ok(engine))) => {
@@ -88,12 +90,16 @@ mod tests {
         Arc::new(Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas"))
     }
 
-    fn committed(sequence: u64) -> Event {
-        Event::Committed(Commit {
+    fn commit(sequence: u64) -> Commit {
+        Commit {
             request_id: RequestId(Bytes::from(format!("r{sequence}"))),
             sequence: Sequence(sequence),
             payload: Bytes::new(),
-        })
+        }
+    }
+
+    fn committed(sequence: u64) -> Event {
+        Event::Committed(vec![commit(sequence)])
     }
 
     fn sequences(commits: &[Commit]) -> Vec<u64> {
@@ -140,6 +146,27 @@ mod tests {
             "an idle applier starts at once"
         );
         assert_eq!(sequences(commits), [3]);
+    }
+
+    #[test]
+    fn an_idle_applier_calculates_the_commits_that_arrived_together_in_one_batch() {
+        let mut applier = Applier::new(engine());
+        let effects = applier.step(Event::Committed((0..3).map(commit).collect()));
+        let [Effect::Calculate { commits, .. }] = &effects[..] else {
+            panic!("{effects:?}")
+        };
+        assert_eq!(sequences(commits), [0, 1, 2]);
+    }
+
+    #[test]
+    fn an_empty_batch_starts_no_calculation() {
+        let mut applier = Applier::new(engine());
+        assert!(applier.step(Event::Committed(Vec::new())).is_empty());
+        assert_eq!(
+            applier.step(committed(0)).len(),
+            1,
+            "the applier is still idle"
+        );
     }
 
     #[test]

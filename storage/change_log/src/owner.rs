@@ -72,6 +72,8 @@ pub trait Admit {
     fn admit(&mut self, payload: &Bytes) -> Result<(), Self::Rejection>;
 
     fn replay(&mut self, payload: &Bytes);
+
+    fn ready(&mut self, _next: Sequence) {}
 }
 
 #[derive(Debug)]
@@ -320,6 +322,7 @@ fn ready<A: Admit>(
         batch: Vec::new(),
         in_flight: [const { None }; MAX_IN_FLIGHT],
     };
+    admit.ready(ready.view.next_sequence);
     for request in waiting {
         ready.receive(request, admit, effects);
     }
