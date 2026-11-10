@@ -1,0 +1,93 @@
+{
+  "realm": "customer",
+  "enabled": true,
+  "components": {
+    "org.keycloak.keys.KeyProvider": [
+      {
+        "name": "fixed-rsa",
+        "providerId": "rsa",
+        "config": {
+          "priority": [
+            "1000"
+          ],
+          "privateKey": [
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCmgcwdkO+friOYEbj/QPhFncKBl7HJoK4ll57Gr3qTpkyj6VWrz+kG6yRN4y5+kZ1x4HLMmEKbSwuWGZ9BB6DupRr4gtUlqdRbJF6CkLLS5yyrenzNsT8ACfBNhz07Mn1wTScNW4lhRHTHfaqLgSjpvIziWWSguqqMoXWybI5DFP+X7BlNlxfqEOKID53I++kOWMnzUICp+ZcQI3JQk70zbQaNurfQTpe11AUARRsMy4g44PZ2p+Gy+RIIuBl7xc0SbAVK+eKDuawJaYWM9CBiZLG7kI66HQm9fOYwgciqSdUv/t3oJzjwEJZJNWBFBroVZ0guuIEB23vm7NOjAdOJAgMBAAECggEAFG9QWM4TfIhLhcOiDdCgT7Hsf8lZWFacHNC6e6WoYGPL2t99hEouTgswf88agw3VsfbC/A1ROlwX0k53cyyPoY45jMeIx3gr79obL8C4s6XLv4lXNQrUYam2mFs5RnE8QBq16N+jsQBs6RlJA5lAx0vcygBA13GFUiBUMKc+P+jqc/cPVEfdxImZSUJIdHiCRr9YncC+lNQ8q9XIeOXkj5iuiIMwB5cpqePbXNp00mGvVn0ciJS9TrG9myonQXFq+Gl6MOjuhFpE1aH4TphhqfvB8R6BLiRttA8zpr7KEhgDls2OmjdoS8FDgQ866wUkuK6yPxg/7UXxoUWqU19K0QKBgQDZ1PTBKyEMe0gWCC+/SiZ8gVTUgesKdIsPCcIgbk45LdyVYRvPKi79SSYfIpNQFReo3VO4w+5Jvx6EgF0nesIX1tcVZkM73R1a2aK3+DzJE0V84bHon8cHdtkvmD99xUQeg+/3ySCg6tpkvYxQwic8N0uxuktVNu+I5uYEClDFmQKBgQDDrp6U0xY0KQhbm85C3cNbhb4kupgeNGtF3P8nurSExiZ6JtU29jzII/FWmXzrlb8XzcUHDvugDAqzIAFmChR/B8ZU3mM9LJ+AgbaQhBmHCDoBHzGYm192fmv9q1iQ/hOYzIrbk8i3CjoMaEuoJPklSWReoWJcU4iMU6BiSdpTcQKBgHucsz+i/+AbXW7TOnUs2OYyZjcpen22YOspuHW64rzj35cNQkCvSXcGOZHVhw8cyQ5UepwQ43oJ8IF0bmhm6xmoGunT3DduZKgXdJU9UxEv1HDnipPdh44ezWSK2wy+EsfWSyirg86NN12Pir6RTr6HCndSpkk3IXrovIJycB+RAoGAB9sPxLvArXFkQ4E6w5ZxjFAPNRxElRnXoKNhnu+w5Y+q5cZ/UsiJ4iMHQknBKRgG5ua83S6tzVwOZeiIBderwPnH7YpMA52x/Y+3i4+yEqiy426kKBM8vt4Oac2iLZf1o3G6tVv2d9qyP+ND/kkVs3iBzga+kyRLXA7TZn6+hBECgYEAjH9LE51eB3D4Wg+1Xr2iFEKGDg7lm3QOvrRdT5AMjSh7yYzLLlt5OHhB3/wErlvKpuw5RObPPtu5XQZ8N0auArzsfOi7TEIg1jHpCD7FQopok/65OP1kSNm0aQNX4rZqGb0CAMuzF+MLARtTmQcIArH0i+IoVC/qvLLizmZgPUI="
+          ],
+          "certificate": [
+            "MIIDCTCCAfGgAwIBAgIUFpuZvWVRgvcSE6d0ohWf9IycSMYwDQYJKoZIhvcNAQELBQAwEzERMA8GA1UEAwwIY3VzdG9tZXIwIBcNMjYxMTEwMTYzOTUwWhgPMjEyNjEwMTcxNjM5NTBaMBMxETAPBgNVBAMMCGN1c3RvbWVyMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApoHMHZDvn64jmBG4/0D4RZ3CgZexyaCuJZeexq96k6ZMo+lVq8/pBuskTeMufpGdceByzJhCm0sLlhmfQQeg7qUa+ILVJanUWyRegpCy0ucsq3p8zbE/AAnwTYc9OzJ9cE0nDVuJYUR0x32qi4Eo6byM4llkoLqqjKF1smyOQxT/l+wZTZcX6hDiiA+dyPvpDljJ81CAqfmXECNyUJO9M20Gjbq30E6XtdQFAEUbDMuIOOD2dqfhsvkSCLgZe8XNEmwFSvnig7msCWmFjPQgYmSxu5COuh0JvXzmMIHIqknVL/7d6Cc48BCWSTVgRQa6FWdILriBAdt75uzTowHTiQIDAQABo1MwUTAdBgNVHQ4EFgQUu6hM8o/YkOFCZnzxYbv+1xwVGt4wHwYDVR0jBBgwFoAUu6hM8o/YkOFCZnzxYbv+1xwVGt4wDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAaLd4GzzDCeNBsBpCbgcAqMn/X68jxdzYJ9NGUzDqXRlcpFpviNHDm9OyhLT4XOvvECFqN6XK9I29a5DMRpBFjiHZ5oWOz/8meJqVxFGWiHlwdBoH6N3ki7zOeD8IF5l4oi4dGD1Xon/UG4NQZ4sz8so3wbFsBwgDuGCDpBXU6mIqnCbbhcsiSpR2b/SqhQxPssGjQ1X92mYuHlSb/WXSTZh/aoBDn0PgT8V0yE0qnP/SsZBfXLC92oRAFG9AFCM/bxSt6jrmfnYatMr3ZP3/x5G61GiiSCqEpoQbm4zRT3xcyP03fQBPmCq1LDgpJaorJTK7ObuOUn41HZ30anp9sw=="
+          ],
+          "algorithm": [
+            "RS256"
+          ]
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "http://localhost:8080/realms/epm",
+      "protocol": "saml",
+      "enabled": true,
+      "redirectUris": [
+        "http://localhost:8080/realms/epm/broker/acme/endpoint"
+      ],
+      "attributes": {
+        "saml_name_id_format": "email",
+        "saml.server.signature": "true",
+        "saml.assertion.signature": "true",
+        "saml.client.signature": "false",
+        "saml_force_name_id_format": "true",
+        "saml_assertion_consumer_url_post": "http://localhost:8080/realms/epm/broker/acme/endpoint"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "config": {
+            "user.attribute": "email",
+            "attribute.name": "email",
+            "attribute.nameformat": "Basic"
+          }
+        },
+        {
+          "name": "firstName",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "config": {
+            "user.attribute": "firstName",
+            "attribute.name": "firstName",
+            "attribute.nameformat": "Basic"
+          }
+        },
+        {
+          "name": "lastName",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "config": {
+            "user.attribute": "lastName",
+            "attribute.name": "lastName",
+            "attribute.nameformat": "Basic"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@acme.test",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Acme",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}
