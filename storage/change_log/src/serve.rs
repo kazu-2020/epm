@@ -16,8 +16,8 @@ use crate::owner::{Admit, Alarm, Effect, Event, Owner, PutFailure, Request, Star
 use crate::segment::{Commit, Epoch, RequestId, Segment, Sequence, Slot};
 
 pub struct Submission<R> {
-    pub request: Request,
-    pub acknowledged: oneshot::Sender<Result<Sequence, R>>,
+    request: Request,
+    acknowledged: oneshot::Sender<Result<Sequence, R>>,
 }
 
 impl<R> Submission<R> {
