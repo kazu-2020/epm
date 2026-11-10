@@ -716,3 +716,12 @@ fn a_delta_from_sorted_keys_takes_only_sorted_keys_that_fit_the_measure() {
         }
     );
 }
+
+#[test]
+fn a_measure_gives_the_lengths_of_its_axes_in_order() {
+    let measure = sales();
+    assert_eq!(
+        measure.axis_lengths().collect::<Vec<_>>(),
+        [(PERIOD, 3), (DEPARTMENT, 2)]
+    );
+}

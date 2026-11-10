@@ -384,6 +384,10 @@ impl Measure {
         &self.layout
     }
 
+    pub fn axis_lengths(&self) -> impl ExactSizeIterator<Item = (DimensionUlid, u32)> + '_ {
+        self.axes.iter().map(|axis| (axis.dimension, axis.len))
+    }
+
     pub fn keys(&self) -> &ScalarBuffer<u64> {
         &self.keys
     }
