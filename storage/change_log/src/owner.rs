@@ -34,6 +34,12 @@ pub enum Event {
     ReadBack { slot: Slot, found: Option<Segment> },
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Start {
+    pub slot: Slot,
+    pub request_ids: Vec<RequestId>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect<R> {
     Put {
@@ -64,6 +70,7 @@ pub enum Alarm {
     UnreadableSegment { slot: Slot, error: DecodeError },
     UnexpectedKey { key: String },
     PermanentStoreError { key: String, status: u16 },
+    StartNotInLog { slot: Slot, sequence: Sequence },
 }
 
 pub trait Admit {
@@ -99,6 +106,7 @@ pub struct Owner<A> {
 #[derive(Debug)]
 enum Phase {
     Loading {
+        start: Start,
         waiting: Vec<Request>,
     },
     Fencing {
@@ -149,10 +157,15 @@ enum Outcome {
 
 impl<A: Admit> Owner<A> {
     pub fn new(epoch: Epoch, admit: A) -> Owner<A> {
+        Owner::resume(epoch, admit, Start::default())
+    }
+
+    pub fn resume(epoch: Epoch, admit: A, start: Start) -> Owner<A> {
         Owner {
             epoch,
             admit,
             phase: Phase::Loading {
+                start,
                 waiting: Vec::new(),
             },
         }
@@ -175,12 +188,12 @@ fn transition<A: Admit>(
     effects: &mut Vec<Effect<A::Rejection>>,
 ) -> Phase {
     match (phase, event) {
-        (Phase::Loading { waiting }, Event::Loaded { slots }) => {
-            load(epoch, admit, &slots, waiting, effects)
+        (Phase::Loading { start, waiting }, Event::Loaded { slots }) => {
+            load(epoch, admit, start, &slots, waiting, effects)
         }
-        (Phase::Loading { mut waiting }, Event::Request(request)) => {
+        (Phase::Loading { start, mut waiting }, Event::Request(request)) => {
             waiting.push(request);
-            Phase::Loading { waiting }
+            Phase::Loading { start, waiting }
         }
         (
             Phase::Fencing {
@@ -271,6 +284,7 @@ fn transition<A: Admit>(
 fn load<A: Admit>(
     epoch: Epoch,
     admit: &mut A,
+    start: Start,
     slots: &BTreeMap<Slot, Segment>,
     waiting: Vec<Request>,
     effects: &mut Vec<Effect<A::Rejection>>,
@@ -280,8 +294,24 @@ fn load<A: Admit>(
     {
         return stop(effects);
     }
-    let free = last.map_or(Slot(0), |(slot, _)| next(*slot));
-    let view = replay(slots, admit, effects);
+    let free = last.map_or(start.slot, |(slot, _)| next(*slot));
+    if let Some((sequence, request_id)) = start.last() {
+        let found = slots.get(&start.slot).is_some_and(|segment| {
+            segment
+                .commits
+                .iter()
+                .any(|commit| commit.sequence == sequence && commit.request_id == *request_id)
+        });
+        if !found {
+            effects.push(Effect::Alarm(Alarm::StartNotInLog {
+                slot: start.slot,
+                sequence,
+            }));
+            return Phase::Stopped;
+        }
+    }
+    let first = start.slot;
+    let view = replay(View::from(start), first, slots, admit, effects);
     if cfg!(feature = "no_fence") {
         return ready(view, free, waiting, admit, effects);
     }
@@ -295,16 +325,27 @@ fn load<A: Admit>(
 }
 
 fn replay<A: Admit>(
+    mut view: View,
+    first: Slot,
     slots: &BTreeMap<Slot, Segment>,
     admit: &mut A,
     effects: &mut Vec<Effect<A::Rejection>>,
 ) -> View {
-    let mut view = View::default();
-    for (expected, (slot, segment)) in (0..).zip(slots) {
-        if slot.0 != expected {
+    let mut expected = first;
+    for (slot, segment) in slots.range(first..) {
+        if *slot != expected {
             break;
         }
-        view.add_older(&segment.commits, admit, effects);
+        expected = next(*slot);
+        // Not every commit of the first slot: the start already counts the commits before its next sequence, and that slot can hold some of them.
+        let skipped = if *slot == first {
+            segment
+                .commits
+                .partition_point(|commit| commit.sequence < view.next_sequence)
+        } else {
+            0
+        };
+        view.add_older(&segment.commits[skipped..], admit, effects);
     }
     view
 }
@@ -445,6 +486,30 @@ impl Ready {
         effects.push(write.put());
         *cell = Some(write);
         self.next = next(self.next);
+    }
+}
+
+impl Start {
+    fn last(&self) -> Option<(Sequence, &RequestId)> {
+        let count = u64::try_from(self.request_ids.len()).expect("a count fits in u64");
+        Some((Sequence(count.checked_sub(1)?), self.request_ids.last()?))
+    }
+}
+
+impl From<Start> for View {
+    fn from(start: Start) -> View {
+        let next_sequence = start
+            .last()
+            .map_or(Sequence(0), |(sequence, _)| sequence.next());
+        let sequences = (0..)
+            .map(Sequence)
+            .zip(start.request_ids)
+            .map(|(sequence, request_id)| (request_id, sequence))
+            .collect();
+        View {
+            sequences,
+            next_sequence,
+        }
     }
 }
 

@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use change_log::{AdmitAll, Commit, Epoch, Exit, Request, RequestId, Sequence, Submission, serve};
+use change_log::{
+    AdmitAll, Commit, Epoch, Exit, Request, RequestId, Sequence, Start, Submission, serve,
+};
 use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
@@ -53,6 +55,7 @@ pub trait Server: Send + Sync {
                 store,
                 &workspace,
                 Epoch(epoch),
+                Start::default(),
                 AdmitAll,
                 receiver,
                 committed,

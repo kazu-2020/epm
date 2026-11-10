@@ -12,7 +12,7 @@ use object_store::path::Path;
 use object_store::{ObjectStore, PutMode};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::owner::{Admit, Alarm, Effect, Event, Owner, PutFailure, Request};
+use crate::owner::{Admit, Alarm, Effect, Event, Owner, PutFailure, Request, Start};
 use crate::segment::{Commit, Epoch, RequestId, Segment, Sequence, Slot};
 
 pub struct Submission<R> {
@@ -47,15 +47,17 @@ pub async fn serve<A: Admit>(
     store: Arc<dyn ObjectStore>,
     workspace: &str,
     epoch: Epoch,
+    start: Start,
     admit: A,
     mut requests: mpsc::Receiver<Submission<A::Rejection>>,
     commits: mpsc::UnboundedSender<Commit>,
 ) -> Exit {
     let log = Path::from(workspace).join("log");
-    let mut owner = Owner::new(epoch, admit);
+    let first = start.slot;
+    let mut owner = Owner::resume(epoch, admit, start);
     let mut io: FuturesUnordered<BoxFuture<'static, Result<Event, Alarm>>> =
         FuturesUnordered::new();
-    io.push(load(Arc::clone(&store), log.clone()).boxed());
+    io.push(load(Arc::clone(&store), log.clone(), first).boxed());
     let mut waiters = Waiters::new();
     loop {
         let event = tokio::select! {
@@ -159,10 +161,14 @@ async fn read_back(store: Arc<dyn ObjectStore>, path: Path, slot: Slot) -> Resul
     Ok(Event::ReadBack { slot, found })
 }
 
-async fn load(store: Arc<dyn ObjectStore>, log: Path) -> Result<Event, Alarm> {
+async fn load(store: Arc<dyn ObjectStore>, log: Path, first: Slot) -> Result<Event, Alarm> {
     let mut attempt = 0;
     let listed = loop {
-        match store.list(Some(&log)).try_collect::<Vec<_>>().await {
+        let listing = match first.0.checked_sub(1) {
+            Some(before) => store.list_with_offset(Some(&log), &key(&log, Slot(before))),
+            None => store.list(Some(&log)),
+        };
+        match listing.try_collect::<Vec<_>>().await {
             Ok(listed) => break listed,
             Err(error) => {
                 permanent(&error, &log, PERMANENT_FOR_LIST)?;

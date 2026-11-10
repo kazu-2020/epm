@@ -693,3 +693,90 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
         "a resend is acknowledged with its first sequence"
     );
 }
+
+fn three_slots() -> Store {
+    let segment = |commits| Segment {
+        epoch: Epoch(1),
+        commits,
+    };
+    Store(BTreeMap::from([
+        (Slot(0), segment(vec![commit("r1", 0), commit("r2", 1)])),
+        (Slot(1), segment(vec![commit("r3", 2), commit("r4", 3)])),
+        (Slot(2), segment(vec![commit("r5", 4)])),
+    ]))
+}
+
+#[test]
+fn an_owner_from_a_start_continues_as_an_owner_that_reads_the_whole_log() {
+    let store = three_slots();
+    let whole = Owner::new(Epoch(2), AdmitAll).step_and_flush(store.loaded());
+    let start = Start {
+        slot: Slot(1),
+        request_ids: vec![id("r1"), id("r2"), id("r3")],
+    };
+    let mut resumed = Owner::resume(Epoch(2), AdmitAll, start);
+    let tail = Event::Loaded {
+        slots: store.0.clone().split_off(&Slot(1)),
+    };
+    let effects = resumed.step_and_flush(tail);
+    assert_eq!(
+        effects,
+        whole[3..],
+        "the commits from sequence 3 and the same fence"
+    );
+
+    let (slot, fence, _) = put(&effects);
+    let mut store = store;
+    assert!(resumed.step_and_flush(store.put(slot, fence)).is_empty());
+    assert_eq!(
+        resumed.step_and_flush(request("r1")),
+        [ack("r1", 0)],
+        "a resend from before the start keeps its sequence"
+    );
+    let (_, segment, _) = put(&resumed.step_and_flush(request("r6")));
+    assert_eq!(segment.commits, [commit("r6", 5)]);
+}
+
+#[test]
+fn a_start_that_the_log_does_not_hold_is_an_alarm() {
+    let store = three_slots();
+    let start = Start {
+        slot: Slot(0),
+        request_ids: vec![id("r1"), id("r2"), id("r3")],
+    };
+    assert_eq!(
+        Owner::resume(Epoch(2), AdmitAll, start).step_and_flush(store.loaded()),
+        [Effect::Alarm(Alarm::StartNotInLog {
+            slot: Slot(0),
+            sequence: Sequence(2)
+        })]
+    );
+}
+
+#[test]
+fn a_start_with_another_request_id_for_its_last_commit_is_an_alarm() {
+    let start = Start {
+        slot: Slot(1),
+        request_ids: vec![id("r1"), id("r2"), id("other")],
+    };
+    assert_eq!(
+        Owner::resume(Epoch(2), AdmitAll, start).step_and_flush(three_slots().loaded()),
+        [Effect::Alarm(Alarm::StartNotInLog {
+            slot: Slot(1),
+            sequence: Sequence(2)
+        })]
+    );
+}
+
+#[test]
+fn the_replay_starts_only_at_the_slot_of_the_start() {
+    let mut store = three_slots();
+    store.0.remove(&Slot(0));
+    let effects = Owner::new(Epoch(2), AdmitAll).step_and_flush(store.loaded());
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Committed(_))),
+        "{effects:?}"
+    );
+}
