@@ -263,16 +263,12 @@ impl Handle {
             sequence: self.published.borrow().next,
             payload: payload.clone(),
         });
-        let (acknowledged, ack) = oneshot::channel();
-        let request = Request {
+        let (submission, ack) = Submission::new(Request {
             request_id,
             payload,
-        };
+        });
         self.requests
-            .send(Submission {
-                request,
-                acknowledged,
-            })
+            .send(submission)
             .await
             .map_err(|_| SubmitError::Stopped)?;
         let sequence = ack

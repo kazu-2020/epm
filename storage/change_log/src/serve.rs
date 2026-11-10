@@ -20,6 +20,19 @@ pub struct Submission<R> {
     pub acknowledged: oneshot::Sender<Result<Sequence, R>>,
 }
 
+impl<R> Submission<R> {
+    pub fn new(request: Request) -> (Self, oneshot::Receiver<Result<Sequence, R>>) {
+        let (acknowledged, ack) = oneshot::channel();
+        (
+            Self {
+                request,
+                acknowledged,
+            },
+            ack,
+        )
+    }
+}
+
 type Waiters<R> = BTreeMap<RequestId, Vec<oneshot::Sender<Result<Sequence, R>>>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
