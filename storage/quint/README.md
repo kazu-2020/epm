@@ -29,8 +29,9 @@ storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少な�
 モデルが前提にする条件付き書き込みの応答は、RustFS で次のように実測する。
 
 ```sh
-AWS_ENDPOINT_URL=http://127.0.0.1:59000 AWS_ACCESS_KEY_ID=nanashi \
-AWS_SECRET_ACCESS_KEY=nanashi-secret AWS_REGION=us-east-1 \
+docker compose -f storage/rustfs/compose.yaml up -d
+AWS_ENDPOINT_URL=http://127.0.0.1:9000 AWS_ACCESS_KEY_ID=demo \
+AWS_SECRET_ACCESS_KEY=demo-secret AWS_REGION=us-east-1 \
 uv run --with boto3 storage/rustfs/conditional_write.py
 ```
 

@@ -43,9 +43,11 @@ Actions の `s3-latency` を main で手で起動する。変更ログが使う 
 スクリプトだけを手元の RustFS で確かめるときは次のように動かす。数字は参考にならない。
 
 ```sh
-AWS_ENDPOINT_URL=http://127.0.0.1:59000 AWS_ACCESS_KEY_ID=nanashi \
-AWS_SECRET_ACCESS_KEY=nanashi-secret AWS_REGION=us-east-1 \
-uv run --with boto3 storage/s3/latency.py <bucket> <prefix> <out dir> --quick
+docker compose -f storage/rustfs/compose.yaml up -d
+curl --aws-sigv4 aws:amz:us-east-1:s3 --user demo:demo-secret -X PUT http://127.0.0.1:9000/epm-demo
+AWS_ENDPOINT_URL=http://127.0.0.1:9000 AWS_ACCESS_KEY_ID=demo \
+AWS_SECRET_ACCESS_KEY=demo-secret AWS_REGION=us-east-1 \
+uv run --with boto3 storage/s3/latency.py epm-demo <prefix> <out dir> --quick
 ```
 
 ## 変更ログの S3 テスト
