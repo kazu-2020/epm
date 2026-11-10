@@ -61,7 +61,8 @@ impl Segment {
         // Not Vec::with_capacity(count): the count is untrusted until the bytes behind it are read.
         let mut commits = Vec::new();
         for _ in 0..count {
-            let request_id = RequestId(reader.prefixed()?);
+            // Not a slice of the segment: the owner keeps every Request ID, and a slice would keep the whole segment with its payloads.
+            let request_id = RequestId(Bytes::copy_from_slice(&reader.prefixed()?));
             let sequence = Sequence(reader.u64()?);
             let payload = reader.prefixed()?;
             commits.push(Commit {
@@ -176,6 +177,16 @@ mod tests {
             &encode(one.epoch, &one.commits)[..],
             b"CLOG\x01\x01\0\0\0\0\0\0\0\x01\0\0\0\x01\0\0\0r\x03\0\0\0\0\0\0\0\x01\0\0\0p"
         );
+    }
+
+    #[test]
+    fn a_decoded_request_id_does_not_hold_the_segment() {
+        let bytes = encode(sample().epoch, &sample().commits);
+        let segment = Segment::decode(bytes.clone()).expect("valid");
+        let mut request_id = segment.commits[0].request_id.0.clone();
+        drop(segment);
+        assert!(request_id.is_unique(), "shares the buffer of the segment");
+        assert_eq!(request_id.split_to(2), "r1");
     }
 
     #[test]
