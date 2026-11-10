@@ -49,7 +49,7 @@ pub async fn serve<A: Admit>(
     epoch: Epoch,
     admit: A,
     mut requests: mpsc::Receiver<Submission<A::Rejection>>,
-    committed: mpsc::UnboundedSender<Commit>,
+    commits: mpsc::UnboundedSender<Commit>,
 ) -> Exit {
     let log = Path::from(workspace).join("log");
     let mut owner = Owner::new(epoch, admit);
@@ -87,7 +87,7 @@ pub async fn serve<A: Admit>(
                     io.push(read_back(Arc::clone(&store), key(&log, slot), slot).boxed());
                 }
                 Effect::Committed(commit) => {
-                    if committed.send(commit).is_err() {
+                    if commits.send(commit).is_err() {
                         return Exit::Closed;
                     }
                 }

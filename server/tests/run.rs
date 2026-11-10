@@ -9,8 +9,8 @@ use measure::{MeasureError, MeasureUlid};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use server::{
-    Calculation, DecodeError, Edit, Engine, EngineAlarm, Exit, Handle, Invalid, Lag, Owner,
-    ReadError, Rejection, Settings, SubmitError,
+    Calculation, DecodeError, Edit, Engine, EngineAlarm, Exit, Handle, Invalid, Lag, ReadError,
+    Rejection, Settings, SubmitError,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -30,9 +30,14 @@ struct Running {
 
 fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Running {
     let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
-    let (owner, handle) = Owner::new(engine, settings);
-    let store = Arc::clone(store);
-    let exit = tokio::spawn(async move { owner.run(store, WORKSPACE, Epoch(epoch)).await });
+    let (handle, owner) = server::start(
+        engine,
+        settings,
+        Arc::clone(store),
+        WORKSPACE.to_owned(),
+        Epoch(epoch),
+    );
+    let exit = tokio::spawn(owner);
     Running { handle, exit }
 }
 
@@ -317,10 +322,10 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
 async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
     let store = store();
     let (requests, receiver) = mpsc::channel(1);
-    let (committed, _passed_on) = mpsc::unbounded_channel();
+    let (commits, _received) = mpsc::unbounded_channel();
     let writer = Arc::clone(&store);
     let unchecked = tokio::spawn(async move {
-        serve(writer, WORKSPACE, Epoch(1), AdmitAll, receiver, committed).await
+        serve(writer, WORKSPACE, Epoch(1), AdmitAll, receiver, commits).await
     });
     assert_eq!(
         submit_bytes(&requests, "garbage", Bytes::from_static(b"\x09")).await,

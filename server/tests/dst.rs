@@ -19,7 +19,7 @@ use measure::{Measure, MeasureDefinition};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use oracle::Oracle;
-use server::{Calculation, Edit, Engine, Exit, Owner, Rejection, Settings, SubmitError};
+use server::{Calculation, Edit, Engine, Exit, Rejection, Settings, SubmitError};
 
 const DEFAULT_SEEDS: u64 = 2000;
 const CALCULATION: Duration = Duration::from_millis(250);
@@ -122,7 +122,13 @@ impl common::Server for Owners {
         if self.seed.is_multiple_of(2) {
             settings.busy_after = self.seed / 2 % 3;
         }
-        let (owner, handle) = Owner::new(self.engine.clone(), settings);
+        let (handle, owner) = server::start(
+            self.engine.clone(),
+            settings,
+            store,
+            workspace,
+            Epoch(epoch),
+        );
         let recalculated = stream::unfold(handle.published(), |mut published| async move {
             published.changed().await.ok()?;
             let sequence = published.borrow_and_update().recalculated();
@@ -147,7 +153,7 @@ impl common::Server for Owners {
             .boxed()
         });
         let exit = async move {
-            match owner.run(store, &workspace, Epoch(epoch)).await {
+            match owner.await {
                 Exit::ChangeLog(exit) => Ok(exit),
                 Exit::Engine(alarm) => Err(format!("{alarm:?}")),
             }
