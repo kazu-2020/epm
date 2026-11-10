@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use change_log::{Admit, Commit, Epoch, Request, RequestId, Sequence, Submission};
+use change_log::{Admit, Commit, Epoch, Request, RequestId, Sequence, Start, Submission};
 use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
 use object_store::ObjectStore;
@@ -128,7 +128,7 @@ pub fn start(
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
         tokio::select! {
             biased;
-            exit = change_log::serve(store, &workspace, epoch, admission, waiting, commits) => {
+            exit = change_log::serve(store, &workspace, epoch, Start::default(), admission, waiting, commits) => {
                 Exit::ChangeLog(exit)
             }
             alarm = apply(engine, received, &calculator, &published, &committed_count) => {

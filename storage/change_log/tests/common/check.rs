@@ -160,7 +160,8 @@ pub fn check(outcome: &Outcome) -> Violations {
                     Alarm::OtherContentInOwnEpoch { .. } => "oneContentPerSlotPerEpoch",
                     Alarm::UnreadableSegment { .. }
                     | Alarm::UnexpectedKey { .. }
-                    | Alarm::PermanentStoreError { .. } => "noAlarm",
+                    | Alarm::PermanentStoreError { .. }
+                    | Alarm::StartNotInLog { .. } => "noAlarm",
                 };
                 violate(invariant, format!("record {at}: {alarm:?}"));
             }

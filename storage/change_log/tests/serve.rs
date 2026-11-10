@@ -7,7 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use change_log::{
-    Admit, AdmitAll, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Submission, serve,
+    Admit, AdmitAll, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Slot, Start,
+    Submission, serve,
 };
 use futures_util::stream::{self, BoxStream};
 use futures_util::{StreamExt, TryStreamExt};
@@ -29,11 +30,24 @@ struct Owner {
 }
 
 fn start(store: &Arc<dyn ObjectStore>, epoch: u64) -> Owner {
+    start_from(store, epoch, Start::default())
+}
+
+fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Owner {
     let (requests, receiver) = mpsc::channel(16);
     let (sender, committed) = mpsc::unbounded_channel();
     let store = Arc::clone(store);
     let exit = tokio::spawn(async move {
-        serve(store, WORKSPACE, Epoch(epoch), AdmitAll, receiver, sender).await
+        serve(
+            store,
+            WORKSPACE,
+            Epoch(epoch),
+            first,
+            AdmitAll,
+            receiver,
+            sender,
+        )
+        .await
     });
     Owner {
         requests,
@@ -284,7 +298,16 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
     let (requests, receiver) = mpsc::channel(16);
     let (committed, _passed_on) = mpsc::unbounded_channel();
     let _owner = tokio::spawn(async move {
-        serve(store, WORKSPACE, Epoch(1), GoodOnly, receiver, committed).await
+        serve(
+            store,
+            WORKSPACE,
+            Epoch(1),
+            Start::default(),
+            GoodOnly,
+            receiver,
+            committed,
+        )
+        .await
     });
     let mut answers = Vec::new();
     for payload in ["bad", "good"] {
@@ -305,4 +328,30 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
         Ok(Ok(Sequence(0))),
         "the later request with the same Request ID was committed"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_owner_from_a_start_reads_no_slot_before_it() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let a = start(&store, 1);
+    for (sequence, name) in (0..).zip(["r1", "r2"]) {
+        assert_eq!(submit(&a.requests, name).await, Ok(Sequence(sequence)));
+    }
+    a.exit.abort();
+    let first_slot = Path::from(format!("{WORKSPACE}/log/{:020}", 0));
+    store
+        .put(&first_slot, Bytes::from_static(b"not a segment").into())
+        .await
+        .expect("put");
+
+    let start = Start {
+        slot: Slot(2),
+        request_ids: ["r1", "r2"]
+            .map(|name| RequestId(Bytes::from_static(name.as_bytes())))
+            .to_vec(),
+    };
+    let mut b = start_from(&store, 2, start);
+    assert_eq!(submit(&b.requests, "r1").await, Ok(Sequence(0)));
+    assert_eq!(submit(&b.requests, "r3").await, Ok(Sequence(2)));
+    assert_eq!(b.passed_on(), named(&[("r3", 2)]));
 }

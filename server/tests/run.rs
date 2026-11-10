@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Submission, serve};
+use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Start, Submission, serve};
 use datagen::representative::{self, Size};
 use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
@@ -384,7 +384,16 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
     let (commits, _received) = mpsc::unbounded_channel();
     let writer = Arc::clone(&store);
     let unchecked = tokio::spawn(async move {
-        serve(writer, WORKSPACE, Epoch(1), AdmitAll, receiver, commits).await
+        serve(
+            writer,
+            WORKSPACE,
+            Epoch(1),
+            Start::default(),
+            AdmitAll,
+            receiver,
+            commits,
+        )
+        .await
     });
     assert_eq!(
         submit_bytes(&requests, "garbage", Bytes::from_static(b"\x09")).await,
