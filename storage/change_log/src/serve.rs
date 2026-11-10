@@ -171,7 +171,7 @@ async fn load(store: Arc<dyn ObjectStore>, log: Path) -> Result<Event, Alarm> {
             }
         }
     };
-    let mut slots = BTreeMap::new();
+    let mut keys = Vec::with_capacity(listed.len());
     for meta in listed {
         let slot = meta
             .location
@@ -182,10 +182,18 @@ async fn load(store: Arc<dyn ObjectStore>, log: Path) -> Result<Event, Alarm> {
             .ok_or_else(|| Alarm::UnexpectedKey {
                 key: meta.location.to_string(),
             })?;
-        if let Some(segment) = read(store.as_ref(), &meta.location, slot).await? {
-            slots.insert(slot, segment);
-        }
+        keys.push((slot, meta.location));
     }
+    let store = store.as_ref();
+    let slots = futures_util::stream::iter(keys)
+        .map(|(slot, path)| async move {
+            let found = read(store, &path, slot).await?;
+            Ok::<_, Alarm>(found.map(|segment| (slot, segment)))
+        })
+        .buffer_unordered(PARALLEL_READS)
+        .try_filter_map(|found| async move { Ok(found) })
+        .try_collect()
+        .await?;
     Ok(Event::Loaded { slots })
 }
 
@@ -211,6 +219,9 @@ async fn read(store: &dyn ObjectStore, path: &Path, slot: Slot) -> Result<Option
         }
     }
 }
+
+// shortcut: 16 is a guess, set it from a measurement of start-up GETs against S3.
+const PARALLEL_READS: usize = 16;
 
 const PERMANENT: &[u16] = &[301, 401, 403, 501];
 // Not 404 for PUT and GET: a missing key gets 404 too. A LIST gets 404 only for a missing bucket.

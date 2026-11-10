@@ -460,8 +460,9 @@ impl View {
 
     fn add<R>(&mut self, commits: &[Commit], effects: &mut Vec<Effect<R>>) {
         for commit in commits {
-            self.sequences
-                .insert(commit.request_id.clone(), commit.sequence);
+            // Not a clone: a decoded Request ID shares the segment's buffer, and the view would keep every payload alive.
+            let request_id = RequestId(Bytes::copy_from_slice(&commit.request_id.0));
+            self.sequences.insert(request_id, commit.sequence);
             self.next_sequence = self.next_sequence.next();
             effects.push(Effect::Committed(commit.clone()));
         }
