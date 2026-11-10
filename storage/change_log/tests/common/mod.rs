@@ -34,7 +34,16 @@ const LATEST_REPLY: Duration = Duration::from_secs(1);
 const ACK_LOST_PERCENT: u64 = 20;
 const CRASH_AFTER_ACK_PERCENT: u64 = 10;
 
-pub type Submit = Arc<dyn Fn(Request) -> BoxFuture<'static, Option<Sequence>> + Send + Sync>;
+pub type Submit =
+    Arc<dyn Fn(Request) -> BoxFuture<'static, Option<Result<Sequence, Refusal>>> + Send + Sync>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    // Not built in the change_log simulations: AdmitAll never refuses, only the server does.
+    #[allow(dead_code)]
+    Busy,
+    Invalid,
+}
 
 pub trait Server: Send + Sync {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> Started {
@@ -64,7 +73,7 @@ pub trait Server: Send + Sync {
                         })
                         .await
                         .ok()?;
-                    ack.await.ok()?.ok()
+                    Some(Ok(ack.await.ok()?.unwrap_or_else(|never| match never {})))
                 }
                 .boxed()
             }),
@@ -154,6 +163,10 @@ pub enum Record {
     },
     Rejected {
         key: String,
+    },
+    Refused {
+        request: String,
+        reason: Refusal,
     },
     Acked {
         request: String,
@@ -483,7 +496,12 @@ impl Cluster {
     }
 }
 
-async fn submit(owner: &Submit, name: &str, payload: Bytes, wait: Duration) -> Option<Sequence> {
+async fn submit(
+    owner: &Submit,
+    name: &str,
+    payload: Bytes,
+    wait: Duration,
+) -> Option<Result<Sequence, Refusal>> {
     let request = Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
         payload,
@@ -503,15 +521,27 @@ async fn client(
         while Instant::now() < end {
             let server = rng.below(SERVERS as u64) as usize;
             let owner = owners[server].borrow().clone();
-            let acknowledged = match owner {
+            let reply = match owner {
                 Some((epoch, owner)) => {
                     submit(&owner, &name, payload.clone(), rng.up_to(CLIENT_WAIT))
                         .await
-                        .map(|sequence| (epoch, sequence))
+                        .map(|reply| (epoch, reply))
                 }
                 None => None,
             };
-            if let Some((epoch, sequence)) = acknowledged {
+            if let Some((_, Err(reason))) = reply {
+                record(
+                    &history,
+                    Record::Refused {
+                        request: name.clone(),
+                        reason,
+                    },
+                );
+                if reason == Refusal::Invalid {
+                    break;
+                }
+            }
+            if let Some((epoch, Ok(sequence))) = reply {
                 record(
                     &history,
                     Record::Acked {
@@ -632,7 +662,7 @@ pub async fn simulate(
         let mut sequences = Vec::new();
         for request in &acknowledged {
             let payload = server.payload(request);
-            sequences.push(submit(&owner, request, payload, PROBE_WAIT).await?);
+            sequences.push(submit(&owner, request, payload, PROBE_WAIT).await?.ok()?);
         }
         Some(sequences)
     };
@@ -718,6 +748,7 @@ pub fn check(outcome: &Outcome) -> Violations {
     let mut passes_on: BTreeSet<u64> = BTreeSet::new();
     let mut passed_on: BTreeMap<u64, Vec<(usize, &Commit)>> = BTreeMap::new();
     let mut recalculated: BTreeMap<u64, Vec<(usize, Sequence)>> = BTreeMap::new();
+    let mut invalid: Vec<(usize, &String)> = Vec::new();
     for (at, record) in outcome.history.iter().enumerate() {
         match record {
             Record::Granted {
@@ -864,10 +895,15 @@ pub fn check(outcome: &Outcome) -> Violations {
                     );
                 }
             }
+            Record::Refused {
+                request,
+                reason: Refusal::Invalid,
+            } => invalid.push((at, request)),
             Record::Granted { .. }
             | Record::Crashed { .. }
             | Record::Exited { .. }
-            | Record::Rejected { .. } => {}
+            | Record::Rejected { .. }
+            | Record::Refused { .. } => {}
         }
     }
     // Not checked against the log at the time of the record: a store over the network can show a write to a read-back before its PUT returns, and PassedOn is recorded by another task.
@@ -887,6 +923,18 @@ pub fn check(outcome: &Outcome) -> Violations {
                 format!(
                     "record {at_record}: epoch {epoch} acknowledged {request} as {sequence:?} without passing it on"
                 ),
+            );
+        }
+    }
+    // Not for Busy: a later try of the same request can commit.
+    for (at_record, request) in invalid {
+        if log
+            .iter()
+            .any(|commit| commit.request_id.0 == request.as_bytes())
+        {
+            violate(
+                "invalidNeverCommits",
+                format!("record {at_record}: refused {request} as invalid, but it is in the log"),
             );
         }
     }
@@ -1024,6 +1072,12 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
             }
             Record::Rejected { .. } => {
                 seen.insert("storeRejectedPut");
+            }
+            Record::Refused { reason, .. } => {
+                seen.insert(match reason {
+                    Refusal::Busy => "refusedBusy",
+                    Refusal::Invalid => "refusedInvalid",
+                });
             }
             Record::Recalculated { epoch, sequence } => {
                 // Not None before the first record: every owner recalculates from Commit Sequence 0, so its first batch starts there.

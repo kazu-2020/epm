@@ -18,7 +18,7 @@ use measure::{Measure, MeasureDefinition};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use oracle::Oracle;
-use server::{Calculation, Edit, Engine, Exit, Owner, Settings};
+use server::{Calculation, Edit, Engine, Exit, Owner, Rejection, Settings, SubmitError};
 
 const DEFAULT_SEEDS: u64 = 2000;
 const CALCULATION: Duration = Duration::from_millis(250);
@@ -118,15 +118,19 @@ impl Model {
 struct Owners {
     engine: Engine,
     inputs: Vec<MeasureDefinition>,
+    results: Vec<MeasureDefinition>,
     seed: u64,
 }
 
 impl common::Server for Owners {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
-        let settings = Settings {
+        let mut settings = Settings {
             calculation: Calculation::Inline(CALCULATION),
             ..Settings::default()
         };
+        if self.seed.is_multiple_of(2) {
+            settings.busy_after = self.seed / 2 % 3;
+        }
         let (owner, handle) = Owner::new(self.engine.clone(), settings);
         let recalculated = stream::unfold(handle.published(), |mut published| async move {
             published.changed().await.ok()?;
@@ -138,7 +142,16 @@ impl common::Server for Owners {
             let handle = handle.clone();
             async move {
                 let edit = Edit::decode(request.payload).expect("the simulation sends edits");
-                handle.submit(request.request_id, &edit).await.ok()
+                match handle.submit(request.request_id, &edit).await {
+                    Ok(sequence) => Some(Ok(sequence)),
+                    Err(SubmitError::Rejected(Rejection::Busy { .. })) => {
+                        Some(Err(common::Refusal::Busy))
+                    }
+                    Err(SubmitError::Rejected(Rejection::Invalid(_))) => {
+                        Some(Err(common::Refusal::Invalid))
+                    }
+                    Err(SubmitError::Stopped) => None,
+                }
             }
             .boxed()
         });
@@ -161,11 +174,17 @@ impl common::Server for Owners {
         (self.seed, request).hash(&mut hasher);
         let hash = hasher.finish();
         let input = &self.inputs[(hash % self.inputs.len() as u64) as usize];
+        let result = &self.results[(hash % self.results.len() as u64) as usize];
         let member = MemberId(u32::from(hash & 0x100 != 0));
         let value = (hash & 0x600 != 0).then(|| ((hash >> 12) % 8) as f64 / 4.0);
+        let (measure, axes) = match (hash >> 20) % 8 {
+            0 => (result, result.axes.len()),
+            1 => (input, input.axes.len() + 1),
+            _ => (input, input.axes.len()),
+        };
         Edit {
-            measure: input.ulid,
-            coordinate: vec![member; input.axes.len()],
+            measure: measure.ulid,
+            coordinate: vec![member; axes],
             value,
         }
         .encode()
@@ -180,6 +199,11 @@ fn simulate(model: &Model, seed: u64) -> common::Outcome {
             .inputs
             .iter()
             .map(|input| input.definition().clone())
+            .collect(),
+        results: model
+            .checked
+            .iter()
+            .map(|(result, _)| result.clone())
             .collect(),
         seed,
     };
@@ -257,7 +281,10 @@ fn seeds_keep_the_invariants() {
                         .map(|&seed| {
                             let outcome = simulate(model, seed);
                             let mut violations = common::check(&outcome);
-                            violations.extend(final_values(model, seed, &outcome));
+                            // Not after a violation: an invalid edit in the log makes the fold panic and hides the seed.
+                            if violations.is_empty() {
+                                violations.extend(final_values(model, seed, &outcome));
+                            }
                             let witnesses = common::witnesses(&outcome);
                             (seed, violations, witnesses, common::counts(&outcome))
                         })
@@ -307,6 +334,8 @@ fn seeds_keep_the_invariants() {
             "fenceFoundOlderCommits",
             "fenceMovedPastOldOwner",
             "oldOwnerStopped",
+            "refusedBusy",
+            "refusedInvalid",
             "sameBytesResent",
             "storeRejectedPut",
             "twoAcknowledged",
