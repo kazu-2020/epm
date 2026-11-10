@@ -18,7 +18,8 @@
 ## 実行
 
 ```sh
-npm install -g @informalsystems/quint@0.33.1
+npm ci --prefix storage/quint
+export PATH="$PWD/storage/quint/node_modules/.bin:$PATH"
 storage/quint/check.sh          # 1モジュールあたり5万回のランダムシミュレーション
 storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少ないと変異が反例に届かず落ちることがあるので、そのときは既定の回数で実行し直す
 ```

@@ -1,0 +1,7 @@
+services:
+  rustfs:
+    image: rustfs/rustfs:1.0.0
+    environment:
+      RUSTFS_ACCESS_KEY: demo
+      RUSTFS_SECRET_KEY: demo-secret
+    ports: ["9000:9000"]

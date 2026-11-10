@@ -42,7 +42,7 @@ jobs:
           workspaces: compute_engine
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
-          tool: cargo-mutants@27.1.0
+          tool: cargo-mutants
       - if: github.event_name == 'pull_request'
         run: git diff --relative HEAD^ > ../mutants.diff
       - run: cargo mutants --cargo-arg=--locked --jobs=4 ${{ github.event_name == 'pull_request' && '--in-diff=../mutants.diff' || '' }}

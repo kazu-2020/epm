@@ -3,9 +3,9 @@ name: server
 on:
   push:
     branches: [main]
-    paths: ["server/**", "storage/change_log/**", "compute_engine/**", ".github/workflows/server.yml"]
+    paths: ["server/**", "storage/change_log/**", "storage/rustfs/compose.yaml", "compute_engine/**", ".github/workflows/server.yml"]
   pull_request:
-    paths: ["server/**", "storage/change_log/**", "compute_engine/**", ".github/workflows/server.yml"]
+    paths: ["server/**", "storage/change_log/**", "storage/rustfs/compose.yaml", "compute_engine/**", ".github/workflows/server.yml"]
   workflow_dispatch:
 
 permissions:
@@ -31,13 +31,6 @@ jobs:
   demo:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      rustfs:
-        image: rustfs/rustfs:1.0.0
-        env:
-          RUSTFS_ACCESS_KEY: demo
-          RUSTFS_SECRET_KEY: demo-secret
-        ports: ["9000:9000"]
     env:
       AWS_ENDPOINT: http://127.0.0.1:9000
       AWS_ACCESS_KEY_ID: demo
@@ -50,6 +43,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: server
+      - run: docker compose -f ../storage/rustfs/compose.yaml up -d
       - name: Create the bucket
         timeout-minutes: 2
         run: until aws --endpoint-url "$AWS_ENDPOINT" s3 mb "s3://$EPM_S3_BUCKET"; do sleep 2; done
