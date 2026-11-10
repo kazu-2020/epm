@@ -14,6 +14,7 @@ no_fence = []
 no_epoch_check = []
 two_in_flight = []
 rejected_as_fenced = []
+commit_rejected = []
 
 [dependencies]
 bytes = "1.12.1"

@@ -314,9 +314,11 @@ impl Admit for Admission {
         if behind > self.busy_after {
             return Err(Rejection::Busy { behind });
         }
-        self.definitions
-            .check(payload)
-            .map_err(Rejection::Invalid)?;
+        if !cfg!(feature = "no_admission_check") {
+            self.definitions
+                .check(payload)
+                .map_err(Rejection::Invalid)?;
+        }
         self.accepted_count += 1;
         Ok(())
     }

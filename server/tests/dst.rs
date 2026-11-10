@@ -19,7 +19,7 @@ use measure::{Measure, MeasureDefinition};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use oracle::Oracle;
-use server::{Calculation, Edit, Engine, Exit, Settings};
+use server::{Calculation, Edit, Engine, Exit, Rejection, Settings, SubmitError};
 
 const DEFAULT_SEEDS: u64 = 2000;
 const CALCULATION: Duration = Duration::from_millis(250);
@@ -69,7 +69,7 @@ impl Model {
         self.workspace.dimensions.iter().collect()
     }
 
-    fn fold(&self, log: &[Commit]) -> Vec<Measure> {
+    fn fold(&self, log: &[Commit]) -> Option<Vec<Measure>> {
         let inputs = &self.workspace.inputs;
         let mut cells: Vec<BTreeMap<Vec<MemberId>, f64>> =
             inputs.iter().map(|input| input.cells().collect()).collect();
@@ -77,8 +77,7 @@ impl Model {
             let edit = Edit::decode(commit.payload.clone()).expect("the log holds cell edits");
             let input = inputs
                 .iter()
-                .position(|input| input.ulid() == edit.measure)
-                .expect("an edit names an input measure");
+                .position(|input| input.ulid() == edit.measure)?;
             match edit.value {
                 Some(value) => cells[input].insert(edit.coordinate, value),
                 None => cells[input].remove(&edit.coordinate),
@@ -89,8 +88,7 @@ impl Model {
             .zip(cells)
             .map(|(input, cells)| {
                 let cells = cells.into_iter().collect();
-                Measure::from_cells(input.definition().clone(), cells, &self.dimensions())
-                    .expect("the folded cells fit the input measure")
+                Measure::from_cells(input.definition().clone(), cells, &self.dimensions()).ok()
             })
             .collect()
     }
@@ -111,15 +109,19 @@ impl Model {
 struct Owners {
     engine: Engine,
     inputs: Vec<MeasureDefinition>,
+    results: Vec<MeasureDefinition>,
     seed: u64,
 }
 
 impl common::Server for Owners {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
-        let settings = Settings {
+        let mut settings = Settings {
             calculation: Calculation::Inline(CALCULATION),
             ..Settings::default()
         };
+        if self.seed.is_multiple_of(2) {
+            settings.busy_after = self.seed / 2 % 3;
+        }
         let (handle, owner) = server::start(
             self.engine.clone(),
             settings,
@@ -137,7 +139,16 @@ impl common::Server for Owners {
             let handle = handle.clone();
             async move {
                 let edit = Edit::decode(request.payload).expect("the simulation sends edits");
-                handle.submit(request.request_id, &edit).await.ok()
+                match handle.submit(request.request_id, &edit).await {
+                    Ok(sequence) => Some(Ok(sequence)),
+                    Err(SubmitError::Rejected(Rejection::Busy { .. })) => {
+                        Some(Err(common::Refusal::Busy))
+                    }
+                    Err(SubmitError::Rejected(Rejection::Invalid(_))) => {
+                        Some(Err(common::Refusal::Invalid))
+                    }
+                    Err(SubmitError::Stopped) => None,
+                }
             }
             .boxed()
         });
@@ -160,11 +171,17 @@ impl common::Server for Owners {
         (self.seed, request).hash(&mut hasher);
         let hash = hasher.finish();
         let input = &self.inputs[(hash % self.inputs.len() as u64) as usize];
+        let result = &self.results[(hash % self.results.len() as u64) as usize];
         let member = MemberId(u32::from(hash & 0x100 != 0));
         let value = (hash & 0x600 != 0).then(|| ((hash >> 12) % 8) as f64 / 4.0);
+        let (measure, axes) = match (hash >> 20) % 8 {
+            0 => (result, result.axes.len()),
+            1 => (input, input.axes.len() + 1),
+            _ => (input, input.axes.len()),
+        };
         Edit {
-            measure: input.ulid,
-            coordinate: vec![member; input.axes.len()],
+            measure: measure.ulid,
+            coordinate: vec![member; axes],
             value,
         }
         .encode()
@@ -179,6 +196,12 @@ fn simulate(model: &Model, seed: u64) -> common::Outcome {
             .inputs
             .iter()
             .map(|input| input.definition().clone())
+            .collect(),
+        results: model
+            .workspace
+            .formulas
+            .iter()
+            .map(|formula| formula.result.clone())
             .collect(),
         seed,
     };
@@ -211,7 +234,14 @@ fn recalculated_log(model: &Model, log: &[Commit], batch: usize) -> Result<Engin
 
 fn final_values(model: &Model, seed: u64, outcome: &common::Outcome) -> common::Violations {
     let (_, log) = common::replay(&outcome.store);
-    let expected = model.recalculate_all(model.fold(&log));
+    let Some(inputs) = model.fold(&log) else {
+        return [(
+            "finalValuesMatchEvaluate",
+            "the log holds an edit that does not fit an input measure".to_owned(),
+        )]
+        .into();
+    };
+    let expected = model.recalculate_all(inputs);
     let batch = 1 + (seed % 4) as usize;
     let difference = match recalculated_log(model, &log, batch) {
         Err(alarm) => Some(alarm),
@@ -373,6 +403,8 @@ fn seeds_keep_the_invariants() {
             "fenceFoundOlderCommits",
             "fenceMovedPastOldOwner",
             "oldOwnerStopped",
+            "refusedBusy",
+            "refusedInvalid",
             "sameBytesResent",
             "storeRejectedPut",
             "twoAcknowledged",
@@ -401,7 +433,7 @@ fn final_values_agree_with_duckdb() {
     for seed in 0..20 {
         let outcome = simulate(&model, seed);
         let (_, log) = common::replay(&outcome.store);
-        let inputs = model.fold(&log);
+        let inputs = model.fold(&log).expect("the log holds valid edits");
         let references: Vec<&Measure> = inputs.iter().collect();
         let mut oracle =
             Oracle::new(&model.dimensions(), &references).expect("DuckDB loads the inputs");

@@ -409,10 +409,15 @@ impl Ready {
         }
         match admit.admit(&request.payload) {
             Ok(()) => self.batch.push(request),
-            Err(reason) => effects.push(Effect::Rejected {
-                request_id: request.request_id,
-                reason,
-            }),
+            Err(reason) => {
+                effects.push(Effect::Rejected {
+                    request_id: request.request_id.clone(),
+                    reason,
+                });
+                if cfg!(feature = "commit_rejected") {
+                    self.batch.push(request);
+                }
+            }
         }
     }
 

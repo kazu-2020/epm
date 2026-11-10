@@ -4,7 +4,7 @@ use bytes::Bytes;
 use change_log::{Epoch, Exit, Sequence, Slot};
 
 use super::check::{acknowledged, decode, replay, slot_of};
-use super::simulate::{Outcome, Record};
+use super::simulate::{Outcome, Record, Refusal};
 
 pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let mut seen = BTreeSet::new();
@@ -65,6 +65,12 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
             }
             Record::Rejected { .. } => {
                 seen.insert("storeRejectedPut");
+            }
+            Record::Refused { reason, .. } => {
+                seen.insert(match reason {
+                    Refusal::Busy => "refusedBusy",
+                    Refusal::Invalid => "refusedInvalid",
+                });
             }
             _ => {}
         }

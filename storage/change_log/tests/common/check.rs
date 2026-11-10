@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bytes::Bytes;
 use change_log::{Alarm, Commit, Epoch, Exit, RequestId, Segment, Sequence, Slot};
 
-use super::simulate::{Outcome, Record};
+use super::simulate::{Outcome, Record, Refusal};
 
 pub(super) fn acknowledged(history: &[Record]) -> BTreeSet<String> {
     history
@@ -53,6 +53,7 @@ pub fn check(outcome: &Outcome) -> Violations {
     let mut passes_on: BTreeSet<u64> = BTreeSet::new();
     let mut passed_on: BTreeMap<u64, Vec<(usize, &Commit)>> = BTreeMap::new();
     let mut recalculated: BTreeMap<u64, Vec<(usize, Sequence)>> = BTreeMap::new();
+    let mut invalid: Vec<(usize, &String)> = Vec::new();
     for (at, record) in outcome.history.iter().enumerate() {
         match record {
             Record::Granted {
@@ -199,10 +200,15 @@ pub fn check(outcome: &Outcome) -> Violations {
                     );
                 }
             }
+            Record::Refused {
+                request,
+                reason: Refusal::Invalid,
+            } => invalid.push((at, request)),
             Record::Granted { .. }
             | Record::Crashed { .. }
             | Record::Exited { .. }
-            | Record::Rejected { .. } => {}
+            | Record::Rejected { .. }
+            | Record::Refused { .. } => {}
         }
     }
     // Not checked against the log at the time of the record: a store over the network can show a write to a read-back before its PUT returns, and PassedOn is recorded by another task.
@@ -222,6 +228,18 @@ pub fn check(outcome: &Outcome) -> Violations {
                 format!(
                     "record {at_record}: epoch {epoch} acknowledged {request} as {sequence:?} without passing it on"
                 ),
+            );
+        }
+    }
+    // Not for Busy: a later try of the same request can commit.
+    for (at_record, request) in invalid {
+        if log
+            .iter()
+            .any(|commit| commit.request_id.0 == request.as_bytes())
+        {
+            violate(
+                "invalidNeverCommits",
+                format!("record {at_record}: refused {request} as invalid, but it is in the log"),
             );
         }
     }

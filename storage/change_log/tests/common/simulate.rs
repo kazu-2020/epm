@@ -33,7 +33,16 @@ const LATEST_REPLY: Duration = Duration::from_secs(1);
 const ACK_LOST_PERCENT: u64 = 20;
 const CRASH_AFTER_ACK_PERCENT: u64 = 10;
 
-pub type Submit = Arc<dyn Fn(Request) -> BoxFuture<'static, Option<Sequence>> + Send + Sync>;
+pub type Submit =
+    Arc<dyn Fn(Request) -> BoxFuture<'static, Option<Result<Sequence, Refusal>>> + Send + Sync>;
+
+// Not built in the change_log simulations: AdmitAll never refuses, only the server does.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    Busy,
+    Invalid,
+}
 
 pub trait Server: Send + Sync {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> Started {
@@ -57,7 +66,7 @@ pub trait Server: Send + Sync {
                 async move {
                     let (submission, ack) = Submission::new(request);
                     requests.send(submission).await.ok()?;
-                    ack.await.ok()?.ok()
+                    Some(Ok(ack.await.ok()?.unwrap_or_else(|never| match never {})))
                 }
                 .boxed()
             }),
@@ -147,6 +156,10 @@ pub enum Record {
     },
     Rejected {
         key: String,
+    },
+    Refused {
+        request: String,
+        reason: Refusal,
     },
     Acked {
         request: String,
@@ -476,7 +489,12 @@ impl Cluster {
     }
 }
 
-async fn submit(owner: &Submit, name: &str, payload: Bytes, wait: Duration) -> Option<Sequence> {
+async fn submit(
+    owner: &Submit,
+    name: &str,
+    payload: Bytes,
+    wait: Duration,
+) -> Option<Result<Sequence, Refusal>> {
     let request = Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
         payload,
@@ -496,31 +514,46 @@ async fn client(
         while Instant::now() < end {
             let server = rng.below(SERVERS as u64) as usize;
             let owner = owners[server].borrow().clone();
-            let acknowledged = match owner {
+            let reply = match owner {
                 Some((epoch, owner)) => {
                     submit(&owner, &name, payload.clone(), rng.up_to(CLIENT_WAIT))
                         .await
-                        .map(|sequence| (epoch, sequence))
+                        .map(|reply| (epoch, reply))
                 }
                 None => None,
             };
-            if let Some((epoch, sequence)) = acknowledged {
-                record(
-                    &history,
-                    Record::Acked {
-                        request: name.clone(),
-                        epoch,
-                        sequence,
-                    },
-                );
-                if rng.percent(CRASH_AFTER_ACK_PERCENT) {
-                    crashes
-                        .send((server, epoch))
-                        .expect("the simulation takes crashes");
+            match reply {
+                None => {}
+                Some((_, Err(reason))) => {
+                    record(
+                        &history,
+                        Record::Refused {
+                            request: name.clone(),
+                            reason,
+                        },
+                    );
+                    if let Refusal::Invalid = reason {
+                        break;
+                    }
                 }
-                let ack_lost = rng.percent(ACK_LOST_PERCENT);
-                if !ack_lost {
-                    break;
+                Some((epoch, Ok(sequence))) => {
+                    record(
+                        &history,
+                        Record::Acked {
+                            request: name.clone(),
+                            epoch,
+                            sequence,
+                        },
+                    );
+                    if rng.percent(CRASH_AFTER_ACK_PERCENT) {
+                        crashes
+                            .send((server, epoch))
+                            .expect("the simulation takes crashes");
+                    }
+                    let ack_lost = rng.percent(ACK_LOST_PERCENT);
+                    if !ack_lost {
+                        break;
+                    }
                 }
             }
             sleep(rng.up_to(Duration::from_millis(200))).await;
@@ -625,7 +658,7 @@ pub async fn simulate(
         let mut sequences = Vec::new();
         for request in &acknowledged {
             let payload = server.payload(request);
-            sequences.push(submit(&owner, request, payload, PROBE_WAIT).await?);
+            sequences.push(submit(&owner, request, payload, PROBE_WAIT).await?.ok()?);
         }
         Some(sequences)
     };
