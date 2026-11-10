@@ -23,14 +23,6 @@ use server::{Calculation, Edit, Engine, Exit, Owner, Settings};
 const DEFAULT_SEEDS: u64 = 2000;
 const CALCULATION: Duration = Duration::from_millis(250);
 
-const TINY: Size = Size {
-    products: 2,
-    customers: 2,
-    departments_per_kind: 1,
-    quantity_cells: 50,
-    account_fill: 0.02,
-};
-
 struct Model {
     workspace: Workspace,
     checked: Vec<(MeasureDefinition, CheckedExpression)>,
@@ -39,8 +31,8 @@ struct Model {
 
 impl Model {
     fn new() -> Model {
-        let workspace = representative::generate(&TINY, 7);
-        let engine = Engine::new(representative::generate(&TINY, 7)).expect("valid formulas");
+        let workspace = representative::generate(&Size::TINY, 7);
+        let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let definitions: Vec<MeasureDefinition> = workspace
             .inputs

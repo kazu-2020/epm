@@ -17,14 +17,6 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use ulid::Ulid;
 
-const TINY: Size = Size {
-    products: 2,
-    customers: 2,
-    departments_per_kind: 1,
-    quantity_cells: 50,
-    account_fill: 0.02,
-};
-
 const WORKSPACE: &str = "ws";
 const QUANTITY: MeasureUlid = MeasureUlid(Ulid(100));
 const SALES: MeasureUlid = MeasureUlid(Ulid(200));
@@ -37,7 +29,7 @@ struct Running {
 }
 
 fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Running {
-    let engine = Engine::new(representative::generate(&TINY, 7)).expect("valid formulas");
+    let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
     let (owner, handle) = Owner::new(engine, settings);
     let store = Arc::clone(store);
     let exit = tokio::spawn(async move { owner.run(store, WORKSPACE, Epoch(epoch)).await });

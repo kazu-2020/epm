@@ -34,6 +34,14 @@ impl Size {
         quantity_cells: 17_500_000,
         account_fill: 0.5,
     };
+
+    pub const TINY: Size = Size {
+        products: 2,
+        customers: 2,
+        departments_per_kind: 1,
+        quantity_cells: 50,
+        account_fill: 0.02,
+    };
 }
 
 const CATEGORY: DimensionUlid = DimensionUlid(Ulid(1));

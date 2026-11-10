@@ -8,20 +8,12 @@ use measure::{MeasureError, MeasureUlid};
 use server::{DecodeError, Edit, Engine, EngineAlarm, FormulaError, Invalid};
 use ulid::Ulid;
 
-const TINY: Size = Size {
-    products: 2,
-    customers: 2,
-    departments_per_kind: 1,
-    quantity_cells: 50,
-    account_fill: 0.02,
-};
-
 const QUANTITY: MeasureUlid = MeasureUlid(Ulid(100));
 const PRICE: MeasureUlid = MeasureUlid(Ulid(101));
 const SALES: MeasureUlid = MeasureUlid(Ulid(200));
 
 fn workspace() -> Workspace {
-    representative::generate(&TINY, 7)
+    representative::generate(&Size::TINY, 7)
 }
 
 fn engine() -> Engine {
