@@ -320,8 +320,8 @@ fn edit_and_compare(model: &Model) {
         inputs[input] = inputs[input]
             .apply(delta(&inputs[input]))
             .expect("the delta fits");
-        column_engine::edit(
-            &mut measures,
+        measures = column_engine::edit(
+            &measures,
             [(inputs[input].ulid(), edited)],
             &formulas,
             &dimensions,
@@ -355,7 +355,7 @@ fn two_deltas_for_one_measure_recalculate_the_cells_of_both() {
         (quantity, delta(&measures[input], first)),
         (quantity, delta(&measures[input], last)),
     ];
-    column_engine::edit(&mut measures, deltas, &formulas, &dimensions)
+    measures = column_engine::edit(&measures, deltas, &formulas, &dimensions)
         .expect("the edit recalculates");
     for coordinate in [first, last] {
         inputs[input] = inputs[input]

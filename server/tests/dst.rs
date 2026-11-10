@@ -1,13 +1,14 @@
 #[path = "../../storage/change_log/tests/common/mod.rs"]
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use change_log::{Commit, Epoch, Request};
+use change_log::{Commit, Epoch, Request, Sequence};
+use common::Record;
 use datagen::Workspace;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
@@ -23,14 +24,6 @@ use server::{Calculation, Edit, Engine, Exit, Owner, Rejection, Settings, Submit
 const DEFAULT_SEEDS: u64 = 2000;
 const CALCULATION: Duration = Duration::from_millis(250);
 
-const TINY: Size = Size {
-    products: 2,
-    customers: 2,
-    departments_per_kind: 1,
-    quantity_cells: 50,
-    account_fill: 0.02,
-};
-
 struct Model {
     workspace: Workspace,
     checked: Vec<(MeasureDefinition, CheckedExpression)>,
@@ -39,8 +32,8 @@ struct Model {
 
 impl Model {
     fn new() -> Model {
-        let workspace = representative::generate(&TINY, 7);
-        let engine = Engine::new(representative::generate(&TINY, 7)).expect("valid formulas");
+        let workspace = representative::generate(&Size::TINY, 7);
+        let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let definitions: Vec<MeasureDefinition> = workspace
             .inputs
@@ -259,6 +252,72 @@ fn final_values(model: &Model, seed: u64, outcome: &common::Outcome) -> common::
         .collect()
 }
 
+fn recalculation_witnesses(outcome: &common::Outcome) -> BTreeSet<&'static str> {
+    let mut seen = BTreeSet::new();
+    let (segments, _) = common::replay(&outcome.store);
+    let written_by: BTreeMap<Sequence, u64> = segments
+        .values()
+        .flat_map(|segment| {
+            segment
+                .commits
+                .iter()
+                .map(|commit| (commit.sequence, segment.epoch.0))
+        })
+        .collect();
+    let mut recalculates: BTreeSet<u64> = BTreeSet::new();
+    let mut epochs: BTreeMap<usize, u64> = BTreeMap::new();
+    let mut crashed: BTreeSet<u64> = BTreeSet::new();
+    let mut recalculated_so_far: BTreeMap<u64, Sequence> = BTreeMap::new();
+    let mut acked_so_far: BTreeMap<u64, BTreeSet<Sequence>> = BTreeMap::new();
+    for record in &outcome.history {
+        match record {
+            Record::Granted {
+                server,
+                epoch,
+                recalculates: granted,
+                ..
+            } => {
+                epochs.insert(*server, *epoch);
+                if *granted {
+                    recalculates.insert(*epoch);
+                }
+            }
+            Record::Crashed { server } => crashed.extend(epochs.get(server)),
+            Record::Recalculated { epoch, sequence } => {
+                // Not None before the first record: every owner recalculates from Commit Sequence 0, so its first batch starts there.
+                let first = recalculated_so_far
+                    .insert(*epoch, *sequence)
+                    .map_or(Sequence(0), Sequence::next);
+                let acked = acked_so_far.get(epoch).map_or(0, |acked| {
+                    acked
+                        .range(first..=*sequence)
+                        .filter(|acked| written_by.get(acked) == Some(epoch))
+                        .count()
+                });
+                if acked >= 2 {
+                    seen.insert("batchHeldTwoAckedCommits");
+                }
+            }
+            Record::Acked {
+                epoch, sequence, ..
+            } => {
+                acked_so_far.entry(*epoch).or_default().insert(*sequence);
+                if recalculates.contains(epoch) && recalculated_so_far.get(epoch) < Some(sequence) {
+                    seen.insert("ackBeforeRecalculated");
+                }
+            }
+            _ => {}
+        }
+    }
+    let newest_acked = |epoch: &u64| acked_so_far.get(epoch).and_then(BTreeSet::last);
+    if crashed.iter().any(|epoch| {
+        recalculates.contains(epoch) && newest_acked(epoch) > recalculated_so_far.get(epoch)
+    }) {
+        seen.insert("crashBeforeRecalculated");
+    }
+    seen
+}
+
 fn seeds() -> Vec<u64> {
     if let Ok(seed) = std::env::var("DST_SEED") {
         return vec![seed.parse().expect("DST_SEED is a number")];
@@ -288,7 +347,8 @@ fn seeds_keep_the_invariants() {
                             let outcome = simulate(model, seed);
                             let mut violations = common::check(&outcome);
                             violations.extend(final_values(model, seed, &outcome));
-                            let witnesses = common::witnesses(&outcome);
+                            let mut witnesses = common::witnesses(&outcome);
+                            witnesses.extend(recalculation_witnesses(&outcome));
                             (seed, violations, witnesses, common::counts(&outcome))
                         })
                         .collect::<Vec<_>>()
