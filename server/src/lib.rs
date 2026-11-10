@@ -181,9 +181,11 @@ impl Engine {
             }
         })?;
         Ok(Engine {
+            dimensions: Arc::clone(&self.dimensions),
             measures,
+            formulas: Arc::clone(&self.formulas),
+            definitions: self.definitions.clone(),
             next,
-            ..self.clone()
         })
     }
 
