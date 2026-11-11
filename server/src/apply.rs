@@ -121,7 +121,7 @@ fn calculate(
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use change_log::{RequestId, Sequence};
+    use change_log::{RequestId, Sequence, Start};
 
     use crate::snapshot::Snapshot;
     use datagen::representative::{self, Size};
@@ -325,13 +325,15 @@ mod tests {
 
     #[test]
     fn no_snapshot_is_written_when_the_interval_is_the_largest_count() {
-        let first = engine();
-        let mut applier = applier(Arc::clone(&first));
-        assert!(
-            applier
-                .step(Event::SnapshotWritten(Some(Slot(1))))
-                .is_empty()
+        let start = Start {
+            slot: Slot(5),
+            ..Start::default()
+        };
+        let restored = Arc::new(
+            Engine::resume(representative::generate(&Size::TINY, 7), &start)
+                .expect("valid formulas"),
         );
-        assert_eq!(written(&published(&mut applier, &first, 0, 2)), None);
+        let mut applier = applier(Arc::clone(&restored));
+        assert_eq!(written(&published(&mut applier, &restored, 0, 6)), None);
     }
 }

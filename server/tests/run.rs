@@ -526,20 +526,32 @@ async fn a_new_owner_starts_from_the_newest_snapshot_it_can_read() {
     assert_eq!(quantity_in(&engine), None);
 }
 
-#[tokio::test]
-#[should_panic(expected = "the engine starts where the change log starts")]
-async fn an_owner_does_not_start_when_the_engine_and_the_log_start_at_different_slots() {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+fn start_from(start: Start) {
     let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
     let _ = server::start(
         engine,
-        Start {
-            slot: Slot(1),
-            ..Start::default()
-        },
+        start,
         Settings::default(),
-        store,
+        Arc::new(InMemory::new()),
         WORKSPACE.to_owned(),
         Epoch(1),
     );
+}
+
+#[tokio::test]
+#[should_panic(expected = "the engine starts where the change log starts")]
+async fn an_owner_does_not_start_when_the_engine_and_the_log_start_at_different_slots() {
+    start_from(Start {
+        slot: Slot(1),
+        ..Start::default()
+    });
+}
+
+#[tokio::test]
+#[should_panic(expected = "the engine starts where the change log starts")]
+async fn an_owner_does_not_start_when_the_engine_and_the_log_start_at_different_counts() {
+    start_from(Start {
+        request_ids: vec![RequestId(Bytes::from_static(b"r0"))],
+        ..Start::default()
+    });
 }
