@@ -3,6 +3,7 @@ mod edit;
 mod owner;
 
 pub mod http;
+pub mod snapshot;
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
