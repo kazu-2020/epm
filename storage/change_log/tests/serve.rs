@@ -25,7 +25,7 @@ const WORKSPACE: &str = "ws";
 
 struct Owner {
     requests: mpsc::Sender<Submission<Infallible>>,
-    committed: mpsc::UnboundedReceiver<Commit>,
+    committed: mpsc::UnboundedReceiver<(Slot, Commit)>,
     exit: JoinHandle<Exit>,
 }
 
@@ -59,7 +59,7 @@ fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Owner {
 impl Owner {
     fn passed_on(&mut self) -> Vec<(String, Sequence)> {
         let mut passed_on = Vec::new();
-        while let Ok(commit) = self.committed.try_recv() {
+        while let Ok((_, commit)) = self.committed.try_recv() {
             passed_on.push((name(&commit.request_id), commit.sequence));
         }
         passed_on

@@ -50,7 +50,7 @@ pub async fn serve<A: Admit>(
     start: Start,
     admit: A,
     mut requests: mpsc::Receiver<Submission<A::Rejection>>,
-    commits: mpsc::UnboundedSender<Commit>,
+    commits: mpsc::UnboundedSender<(Slot, Commit)>,
 ) -> Exit {
     let log = Path::from(workspace).join("log");
     let first = start.slot;
@@ -88,8 +88,8 @@ pub async fn serve<A: Admit>(
                 Effect::Get { slot } => {
                     io.push(read_back(Arc::clone(&store), key(&log, slot), slot).boxed());
                 }
-                Effect::Committed(commit) => {
-                    if commits.send(commit).is_err() {
+                Effect::Committed { slot, commit } => {
+                    if commits.send((slot, commit)).is_err() {
                         return Exit::Closed;
                     }
                 }
