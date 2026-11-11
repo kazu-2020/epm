@@ -1,6 +1,7 @@
 mod apply;
 mod edit;
 mod owner;
+mod restore;
 
 pub mod http;
 pub mod snapshot;
@@ -10,7 +11,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use change_log::{Commit, Sequence};
+use change_log::{Commit, RequestId, Sequence, Slot, Start};
 use dimension::Dimension;
 use evaluator::EvaluateError;
 use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
@@ -19,6 +20,7 @@ use workspace::Workspace;
 
 pub use crate::edit::{DecodeError, Edit};
 pub use crate::owner::{Calculation, Handle, Lag, ReadError, Settings, SubmitError, start};
+pub use crate::restore::restore;
 
 #[derive(Debug, PartialEq)]
 pub enum Exit {
@@ -33,6 +35,7 @@ pub struct Engine {
     formulas: Arc<[(MeasureUlid, CheckedExpression)]>,
     definitions: Definitions,
     next: Sequence,
+    slot: Slot,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +97,10 @@ pub enum EngineAlarm {
 
 impl Engine {
     pub fn new(workspace: Workspace) -> Result<Engine, FormulaError> {
+        Engine::resume(workspace, &Start::default())
+    }
+
+    pub fn resume(workspace: Workspace, start: &Start) -> Result<Engine, FormulaError> {
         let Workspace {
             dimensions,
             inputs,
@@ -142,7 +149,8 @@ impl Engine {
             measures,
             formulas: checked.into(),
             definitions: input_definitions,
-            next: Sequence::default(),
+            next: Sequence(u64::try_from(start.request_ids.len()).expect("a count fits in u64")),
+            slot: start.slot,
         })
     }
 
@@ -154,13 +162,13 @@ impl Engine {
         &self.definitions
     }
 
-    pub fn apply_batch(&self, commits: &[Commit]) -> Result<Engine, EngineAlarm> {
-        let (Some(first), Some(last)) = (commits.first(), commits.last()) else {
+    pub fn apply_batch(&self, commits: &[(Slot, Commit)]) -> Result<Engine, EngineAlarm> {
+        let (Some((_, first)), Some((slot, last))) = (commits.first(), commits.last()) else {
             return Ok(self.clone());
         };
         let mut next = self.next;
         let mut deltas = BTreeMap::new();
-        for commit in commits {
+        for (_, commit) in commits {
             let sequence = commit.sequence;
             if sequence != next {
                 return Err(EngineAlarm::OutOfOrder {
@@ -199,6 +207,7 @@ impl Engine {
             formulas: Arc::clone(&self.formulas),
             definitions: self.definitions.clone(),
             next,
+            slot: *slot,
         })
     }
 
@@ -208,6 +217,22 @@ impl Engine {
 
     pub fn recalculated(&self) -> Option<Sequence> {
         self.next.0.checked_sub(1).map(Sequence)
+    }
+
+    fn snapshot(&self, request_ids: &[RequestId]) -> snapshot::Snapshot {
+        snapshot::Snapshot {
+            start: Start {
+                slot: self.slot,
+                request_ids: if cfg!(feature = "snapshot_without_request_ids") {
+                    Vec::new()
+                } else if cfg!(feature = "snapshot_ahead") {
+                    request_ids.to_vec()
+                } else {
+                    request_ids[..self.next.index()].to_vec()
+                },
+            },
+            inputs: self.measures[..self.definitions.inputs.len()].to_vec(),
+        }
     }
 }
 

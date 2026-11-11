@@ -3,22 +3,25 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use change_log::{Commit, Epoch, Request, Sequence};
+use change_log::{Commit, Epoch, Request, Sequence, Slot, Start};
 use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::{Dimension, MemberId};
 use formula::CheckedExpression;
-use futures_util::{FutureExt, StreamExt, stream};
+use futures_util::{FutureExt, StreamExt, TryStreamExt, stream};
 use measure::{Measure, MeasureDefinition};
-use object_store::ObjectStore;
 use object_store::memory::InMemory;
+use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt};
 use oracle::Oracle;
+use server::snapshot::Manifest;
 use server::{Calculation, Edit, Engine, Exit, Rejection, Settings, SubmitError};
+use tokio::sync::oneshot;
 use workspace::Workspace;
 
 const DEFAULT_SEEDS: u64 = 2000;
@@ -107,37 +110,69 @@ impl Model {
 }
 
 struct Owners {
-    engine: Engine,
     inputs: Vec<MeasureDefinition>,
     results: Vec<MeasureDefinition>,
     seed: u64,
+    restored: Arc<Mutex<Vec<(u64, Start)>>>,
+}
+
+#[derive(Debug, PartialEq)]
+struct Run {
+    outcome: common::Outcome,
+    restored: Vec<(u64, Start)>,
+    snapshots: BTreeMap<String, Bytes>,
 }
 
 impl common::Server for Owners {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
         let mut settings = Settings {
             calculation: Calculation::Inline(CALCULATION),
+            snapshot_every: 1 + self.seed % 3,
             ..Settings::default()
         };
         if self.seed.is_multiple_of(2) {
             settings.busy_after = self.seed / 2 % 3;
         }
-        let (handle, owner) = server::start(
-            self.engine.clone(),
-            settings,
-            store,
-            workspace,
-            Epoch(epoch),
-        );
-        let recalculated = stream::unfold(handle.published(), |mut published| async move {
-            published.changed().await.ok()?;
-            let sequence = published.borrow_and_update().recalculated();
-            Some((sequence, published))
-        })
-        .filter_map(std::future::ready);
+        let (started, handle) = oneshot::channel();
+        // Not a watch: it wakes its waiters in a random order, and the requests would reach the owner in another order on each run.
+        let handle = handle.map(Result::ok).shared();
+        let restored = Arc::clone(&self.restored);
+        let exit = async move {
+            let definition = representative::generate(&Size::TINY, 7);
+            let (engine, start) = server::restore(store.as_ref(), &workspace, definition)
+                .await
+                .map_err(|error| format!("{error:?}"))?;
+            restored
+                .lock()
+                .expect("restored")
+                .push((epoch, start.clone()));
+            let (handle, owner) =
+                server::start(engine, start, settings, store, workspace, Epoch(epoch));
+            let _ = started.send(handle);
+            match owner.await {
+                Exit::ChangeLog(exit) => Ok(exit),
+                Exit::Engine(alarm) => Err(format!("{alarm:?}")),
+            }
+        };
+        let recalculated = stream::once(handle.clone())
+            .filter_map(std::future::ready)
+            .flat_map(|handle| {
+                // Not only the changes: an owner from a snapshot starts with its commits recalculated.
+                let first = handle.published().borrow().recalculated();
+                stream::once(std::future::ready(first)).chain(stream::unfold(
+                    handle.published(),
+                    |mut published| async move {
+                        published.changed().await.ok()?;
+                        let sequence = published.borrow_and_update().recalculated();
+                        Some((sequence, published))
+                    },
+                ))
+            })
+            .filter_map(std::future::ready);
         let submit: common::Submit = Arc::new(move |request: Request| {
             let handle = handle.clone();
             async move {
+                let handle = handle.await?;
                 let edit = Edit::decode(request.payload).expect("the simulation sends edits");
                 match handle.submit(request.request_id, &edit).await {
                     Ok(sequence) => Some(Ok(sequence)),
@@ -152,12 +187,6 @@ impl common::Server for Owners {
             }
             .boxed()
         });
-        let exit = async move {
-            match owner.await {
-                Exit::ChangeLog(exit) => Ok(exit),
-                Exit::Engine(alarm) => Err(format!("{alarm:?}")),
-            }
-        };
         common::Started {
             exit: exit.boxed(),
             submit,
@@ -188,9 +217,9 @@ impl common::Server for Owners {
     }
 }
 
-fn simulate(model: &Model, seed: u64) -> common::Outcome {
+fn simulate(model: &Model, seed: u64) -> Run {
+    let restored = Arc::new(Mutex::new(Vec::new()));
     let owners = Owners {
-        engine: model.engine.clone(),
         inputs: model
             .workspace
             .inputs
@@ -204,18 +233,39 @@ fn simulate(model: &Model, seed: u64) -> common::Outcome {
             .map(|formula| formula.result.clone())
             .collect(),
         seed,
+        restored: Arc::clone(&restored),
     };
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)
         .build()
         .expect("a runtime")
-        .block_on(common::simulate(
-            Arc::new(owners),
-            Arc::new(InMemory::new()),
-            "ws",
-            seed,
-        ))
+        .block_on(async {
+            let outcome = common::simulate(Arc::new(owners), Arc::clone(&inner), "ws", seed).await;
+            let listed: Vec<_> = inner
+                .list(Some(&Path::from("ws/snapshot")))
+                .try_collect()
+                .await
+                .expect("list the snapshots");
+            let mut snapshots = BTreeMap::new();
+            for meta in listed {
+                let body = inner
+                    .get(&meta.location)
+                    .await
+                    .expect("get a snapshot object")
+                    .bytes()
+                    .await
+                    .expect("read a snapshot object");
+                snapshots.insert(meta.location.to_string(), body);
+            }
+            let restored = std::mem::take(&mut *restored.lock().expect("restored"));
+            Run {
+                outcome,
+                restored,
+                snapshots,
+            }
+        })
 }
 
 fn cells(measure: &Measure) -> Vec<(Vec<u32>, String)> {
@@ -224,6 +274,10 @@ fn cells(measure: &Measure) -> Vec<(Vec<u32>, String)> {
 
 fn recalculated_log(model: &Model, log: &[Commit], batch: usize) -> Result<Engine, String> {
     let mut engine = model.engine.clone();
+    let log: Vec<(Slot, Commit)> = log
+        .iter()
+        .map(|commit| (Slot::default(), commit.clone()))
+        .collect();
     for commits in log.chunks(batch) {
         engine = engine
             .apply_batch(commits)
@@ -324,6 +378,98 @@ fn recalculation_witnesses(outcome: &common::Outcome) -> BTreeSet<&'static str> 
     seen
 }
 
+fn snapshots_match_log(model: &Model, run: &Run) -> common::Violations {
+    let (segments, log) = common::replay(&run.outcome.store);
+    let definitions: Vec<MeasureDefinition> = model
+        .workspace
+        .inputs
+        .iter()
+        .map(|input| input.definition().clone())
+        .collect();
+    let mut violations = common::Violations::new();
+    for (key, manifest) in &run.snapshots {
+        let Some(folder) = key.strip_suffix("/manifest") else {
+            continue;
+        };
+        let mut violate = |detail: String| {
+            violations
+                .entry("snapshotMatchesLog")
+                .or_insert(format!("{folder}: {detail}"));
+        };
+        let manifest = Manifest::decode(manifest.clone()).expect("the server writes manifests");
+        let objects: Option<Vec<Bytes>> = manifest
+            .paths()
+            .iter()
+            .map(|path| run.snapshots.get(&format!("{folder}/{path}")).cloned())
+            .collect();
+        let Some(objects) = objects else {
+            violate("an object of the manifest is missing".to_owned());
+            continue;
+        };
+        let snapshot = match manifest.decode_objects(objects, &definitions, &model.dimensions()) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                violate(format!("{error:?}"));
+                continue;
+            }
+        };
+        let start = &snapshot.start;
+        let count = start.request_ids.len();
+        let Some(prefix) = log.get(..count) else {
+            violate(format!("{count} commits, but the log holds {}", log.len()));
+            continue;
+        };
+        if prefix
+            .iter()
+            .map(|commit| &commit.request_id)
+            .ne(&start.request_ids)
+        {
+            violate("the Request IDs are not the start of the log".to_owned());
+        }
+        let last = count.checked_sub(1).map(|last| Sequence(last as u64));
+        let in_slot = segments.get(&start.slot).is_some_and(|segment| {
+            segment
+                .commits
+                .iter()
+                .any(|commit| Some(commit.sequence) == last)
+        });
+        if last.is_some() && !in_slot {
+            violate(format!("{:?} does not hold {last:?}", start.slot));
+        }
+        let expected = model.fold(prefix).expect("the log holds valid edits");
+        if snapshot
+            .inputs
+            .iter()
+            .zip(&expected)
+            .any(|(input, expected)| cells(input) != cells(expected))
+        {
+            violate("the cells differ from the start of the log".to_owned());
+        }
+    }
+    violations
+}
+
+fn snapshot_witnesses(run: &Run) -> BTreeSet<&'static str> {
+    let counts: BTreeMap<u64, u64> = run
+        .restored
+        .iter()
+        .filter(|(_, start)| !start.request_ids.is_empty())
+        .map(|(epoch, start)| (*epoch, start.request_ids.len() as u64))
+        .collect();
+    let mut seen = BTreeSet::new();
+    if !counts.is_empty() {
+        seen.insert("startedFromSnapshot");
+    }
+    let acked_from_snapshot = run.outcome.history.iter().any(|record| {
+        matches!(record, Record::Acked { epoch, sequence, .. }
+            if counts.get(epoch).is_some_and(|count| sequence.0 < *count))
+    });
+    if acked_from_snapshot {
+        seen.insert("resendAckedFromSnapshot");
+    }
+    seen
+}
+
 fn seeds() -> Vec<u64> {
     if let Ok(seed) = std::env::var("DST_SEED") {
         return vec![seed.parse().expect("DST_SEED is a number")];
@@ -350,12 +496,15 @@ fn seeds_keep_the_invariants() {
                         .skip(thread)
                         .step_by(threads)
                         .map(|&seed| {
-                            let outcome = simulate(model, seed);
-                            let mut violations = common::check(&outcome);
-                            violations.extend(final_values(model, seed, &outcome));
-                            let mut witnesses = common::witnesses(&outcome);
-                            witnesses.extend(recalculation_witnesses(&outcome));
-                            (seed, violations, witnesses, common::counts(&outcome))
+                            let run = simulate(model, seed);
+                            let outcome = &run.outcome;
+                            let mut violations = common::check(outcome);
+                            violations.extend(final_values(model, seed, outcome));
+                            violations.extend(snapshots_match_log(model, &run));
+                            let mut witnesses = common::witnesses(outcome);
+                            witnesses.extend(recalculation_witnesses(outcome));
+                            witnesses.extend(snapshot_witnesses(&run));
+                            (seed, violations, witnesses, common::counts(outcome))
                         })
                         .collect::<Vec<_>>()
                 })
@@ -406,6 +555,7 @@ fn seeds_keep_the_invariants() {
             "refusedBusy",
             "refusedInvalid",
             "sameBytesResent",
+            "startedFromSnapshot",
             "storeRejectedPut",
             "twoAcknowledged",
         ];
@@ -431,7 +581,7 @@ fn a_seed_gives_the_same_history_every_time() {
 fn final_values_agree_with_duckdb() {
     let model = Model::new();
     for seed in 0..20 {
-        let outcome = simulate(&model, seed);
+        let outcome = simulate(&model, seed).outcome;
         let (_, log) = common::replay(&outcome.store);
         let inputs = model.fold(&log).expect("the log holds valid edits");
         let references: Vec<&Measure> = inputs.iter().collect();
