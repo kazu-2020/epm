@@ -32,7 +32,7 @@ body_of() { echo "${1#* }"; }
 start() {
   # Not only the wait below: another server on the same address also answers GetLag, and the demo would write to that server.
   ! call GetLag '{}' >/dev/null 2>&1 || fail "another server listens on $listen"
-  target/debug/server --listen "$listen" --workspace "$workspace" &
+  cargo run --locked --quiet -- --listen "$listen" --workspace "$workspace" &
   server_pid=$!
   for _ in $(seq 1 150); do
     kill -0 "$server_pid" 2>/dev/null || fail "the server exited at start"

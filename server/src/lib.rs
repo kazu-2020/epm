@@ -183,7 +183,16 @@ impl Engine {
             .map_err(|error| EngineAlarm::Failed {
                 sequences: first.sequence..=last.sequence,
                 error,
-            })?;
+            })?
+            .iter()
+            .map(|measure| {
+                if measure.delta_len() > 0 {
+                    measure.fold_deltas()
+                } else {
+                    measure.clone()
+                }
+            })
+            .collect();
         Ok(Engine {
             dimensions: Arc::clone(&self.dimensions),
             measures,

@@ -152,6 +152,18 @@ fn the_representative_model_declares_its_axes_in_key_order() {
             definition.name
         );
     }
+}
+
+#[test]
+fn the_quantity_has_exactly_the_requested_cells_when_they_do_not_divide_evenly() {
+    let size = datagen::representative::Size {
+        products: 4,
+        customers: 3,
+        departments_per_kind: 2,
+        quantity_cells: 130,
+        account_fill: 0.5,
+    };
+    let workspace = datagen::representative::generate(&size, 1);
     let quantity = workspace
         .inputs
         .iter()
