@@ -1,0 +1,13 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "linkedProjects": [
+          "compute_engine/Cargo.toml",
+          "server/Cargo.toml",
+          "storage/change_log/Cargo.toml"
+        ]
+      }
+    }
+  }
+}
