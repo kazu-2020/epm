@@ -525,6 +525,9 @@ impl Measure {
     }
 
     pub fn fold_deltas(&self) -> Measure {
+        if matches!(self.deltas[..], [] | [_]) {
+            return self.clone();
+        }
         let (keys, changes) = self.merged_changes();
         let mut measure = self.clone();
         measure.deltas = vec![Arc::new(Delta {

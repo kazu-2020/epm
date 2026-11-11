@@ -193,13 +193,7 @@ impl Engine {
                 error,
             })?
             .iter()
-            .map(|measure| {
-                if measure.delta_len() > 0 {
-                    measure.fold_deltas()
-                } else {
-                    measure.clone()
-                }
-            })
+            .map(Measure::fold_deltas)
             .collect();
         Ok(Engine {
             dimensions: Arc::clone(&self.dimensions),
