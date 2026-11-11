@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use change_log::{Commit, RequestId, Sequence};
+use change_log::{Commit, RequestId, Sequence, Slot};
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::MemberId;
@@ -28,12 +28,15 @@ fn quantity(coordinate: [u32; 5], value: Option<f64>) -> Edit {
     }
 }
 
-fn commit(sequence: u64, edit: &Edit) -> Commit {
-    Commit {
-        request_id: RequestId(Bytes::from(format!("r{sequence}"))),
-        sequence: Sequence(sequence),
-        payload: edit.encode(),
-    }
+fn commit(sequence: u64, edit: &Edit) -> (Slot, Commit) {
+    (
+        Slot(sequence),
+        Commit {
+            request_id: RequestId(Bytes::from(format!("r{sequence}"))),
+            sequence: Sequence(sequence),
+            payload: edit.encode(),
+        },
+    )
 }
 
 fn cell(engine: &Engine, measure: MeasureUlid, coordinate: &[u32]) -> Option<f64> {
@@ -47,7 +50,7 @@ fn cell(engine: &Engine, measure: MeasureUlid, coordinate: &[u32]) -> Option<f64
         .expect("the coordinate fits")
 }
 
-fn applied(engine: &Engine, commits: &[Commit]) -> Engine {
+fn applied(engine: &Engine, commits: &[(Slot, Commit)]) -> Engine {
     engine
         .apply_batch(commits)
         .expect("the engine applies the batch")
@@ -162,7 +165,7 @@ fn a_batch_gives_the_values_of_its_commits_one_by_one() {
         quantity(first, Some(7.0)),
         quantity(second, None),
     ];
-    let commits: Vec<Commit> = (0..)
+    let commits: Vec<(Slot, Commit)> = (0..)
         .zip(&edits)
         .map(|(sequence, edit)| commit(sequence, edit))
         .collect();
@@ -203,7 +206,7 @@ fn a_commit_that_does_not_pass_the_check_is_an_alarm() {
     let engine = engine();
     let good = commit(0, &quantity([0, 0, 1, 0, 0], Some(1.0)));
     let mut garbage = commit(1, &quantity([0, 0, 1, 0, 0], Some(1.0)));
-    garbage.payload = Bytes::from_static(b"\x09");
+    garbage.1.payload = Bytes::from_static(b"\x09");
     assert_eq!(
         engine.apply_batch(&[good.clone(), garbage]).err(),
         Some(EngineAlarm::Invalid {

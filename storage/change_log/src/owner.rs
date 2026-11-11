@@ -50,7 +50,10 @@ pub enum Effect<R> {
     Get {
         slot: Slot,
     },
-    Committed(Commit),
+    Committed {
+        slot: Slot,
+        commit: Commit,
+    },
     Ack {
         request_id: RequestId,
         sequence: Sequence,
@@ -225,7 +228,7 @@ fn transition<A: Admit>(
             },
             Outcome::Committed(fence) => ready(view, next(fence.slot), waiting, admit, effects),
             Outcome::OlderEpoch(taken, found) => {
-                view.add_older(&found.commits, admit, effects);
+                view.add_older(&found.commits, taken.slot, admit, effects);
                 let fence = Write::new(epoch, next(taken.slot), Vec::new());
                 effects.push(fence.put());
                 Phase::Fencing {
@@ -257,7 +260,7 @@ fn transition<A: Admit>(
             match advance(epoch, write, event, effects) {
                 Outcome::Waiting(write) => *cell = Some(write),
                 Outcome::Committed(write) => {
-                    ready.view.add(&write.commits, effects);
+                    ready.view.add(&write.commits, write.slot, effects);
                     for commit in write.commits {
                         effects.push(Effect::Ack {
                             request_id: commit.request_id,
@@ -345,7 +348,7 @@ fn replay<A: Admit>(
         } else {
             0
         };
-        view.add_older(&segment.commits[skipped..], admit, effects);
+        view.add_older(&segment.commits[skipped..], *slot, admit, effects);
     }
     view
 }
@@ -517,21 +520,25 @@ impl View {
     fn add_older<A: Admit>(
         &mut self,
         commits: &[Commit],
+        slot: Slot,
         admit: &mut A,
         effects: &mut Vec<Effect<A::Rejection>>,
     ) {
-        self.add(commits, effects);
+        self.add(commits, slot, effects);
         for commit in commits {
             admit.replay(&commit.payload);
         }
     }
 
-    fn add<R>(&mut self, commits: &[Commit], effects: &mut Vec<Effect<R>>) {
+    fn add<R>(&mut self, commits: &[Commit], slot: Slot, effects: &mut Vec<Effect<R>>) {
         for commit in commits {
             self.sequences
                 .insert(commit.request_id.clone(), commit.sequence);
             self.next_sequence = self.next_sequence.next();
-            effects.push(Effect::Committed(commit.clone()));
+            effects.push(Effect::Committed {
+                slot,
+                commit: commit.clone(),
+            });
         }
     }
 }

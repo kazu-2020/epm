@@ -5,7 +5,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use change_log::Epoch;
 use datagen::representative::{self, Size};
 use object_store::aws::AmazonS3Builder;
-use server::{Engine, Settings};
+use server::Settings;
 
 // shortcut: the workspace definition is fixed in code because the log does not hold it, put it in the log when users define their own.
 const SIZE: Size = Size::TINY;
@@ -40,8 +40,18 @@ async fn main() -> ExitCode {
         }
     };
     let started = Instant::now();
-    let engine = Engine::new(representative::generate(&SIZE, SEED)).expect("valid formulas");
-    eprintln!("engine ready in {:?}", started.elapsed());
+    let (engine, start) = server::restore(
+        store.as_ref(),
+        &arguments.workspace,
+        representative::generate(&SIZE, SEED),
+    )
+    .await
+    .expect("valid formulas");
+    eprintln!(
+        "engine ready in {:?} from Commit Sequence {}",
+        started.elapsed(),
+        start.request_ids.len()
+    );
     let listener = match tokio::net::TcpListener::bind(&arguments.listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -55,6 +65,7 @@ async fn main() -> ExitCode {
     );
     let (handle, owner) = server::start(
         engine,
+        start,
         Settings::default(),
         store,
         arguments.workspace,

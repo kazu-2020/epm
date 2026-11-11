@@ -5,7 +5,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
-use change_log::Epoch;
+use change_log::{Epoch, Start};
 use datagen::representative::{self, Size};
 use measure::MeasureUlid;
 use object_store::memory::InMemory;
@@ -33,6 +33,7 @@ fn app(settings: Settings) -> App {
         .expect("the seed has a quantity");
     let (handle, owner) = server::start(
         engine,
+        Start::default(),
         settings,
         Arc::new(InMemory::new()),
         "ws".to_owned(),
@@ -222,6 +223,7 @@ async fn each_refusal_has_its_connect_code() {
     let app = app(Settings {
         busy_after: 0,
         calculation: Calculation::Inline(Duration::from_secs(10)),
+        ..Settings::default()
     });
     let unknown = MeasureUlid(Ulid(999));
     let read_of = |at_least: u64, cell: Value| json!({ "at_least": at_least, "cells": [cell] });

@@ -308,7 +308,7 @@ impl Replay {
                     };
                     self.writes_in_flight.insert(write, segment);
                 }
-                Effect::Committed(commit) => {
+                Effect::Committed { commit, .. } => {
                     let logged = self.log().get(commit.sequence.index()) == Some(&&commit);
                     let passed_on = self
                         .passed_on

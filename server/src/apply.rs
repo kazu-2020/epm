@@ -1,46 +1,82 @@
 use std::sync::Arc;
 
-use change_log::Commit;
+use change_log::{Commit, RequestId, Slot};
 
+use crate::snapshot::Snapshot;
 use crate::{Engine, EngineAlarm};
 
 pub(crate) enum Event {
-    Committed(Vec<Commit>),
+    Committed(Vec<(Slot, Commit)>),
     Finished(Result<Engine, EngineAlarm>),
+    SnapshotWritten(Option<Slot>),
 }
 
 #[derive(Debug)]
 pub(crate) enum Effect {
     Calculate {
         engine: Arc<Engine>,
-        commits: Vec<Commit>,
+        commits: Vec<(Slot, Commit)>,
     },
     Publish(Arc<Engine>),
+    WriteSnapshot(Snapshot),
     Alarm(EngineAlarm),
 }
 
 pub(crate) struct Applier {
     state: State,
+    request_ids: Vec<RequestId>,
+    snapshot_every: u64,
+    snapshot_slot: Slot,
+    writing: bool,
 }
 
 enum State {
     Idle(Arc<Engine>),
-    Calculating { pending: Vec<Commit> },
+    Calculating { pending: Vec<(Slot, Commit)> },
     Stopped,
 }
 
 impl Applier {
-    pub(crate) fn new(engine: Arc<Engine>) -> Applier {
+    pub(crate) fn new(
+        engine: Arc<Engine>,
+        request_ids: Vec<RequestId>,
+        snapshot_every: u64,
+    ) -> Applier {
         Applier {
+            snapshot_slot: engine.slot,
             state: State::Idle(engine),
+            request_ids,
+            snapshot_every,
+            writing: false,
         }
     }
 
     #[must_use]
     pub(crate) fn step(&mut self, event: Event) -> Vec<Effect> {
+        match &event {
+            Event::Committed(commits) => self
+                .request_ids
+                .extend(commits.iter().map(|(_, commit)| commit.request_id.clone())),
+            Event::SnapshotWritten(written) => {
+                self.writing = false;
+                self.snapshot_slot = self.snapshot_slot.max(written.unwrap_or_default());
+            }
+            Event::Finished(_) => {}
+        }
         let mut effects = Vec::new();
         let state = std::mem::replace(&mut self.state, State::Stopped);
         self.state = transition(state, event, &mut effects);
+        let published = effects.iter().find_map(|effect| match effect {
+            Effect::Publish(engine) => Some(Arc::clone(engine)),
+            _ => None,
+        });
+        if let Some(engine) = published
+            && !self.writing
+            && engine.slot.0 >= self.snapshot_slot.0 + self.snapshot_every
+        {
+            self.writing = true;
+            effects.push(Effect::WriteSnapshot(engine.snapshot(&self.request_ids)));
+        }
         effects
     }
 }
@@ -71,7 +107,11 @@ fn transition(state: State, event: Event, effects: &mut Vec<Effect>) -> State {
     }
 }
 
-fn calculate(engine: Arc<Engine>, commits: Vec<Commit>, effects: &mut Vec<Effect>) -> State {
+fn calculate(
+    engine: Arc<Engine>,
+    commits: Vec<(Slot, Commit)>,
+    effects: &mut Vec<Effect>,
+) -> State {
     effects.push(Effect::Calculate { engine, commits });
     State::Calculating {
         pending: Vec::new(),
@@ -82,6 +122,8 @@ fn calculate(engine: Arc<Engine>, commits: Vec<Commit>, effects: &mut Vec<Effect
 mod tests {
     use bytes::Bytes;
     use change_log::{RequestId, Sequence};
+
+    use crate::snapshot::Snapshot;
     use datagen::representative::{self, Size};
 
     use super::*;
@@ -90,26 +132,36 @@ mod tests {
         Arc::new(Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas"))
     }
 
-    fn commit(sequence: u64) -> Commit {
-        Commit {
-            request_id: RequestId(Bytes::from(format!("r{sequence}"))),
-            sequence: Sequence(sequence),
-            payload: Bytes::new(),
-        }
+    fn commit(sequence: u64) -> (Slot, Commit) {
+        (
+            Slot(sequence),
+            Commit {
+                request_id: RequestId(Bytes::from(format!("r{sequence}"))),
+                sequence: Sequence(sequence),
+                payload: Bytes::new(),
+            },
+        )
+    }
+
+    fn applier(engine: Arc<Engine>) -> Applier {
+        Applier::new(engine, Vec::new(), u64::MAX)
     }
 
     fn committed(sequence: u64) -> Event {
         Event::Committed(vec![commit(sequence)])
     }
 
-    fn sequences(commits: &[Commit]) -> Vec<u64> {
-        commits.iter().map(|commit| commit.sequence.0).collect()
+    fn sequences(commits: &[(Slot, Commit)]) -> Vec<u64> {
+        commits
+            .iter()
+            .map(|(_, commit)| commit.sequence.0)
+            .collect()
     }
 
     #[test]
     fn commits_that_arrive_during_a_calculation_form_the_next_batch() {
         let first = engine();
-        let mut applier = Applier::new(Arc::clone(&first));
+        let mut applier = applier(Arc::clone(&first));
         let effects = applier.step(committed(0));
         let [Effect::Calculate { engine, commits }] = &effects[..] else {
             panic!("{effects:?}")
@@ -150,7 +202,7 @@ mod tests {
 
     #[test]
     fn an_idle_applier_calculates_the_commits_that_arrived_together_in_one_batch() {
-        let mut applier = Applier::new(engine());
+        let mut applier = applier(engine());
         let effects = applier.step(Event::Committed((0..3).map(commit).collect()));
         let [Effect::Calculate { commits, .. }] = &effects[..] else {
             panic!("{effects:?}")
@@ -160,7 +212,7 @@ mod tests {
 
     #[test]
     fn an_empty_batch_starts_no_calculation() {
-        let mut applier = Applier::new(engine());
+        let mut applier = applier(engine());
         assert!(applier.step(Event::Committed(Vec::new())).is_empty());
         assert_eq!(
             applier.step(committed(0)).len(),
@@ -171,7 +223,7 @@ mod tests {
 
     #[test]
     fn a_failed_calculation_raises_an_alarm_and_stops() {
-        let mut applier = Applier::new(engine());
+        let mut applier = applier(engine());
         assert_eq!(applier.step(committed(0)).len(), 1);
         assert!(applier.step(committed(1)).is_empty());
         let alarm = EngineAlarm::OutOfOrder {
@@ -192,6 +244,82 @@ mod tests {
         assert!(
             applier.step(committed(2)).is_empty(),
             "a stopped applier does nothing"
+        );
+    }
+
+    fn edit(sequence: u64, slot: u64, engine: &Engine) -> (Slot, Commit) {
+        let input = &engine.measures()[0];
+        let edit = crate::Edit {
+            measure: input.ulid(),
+            coordinate: vec![dimension::MemberId(0); input.definition().axes.len()],
+            value: Some(sequence as f64),
+        };
+        let (_, commit) = commit(sequence);
+        (
+            Slot(slot),
+            Commit {
+                payload: edit.encode(),
+                ..commit
+            },
+        )
+    }
+
+    fn applied(applier: &mut Applier, effects: Vec<Effect>) -> Vec<Effect> {
+        let [Effect::Calculate { engine, commits }] = &effects[..] else {
+            panic!("{effects:?}")
+        };
+        applier.step(Event::Finished(engine.apply_batch(commits)))
+    }
+
+    fn written(effects: &[Effect]) -> Option<(Slot, usize)> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::WriteSnapshot(Snapshot { start, .. }) => {
+                Some((start.slot, start.request_ids.len()))
+            }
+            _ => None,
+        })
+    }
+
+    fn published(applier: &mut Applier, engine: &Engine, sequence: u64, slot: u64) -> Vec<Effect> {
+        let effects = applier.step(Event::Committed(vec![edit(sequence, slot, engine)]));
+        applied(applier, effects)
+    }
+
+    #[test]
+    fn a_snapshot_is_written_after_a_publish_once_the_slot_moved_far_enough() {
+        let first = engine();
+        let mut applier = Applier::new(Arc::clone(&first), Vec::new(), 2);
+        assert_eq!(written(&published(&mut applier, &first, 0, 0)), None);
+        assert_eq!(
+            written(&published(&mut applier, &first, 1, 2)),
+            Some((Slot(2), 2)),
+            "two slots after the start"
+        );
+        assert_eq!(
+            written(&published(&mut applier, &first, 2, 4)),
+            None,
+            "the write of slot 2 still runs"
+        );
+        assert!(
+            applier
+                .step(Event::SnapshotWritten(Some(Slot(2))))
+                .is_empty()
+        );
+        assert_eq!(
+            written(&published(&mut applier, &first, 3, 5)),
+            Some((Slot(5), 4))
+        );
+        assert!(applier.step(Event::SnapshotWritten(None)).is_empty());
+        let effects = applier.step(Event::Committed(vec![edit(4, 6, &first)]));
+        assert!(
+            applier
+                .step(Event::Committed(vec![edit(5, 7, &first)]))
+                .is_empty()
+        );
+        assert_eq!(
+            written(&applied(&mut applier, effects)),
+            Some((Slot(6), 5)),
+            "a failed write is tried again, and holds only the published commits"
         );
     }
 }

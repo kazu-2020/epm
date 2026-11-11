@@ -6,13 +6,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use change_log::{Admit, Commit, Epoch, Request, RequestId, Sequence, Start, Submission};
+use change_log::{Admit, Commit, Epoch, Request, RequestId, Sequence, Slot, Start, Submission};
 use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
-use object_store::ObjectStore;
+use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::apply::{Applier, Effect, Event};
+use crate::snapshot::{self, Snapshot};
 use crate::{Definitions, Edit, Engine, EngineAlarm, Exit, Rejection};
 
 const WAITING_REQUESTS: usize = 64;
@@ -20,6 +22,7 @@ const WAITING_REQUESTS: usize = 64;
 pub struct Settings {
     pub busy_after: u64,
     pub calculation: Calculation,
+    pub snapshot_every: u64,
 }
 
 pub enum Calculation {
@@ -38,6 +41,8 @@ impl Default for Settings {
             // shortcut: 1000 commits is a guess, set it from a benchmark of the recalculation time.
             busy_after: 1000,
             calculation: Calculation::Threads(threads),
+            // shortcut: 256 slots is a guess, set it from the start-up time of a large workspace.
+            snapshot_every: 256,
         }
     }
 }
@@ -69,7 +74,7 @@ pub struct Handle {
     committed_count: Arc<AtomicU64>,
     readiness: watch::Receiver<bool>,
     #[cfg(feature = "apply_before_commit")]
-    commits: mpsc::UnboundedSender<Commit>,
+    commits: mpsc::UnboundedSender<(Slot, Commit)>,
 }
 
 struct Admission {
@@ -88,9 +93,11 @@ enum Calculator {
 
 type Calculating = Pin<Box<dyn Future<Output = Result<Engine, EngineAlarm>> + Send>>;
 
-// shortcut: every new owner rebuilds the engine from the start of the log; add snapshots when start-up time matters.
+type Writing = Pin<Box<dyn Future<Output = Option<Slot>> + Send>>;
+
 pub fn start(
     engine: Engine,
+    start: Start,
     settings: Settings,
     store: Arc<dyn ObjectStore>,
     workspace: String,
@@ -120,6 +127,7 @@ pub fn start(
         #[cfg(feature = "apply_before_commit")]
         commits: commits.clone(),
     };
+    let request_ids = start.request_ids.clone();
     let run = async move {
         let calculator = match settings.calculation {
             Calculation::Threads(threads) => Calculator::Thread(pool(threads)),
@@ -128,10 +136,17 @@ pub fn start(
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
         tokio::select! {
             biased;
-            exit = change_log::serve(store, &workspace, epoch, Start::default(), admission, waiting, commits) => {
+            exit = change_log::serve(Arc::clone(&store), &workspace, epoch, start, admission, waiting, commits) => {
                 Exit::ChangeLog(exit)
             }
-            alarm = apply(engine, received, &calculator, &published, &committed_count) => {
+            alarm = apply(
+                Applier::new(engine, request_ids, settings.snapshot_every),
+                received,
+                &calculator,
+                &published,
+                &committed_count,
+                (&store, &workspace),
+            ) => {
                 Exit::Engine(alarm)
             }
         }
@@ -140,14 +155,15 @@ pub fn start(
 }
 
 async fn apply(
-    engine: Arc<Engine>,
-    mut commits: mpsc::UnboundedReceiver<Commit>,
+    mut applier: Applier,
+    mut commits: mpsc::UnboundedReceiver<(Slot, Commit)>,
     calculator: &Calculator,
     published: &watch::Sender<Arc<Engine>>,
     committed_count: &AtomicU64,
+    (store, workspace): (&Arc<dyn ObjectStore>, &str),
 ) -> EngineAlarm {
-    let mut applier = Applier::new(engine);
     let mut calculation = None;
+    let mut writing: Option<Writing> = None;
     loop {
         let event = tokio::select! {
             biased;
@@ -157,10 +173,10 @@ async fn apply(
                 while let Ok(commit) = commits.try_recv() {
                     batch.push(commit);
                 }
-                let last = batch.last().expect("the batch starts with a commit").sequence;
+                let last = batch.last().expect("the batch starts with a commit").1.sequence;
                 committed_count.fetch_max(last.0 + 1, Ordering::SeqCst);
                 if cfg!(feature = "skip_commit") {
-                    batch.retain(|commit| commit.sequence != Sequence(1));
+                    batch.retain(|(_, commit)| commit.sequence != Sequence(1));
                 }
                 if cfg!(feature = "swap_commits") && batch.len() > 1 {
                     batch.swap(0, 1);
@@ -174,6 +190,10 @@ async fn apply(
                 calculation = None;
                 Event::Finished(result)
             }
+            written = async { writing.as_mut().expect("a snapshot write runs").await }, if writing.is_some() => {
+                writing = None;
+                Event::SnapshotWritten(written)
+            }
             else => std::future::pending().await,
         };
         for effect in applier.step(event) {
@@ -183,6 +203,9 @@ async fn apply(
                 }
                 Effect::Publish(engine) => {
                     published.send_replace(engine);
+                }
+                Effect::WriteSnapshot(snapshot) => {
+                    writing = Some(calculator.write(Arc::clone(store), workspace, snapshot));
                 }
                 Effect::Alarm(alarm) => return alarm,
             }
@@ -217,11 +240,11 @@ fn on_pool(
 }
 
 impl Calculator {
-    fn calculate(&self, engine: Arc<Engine>, commits: Vec<Commit>) -> Calculating {
+    fn calculate(&self, engine: Arc<Engine>, commits: Vec<(Slot, Commit)>) -> Calculating {
         match self {
             Calculator::Thread(pool) => {
                 let first = engine.next;
-                let last = commits.last().map_or(first, |commit| commit.sequence);
+                let last = commits.last().map_or(first, |(_, commit)| commit.sequence);
                 on_pool(pool, first..=last, move || engine.apply_batch(&commits))
             }
             Calculator::Inline(cost) => {
@@ -233,6 +256,44 @@ impl Calculator {
             }
         }
     }
+
+    fn write(&self, store: Arc<dyn ObjectStore>, workspace: &str, snapshot: Snapshot) -> Writing {
+        let count = snapshot.start.request_ids.len();
+        let folder = format!("{workspace}/snapshot/{count:020}");
+        let slot = snapshot.start.slot;
+        let encoded = match self {
+            Calculator::Thread(pool) => {
+                let (finished, encoded) = oneshot::channel();
+                pool.spawn(move || {
+                    // Not an error: the owner stopped and does not write the snapshot.
+                    let _ = finished.send(snapshot::encode(&snapshot));
+                });
+                encoded
+            }
+            Calculator::Inline(_) => {
+                let (finished, encoded) = oneshot::channel();
+                let _ = finished.send(snapshot::encode(&snapshot));
+                encoded
+            }
+        };
+        Box::pin(async move {
+            let (objects, manifest) = encoded.await.ok()?;
+            // shortcut: one PUT at a time, put the chunks in parallel when a snapshot of a large workspace takes too long.
+            for object in objects {
+                let path = Path::from(format!("{folder}/{}", object.path));
+                store.put(&path, object.bytes.into()).await.ok()?;
+            }
+            let manifest_path = Path::from(format!("{folder}/manifest"));
+            match store
+                .put_opts(&manifest_path, manifest.into(), PutMode::Create.into())
+                .await
+            {
+                // Not read back: a snapshot of the same count holds the same cells, because it is a cache of the same start of the log.
+                Ok(_) | Err(object_store::Error::AlreadyExists { .. }) => Some(slot),
+                Err(_) => None,
+            }
+        })
+    }
 }
 
 impl Handle {
@@ -243,11 +304,14 @@ impl Handle {
     ) -> Result<Sequence, SubmitError> {
         let payload = edit.encode();
         #[cfg(feature = "apply_before_commit")]
-        let _ = self.commits.send(Commit {
-            request_id: request_id.clone(),
-            sequence: self.published.borrow().next,
-            payload: payload.clone(),
-        });
+        let _ = self.commits.send((
+            self.published.borrow().slot,
+            Commit {
+                request_id: request_id.clone(),
+                sequence: self.published.borrow().next,
+                payload: payload.clone(),
+            },
+        ));
         let (submission, ack) = Submission::new(Request {
             request_id,
             payload,

@@ -8,7 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use change_log::{
-    AdmitAll, Commit, Epoch, Exit, Request, RequestId, Sequence, Start, Submission, serve,
+    AdmitAll, Commit, Epoch, Exit, Request, RequestId, Sequence, Slot, Start, Submission, serve,
 };
 use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
@@ -86,7 +86,7 @@ pub trait Server: Send + Sync {
 pub struct Started {
     pub exit: BoxFuture<'static, Result<Exit, String>>,
     pub submit: Submit,
-    pub passed_on: Option<mpsc::UnboundedReceiver<Commit>>,
+    pub passed_on: Option<mpsc::UnboundedReceiver<(Slot, Commit)>>,
     pub recalculated: Option<BoxStream<'static, Sequence>>,
 }
 
@@ -251,6 +251,9 @@ async fn apply_and_record(
 ) -> object_store::Result<PutResult> {
     let body = Bytes::from(payload.clone());
     let result = inner.put_opts(&location, payload, options).await;
+    if !in_log(&location) {
+        return result;
+    }
     let applied = match &result {
         Ok(_) => true,
         Err(object_store::Error::AlreadyExists { .. }) => {
@@ -269,6 +272,11 @@ async fn apply_and_record(
     result
 }
 
+// Not every key: the checks read each recorded key as a segment, and a server can write other objects such as snapshots.
+fn in_log(location: &Path) -> bool {
+    location.parts().any(|part| part.as_ref() == "log")
+}
+
 async fn read(store: &dyn ObjectStore, location: &Path) -> Option<Bytes> {
     store.get(location).await.ok()?.bytes().await.ok()
 }
@@ -282,14 +290,16 @@ impl ObjectStore for Faults {
         options: PutOptions,
     ) -> object_store::Result<PutResult> {
         let key = location.to_string();
-        let body = Bytes::from(payload.clone());
-        record(
-            &self.history,
-            Record::Sent {
-                key: key.clone(),
-                body,
-            },
-        );
+        if in_log(location) {
+            let body = Bytes::from(payload.clone());
+            record(
+                &self.history,
+                Record::Sent {
+                    key: key.clone(),
+                    body,
+                },
+            );
+        }
         let inner = Arc::clone(&self.inner);
         let history = Arc::clone(&self.history);
         let location = location.clone();
@@ -434,7 +444,7 @@ impl Cluster {
         if let Some(mut passed_on) = passed_on {
             let history = Arc::clone(&self.history);
             self.recorders.push(tokio::spawn(async move {
-                while let Some(commit) = passed_on.recv().await {
+                while let Some((_, commit)) = passed_on.recv().await {
                     record(&history, Record::PassedOn { epoch, commit });
                 }
             }));
@@ -684,7 +694,7 @@ pub async fn simulate(
     }
 
     let listed: Vec<ObjectMeta> = inner
-        .list(Some(&Path::from(workspace)))
+        .list(Some(&Path::from(workspace).join("log")))
         .try_collect()
         .await
         .expect("list the final store");

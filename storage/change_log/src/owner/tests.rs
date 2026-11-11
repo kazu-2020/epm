@@ -32,8 +32,11 @@ fn commit(name: &'static str, sequence: u64) -> Commit {
     }
 }
 
-fn committed(name: &'static str, sequence: u64) -> Effect {
-    Effect::Committed(commit(name, sequence))
+fn committed(name: &'static str, sequence: u64, slot: Slot) -> Effect {
+    Effect::Committed {
+        slot,
+        commit: commit(name, sequence),
+    }
 }
 
 fn ack(name: &'static str, sequence: u64) -> Effect {
@@ -309,7 +312,10 @@ fn a_new_owner_replays_the_commits_of_older_owners_in_sequence_order() {
     let effects = owner.step_and_flush(store.read_back(fence_slot));
     assert_eq!(
         effects[0],
-        super::Effect::Committed(committed_as("r3", 2, "third"))
+        super::Effect::Committed {
+            slot: fence_slot,
+            commit: committed_as("r3", 2, "third")
+        }
     );
     assert_eq!(
         checked.replayed(),
@@ -395,7 +401,7 @@ fn a_read_back_decides_by_the_epoch_and_checks_the_content() {
             slot,
             found: Some(written)
         }),
-        vec![committed("r1", 0), ack("r1", 0)]
+        vec![committed("r1", 0, slot), ack("r1", 0)]
     );
 
     let (slot, _, _) = put(&owner.step_and_flush(request("r2")));
@@ -646,7 +652,7 @@ fn own_resend_acknowledged() {
     );
     assert_eq!(
         owner.step_and_flush(store.read_back(slot)),
-        vec![committed("r1", 0), ack("r1", 0)]
+        vec![committed("r1", 0, slot), ack("r1", 0)]
     );
     assert_eq!(store.replay(), vec![id("r1")]);
 }
@@ -663,7 +669,7 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
     );
     let mut owner = Owner::new(Epoch(3), AdmitAll);
     let effects = owner.step_and_flush(store.loaded());
-    assert_eq!(effects[0], committed("r1", 0), "read on load");
+    assert_eq!(effects[0], committed("r1", 0, Slot(0)), "read on load");
     let (fence_slot, fence, _) = put(&effects);
     store.put(
         fence_slot,
@@ -677,14 +683,18 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
         vec![Effect::Get { slot: fence_slot }]
     );
     let effects = owner.step_and_flush(store.read_back(fence_slot));
-    assert_eq!(effects[0], committed("r2", 1), "found by the fence");
+    assert_eq!(
+        effects[0],
+        committed("r2", 1, fence_slot),
+        "found by the fence"
+    );
     let (slot, fence, _) = put(&effects);
     assert_eq!(owner.step_and_flush(store.put(slot, fence)), vec![]);
 
     let (slot, segment, _) = put(&owner.step_and_flush(request("r3")));
     assert_eq!(
         owner.step_and_flush(store.put(slot, segment)),
-        vec![committed("r3", 2), ack("r3", 2)],
+        vec![committed("r3", 2, slot), ack("r3", 2)],
         "own write"
     );
     assert_eq!(
@@ -776,7 +786,7 @@ fn the_replay_starts_only_at_the_slot_of_the_start() {
     assert!(
         !effects
             .iter()
-            .any(|effect| matches!(effect, Effect::Committed(_))),
+            .any(|effect| matches!(effect, Effect::Committed { .. })),
         "{effects:?}"
     );
 }

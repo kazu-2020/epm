@@ -11,6 +11,9 @@ skip_commit = []
 apply_twice = []
 swap_commits = []
 no_admission_check = []
+snapshot_start_after = []
+snapshot_without_request_ids = []
+snapshot_ahead = []
 
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }

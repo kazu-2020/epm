@@ -6,9 +6,10 @@ use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Start, Submissio
 use datagen::representative::{self, Size};
 use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
-use object_store::ObjectStore;
 use object_store::memory::InMemory;
+use object_store::path::Path;
 use object_store::throttle::{ThrottleConfig, ThrottledStore};
+use object_store::{ObjectStore, ObjectStoreExt};
 use server::{
     Calculation, DecodeError, Edit, Engine, EngineAlarm, Exit, Handle, Invalid, Lag, ReadError,
     Rejection, Settings, SubmitError,
@@ -33,6 +34,7 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Runnin
     let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
     let (handle, owner) = server::start(
         engine,
+        Start::default(),
         settings,
         Arc::clone(store),
         WORKSPACE.to_owned(),
@@ -46,6 +48,7 @@ fn slow(busy_after: u64) -> Settings {
     Settings {
         busy_after,
         calculation: Calculation::Inline(CALCULATION),
+        ..Settings::default()
     }
 }
 
@@ -418,4 +421,107 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
         b.handle.submit(id("r1"), &quantity(Some(1.0))).await,
         Err(SubmitError::Stopped)
     );
+}
+
+fn quantity_in(engine: &Engine) -> Option<f64> {
+    engine
+        .measures()
+        .iter()
+        .find(|measure| measure.ulid() == QUANTITY)
+        .expect("the engine holds the quantity")
+        .get(&CELL.map(MemberId))
+        .expect("the cell fits")
+}
+
+async fn restored(store: &Arc<dyn ObjectStore>) -> (Engine, Start) {
+    server::restore(
+        store.as_ref(),
+        WORKSPACE,
+        representative::generate(&Size::TINY, 7),
+    )
+    .await
+    .expect("valid formulas")
+}
+
+fn snapshot_object(count: usize, name: &str) -> Path {
+    Path::from(format!("{WORKSPACE}/snapshot/{count:020}/{name}"))
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_owner_starts_from_the_newest_snapshot_it_can_read() {
+    let store = store();
+    let settings = || Settings {
+        snapshot_every: 1,
+        ..slow(u64::MAX)
+    };
+    let a = start(&store, 1, settings());
+    for (sequence, value) in (0..3).zip([1.0, 2.0, 3.0]) {
+        let name = format!("r{sequence}");
+        assert_eq!(
+            a.handle.submit(id(&name), &quantity(Some(value))).await,
+            Ok(Sequence(sequence))
+        );
+        a.handle
+            .read(Some(Sequence(sequence)), &[])
+            .await
+            .expect("A recalculates");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    a.exit.abort();
+    let (engine, start) = restored(&store).await;
+    assert_eq!(start.request_ids.len(), 3);
+    assert_eq!(quantity_in(&engine), Some(3.0));
+
+    store
+        .put(
+            &snapshot_object(3, "requests/000000"),
+            Bytes::from_static(b"broken").into(),
+        )
+        .await
+        .expect("put");
+    let (engine, start) = restored(&store).await;
+    assert_eq!(
+        start.request_ids,
+        ["r0", "r1"].map(id),
+        "the snapshot before the broken one"
+    );
+    assert_eq!(quantity_in(&engine), Some(2.0));
+    let (handle, owner) = server::start(
+        engine,
+        start,
+        settings(),
+        Arc::clone(&store),
+        WORKSPACE.to_owned(),
+        Epoch(2),
+    );
+    let b = tokio::spawn(owner);
+    assert_eq!(
+        handle
+            .read(Some(Sequence(2)), &cells())
+            .await
+            .map(|(_, values)| values[0]),
+        Ok(Some(3.0)),
+        "the commit after the snapshot"
+    );
+    assert_eq!(
+        handle.submit(id("r0"), &quantity(Some(1.0))).await,
+        Ok(Sequence(0)),
+        "a resend of a commit in the snapshot"
+    );
+
+    b.abort();
+    assert_eq!(
+        restored(&store).await.1.request_ids.len(),
+        3,
+        "B wrote the broken snapshot again"
+    );
+    for count in [1, 2, 3] {
+        store
+            .delete(&snapshot_object(count, "manifest"))
+            .await
+            .expect("delete");
+    }
+    let (engine, start) = restored(&store).await;
+    assert_eq!(start, Start::default(), "no snapshot is complete");
+    assert_eq!(quantity_in(&engine), None);
 }
