@@ -1,7 +1,7 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use change_log::{RequestId, Slot, Start};
-use dimension::{Dimension, DimensionUlid};
-use measure::{Measure, MeasureDefinition, MeasureError, MeasureUlid};
+use dimension::{Dimension, DimensionGlobalId};
+use measure::{Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
 use ulid::Ulid;
 
 const MAGIC: [u8; 4] = *b"SNAP";
@@ -31,8 +31,8 @@ pub struct Manifest {
 
 #[derive(Debug, PartialEq)]
 struct MeasureEntry {
-    ulid: MeasureUlid,
-    axes: Vec<(DimensionUlid, u32)>,
+    ulid: MeasureGlobalId,
+    axes: Vec<(DimensionGlobalId, u32)>,
     chunks: Vec<Chunk>,
 }
 
@@ -50,8 +50,8 @@ pub enum SnapshotError {
     TrailingBytes,
     ObjectCount { expected: usize, found: usize },
     Corrupt { path: String },
-    Definitions(MeasureUlid),
-    Measure(MeasureUlid, MeasureError),
+    Definitions(MeasureGlobalId),
+    Measure(MeasureGlobalId, MeasureError),
 }
 
 pub fn encode(snapshot: &Snapshot) -> (Vec<Object>, Bytes) {
@@ -132,10 +132,10 @@ impl Manifest {
         let request_chunks = reader.chunks()?;
         let mut measures = Vec::new();
         for _ in 0..reader.u32()? {
-            let ulid = MeasureUlid(reader.ulid()?);
+            let ulid = MeasureGlobalId(reader.ulid()?);
             let mut axes = Vec::new();
             for _ in 0..reader.u32()? {
-                axes.push((DimensionUlid(reader.ulid()?), reader.u32()?));
+                axes.push((DimensionGlobalId(reader.ulid()?), reader.u32()?));
             }
             let chunks = reader.chunks()?;
             measures.push(MeasureEntry { ulid, axes, chunks });
@@ -246,7 +246,7 @@ impl Manifest {
 fn axes(
     definition: &MeasureDefinition,
     dimensions: &[&Dimension],
-) -> Option<Vec<(DimensionUlid, u32)>> {
+) -> Option<Vec<(DimensionGlobalId, u32)>> {
     definition
         .axes
         .iter()
@@ -263,7 +263,7 @@ fn request_path(index: usize) -> String {
     format!("requests/{index:06}")
 }
 
-fn measure_path(measure: MeasureUlid, index: usize) -> String {
+fn measure_path(measure: MeasureGlobalId, index: usize) -> String {
     format!("{}/{index:06}", measure.0)
 }
 

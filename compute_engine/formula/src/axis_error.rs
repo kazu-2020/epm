@@ -1,11 +1,11 @@
 use std::ops::Range;
 
-use dimension::DimensionUlid;
+use dimension::DimensionGlobalId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AxisError {
     pub kind: AxisErrorKind,
-    pub dimension: DimensionUlid,
+    pub dimension: DimensionGlobalId,
     pub span: Range<usize>,
 }
 

@@ -11,7 +11,7 @@ use change_log::{Commit, Epoch, Request, Sequence, Slot, Start};
 use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::{Dimension, MemberId};
+use dimension::{Dimension, MemberIndex};
 use formula::CheckedExpression;
 use futures_util::{FutureExt, StreamExt, TryStreamExt, stream};
 use measure::{Measure, MeasureDefinition};
@@ -74,7 +74,7 @@ impl Model {
 
     fn fold(&self, log: &[Commit]) -> Option<Vec<Measure>> {
         let inputs = &self.workspace.inputs;
-        let mut cells: Vec<BTreeMap<Vec<MemberId>, f64>> =
+        let mut cells: Vec<BTreeMap<Vec<MemberIndex>, f64>> =
             inputs.iter().map(|input| input.cells().collect()).collect();
         for commit in log {
             let edit = Edit::decode(commit.payload.clone()).expect("the log holds cell edits");
@@ -201,7 +201,7 @@ impl common::Server for Owners {
         let hash = hasher.finish();
         let input = &self.inputs[(hash % self.inputs.len() as u64) as usize];
         let result = &self.results[(hash % self.results.len() as u64) as usize];
-        let member = MemberId(u32::from(hash & 0x100 != 0));
+        let member = MemberIndex(u32::from(hash & 0x100 != 0));
         let value = (hash & 0x600 != 0).then(|| ((hash >> 12) % 8) as f64 / 4.0);
         let (measure, axes) = match (hash >> 20) % 8 {
             0 => (result, result.axes.len()),

@@ -5,14 +5,14 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionError,
-    DimensionKind, DimensionUlid, KeyKind, MemberId, MemberUlid,
+    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionError,
+    DimensionGlobalId, DimensionKind, KeyKind, MemberGlobalId, MemberIndex,
 };
 use ulid::Ulid;
 
-const DEPARTMENT: DimensionUlid = DimensionUlid(Ulid(100));
-const DIVISION: DimensionUlid = DimensionUlid(Ulid(200));
-const DIVISION_ATTRIBUTE: AttributeUlid = AttributeUlid(Ulid(300));
+const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(100));
+const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(200));
+const DIVISION_ATTRIBUTE: AttributeGlobalId = AttributeGlobalId(Ulid(300));
 
 fn definition(key_kind: KeyKind, attributes: Vec<AttributeDefinition>) -> DimensionDefinition {
     DimensionDefinition {
@@ -24,7 +24,7 @@ fn definition(key_kind: KeyKind, attributes: Vec<AttributeDefinition>) -> Dimens
     }
 }
 
-fn division_attribute(target: DimensionUlid) -> AttributeDefinition {
+fn division_attribute(target: DimensionGlobalId) -> AttributeDefinition {
     AttributeDefinition {
         ulid: DIVISION_ATTRIBUTE,
         name: "事業部".into(),
@@ -77,7 +77,7 @@ fn departments() -> Dimension {
     .unwrap()
 }
 
-fn definition_without_attributes(ulid: DimensionUlid) -> DimensionDefinition {
+fn definition_without_attributes(ulid: DimensionGlobalId) -> DimensionDefinition {
     DimensionDefinition {
         ulid,
         name: "事業部".into(),
@@ -100,19 +100,19 @@ fn divisions() -> Dimension {
 fn member_is_found_by_member_id_ulid_and_key() {
     let dimension = departments();
     let sales = dimension.member_by_key("営業部").unwrap();
-    assert_eq!(sales.id(), MemberId(0));
-    assert_eq!(sales.ulid(), MemberUlid(Ulid(1)));
+    assert_eq!(sales.id(), MemberIndex(0));
+    assert_eq!(sales.ulid(), MemberGlobalId(Ulid(1)));
     assert_eq!(
         dimension
-            .member_by_ulid(MemberUlid(Ulid(2)))
+            .member_by_ulid(MemberGlobalId(Ulid(2)))
             .unwrap()
             .name(),
         "開発部"
     );
-    assert_eq!(dimension.member(MemberId(2)).unwrap().key(), "総務部");
-    assert!(dimension.member(MemberId(3)).is_none());
+    assert_eq!(dimension.member(MemberIndex(2)).unwrap().key(), "総務部");
+    assert!(dimension.member(MemberIndex(3)).is_none());
     assert!(dimension.member_by_key("経理部").is_none());
-    assert!(dimension.member_by_ulid(MemberUlid(Ulid(9))).is_none());
+    assert!(dimension.member_by_ulid(MemberGlobalId(Ulid(9))).is_none());
     assert_eq!(dimension.name(), "部門");
     assert_eq!(dimension.len(), 3);
     assert!(!dimension.is_empty());
@@ -130,7 +130,7 @@ fn code_key_lets_names_repeat() {
         Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap();
     assert_eq!(dimension.definition(), &definition);
     let member = dimension.member_by_key("5110").unwrap();
-    assert_eq!(member.id(), MemberId(1));
+    assert_eq!(member.id(), MemberIndex(1));
     assert_eq!(member.name(), "その他");
 }
 
@@ -139,9 +139,9 @@ fn attribute_value_is_a_member_of_the_target_dimension_or_none() {
     let dimension = departments();
     let attribute = dimension.attribute("事業部").unwrap();
     assert_eq!(attribute.target(), DIVISION);
-    assert_eq!(attribute.value(MemberId(1)), Some(MemberId(1)));
-    assert_eq!(attribute.value(MemberId(2)), None);
-    assert_eq!(attribute.value(MemberId(3)), None);
+    assert_eq!(attribute.value(MemberIndex(1)), Some(MemberIndex(1)));
+    assert_eq!(attribute.value(MemberIndex(2)), None);
+    assert_eq!(attribute.value(MemberIndex(3)), None);
     assert!(dimension.attribute("地域").is_none());
 }
 
@@ -153,7 +153,7 @@ fn attribute_without_its_target_dimension_is_rejected() {
         strings(&[Some("営業部")]),
         Arc::new(UInt32Array::from(vec![Some(0)])) as ArrayRef,
     ];
-    let regions = definition_without_attributes(DimensionUlid(Ulid(999)));
+    let regions = definition_without_attributes(DimensionGlobalId(Ulid(999)));
     let columns_of_regions = vec![ulids(&[Some(21)]), strings(&[Some("関東")])];
     let other =
         Dimension::try_new(regions.clone(), batch(&regions, columns_of_regions), &[]).unwrap();
@@ -186,8 +186,8 @@ fn attribute_value_outside_the_target_dimension_is_rejected() {
         err,
         DimensionError::DanglingTarget {
             attribute: "事業部".into(),
-            member: MemberId(0),
-            target: MemberId(2),
+            member: MemberIndex(0),
+            target: MemberIndex(2),
         }
     );
 }
@@ -207,7 +207,7 @@ fn attribute_pointing_at_its_own_dimension_is_rejected() {
 #[test]
 fn repeated_attribute_name_is_rejected() {
     let mut second = division_attribute(DIVISION);
-    second.ulid = AttributeUlid(Ulid(301));
+    second.ulid = AttributeGlobalId(Ulid(301));
     let definition = definition(KeyKind::Name, vec![division_attribute(DIVISION), second]);
     let columns = vec![
         ulids(&[Some(1)]),
@@ -256,7 +256,7 @@ fn null_ulid_is_rejected() {
     );
     assert_eq!(
         Dimension::try_new(definition, null, &[]).unwrap_err(),
-        DimensionError::NullUlid(MemberId(0))
+        DimensionError::NullUlid(MemberIndex(0))
     );
 }
 
@@ -272,7 +272,7 @@ fn repeated_ulid_is_rejected() {
     );
     assert_eq!(
         Dimension::try_new(definition, repeated, &[]).unwrap_err(),
-        DimensionError::DuplicateUlid(MemberUlid(Ulid(1)))
+        DimensionError::DuplicateUlid(MemberGlobalId(Ulid(1)))
     );
 }
 
@@ -282,7 +282,7 @@ fn null_name_is_rejected() {
     let null = nullable_batch(&definition, vec![ulids(&[Some(1)]), strings(&[None])]);
     assert_eq!(
         Dimension::try_new(definition, null, &[]).unwrap_err(),
-        DimensionError::NullName(MemberId(0))
+        DimensionError::NullName(MemberIndex(0))
     );
 }
 
@@ -323,15 +323,15 @@ fn null_code_is_rejected() {
     );
     assert_eq!(
         Dimension::try_new(definition, null, &[]).unwrap_err(),
-        DimensionError::NullKey(MemberId(0))
+        DimensionError::NullKey(MemberIndex(0))
     );
 }
 
 #[test]
 fn debug_output_names_the_member_not_the_whole_dimension() {
     let dimension = departments();
-    let printed = format!("{:?}", dimension.member(MemberId(0)).unwrap());
-    assert!(printed.contains("MemberId(0)"));
+    let printed = format!("{:?}", dimension.member(MemberIndex(0)).unwrap());
+    assert!(printed.contains("MemberIndex(0)"));
     assert!(!printed.contains("開発部"));
 }
 
@@ -376,7 +376,7 @@ fn key_order_puts_the_calendar_then_the_version_then_the_rest_by_ulid() {
     let dimension = |ulid: u128, kind| {
         let definition = DimensionDefinition {
             kind,
-            ..definition_without_attributes(DimensionUlid(Ulid(ulid)))
+            ..definition_without_attributes(DimensionGlobalId(Ulid(ulid)))
         };
         let columns = vec![ulids(&[Some(ulid)]), strings(&[Some("メンバー")])];
         Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap()

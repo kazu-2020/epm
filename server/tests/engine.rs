@@ -2,15 +2,15 @@ use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence, Slot};
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::MemberId;
-use measure::{MeasureError, MeasureUlid};
+use dimension::MemberIndex;
+use measure::{MeasureError, MeasureGlobalId};
 use server::{DecodeError, Edit, Engine, EngineAlarm, FormulaError, Invalid};
 use ulid::Ulid;
 use workspace::Workspace;
 
-const QUANTITY: MeasureUlid = MeasureUlid(Ulid(100));
-const PRICE: MeasureUlid = MeasureUlid(Ulid(101));
-const SALES: MeasureUlid = MeasureUlid(Ulid(200));
+const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
+const PRICE: MeasureGlobalId = MeasureGlobalId(Ulid(101));
+const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
 
 fn workspace() -> Workspace {
     representative::generate(&Size::TINY, 7)
@@ -23,7 +23,7 @@ fn engine() -> Engine {
 fn quantity(coordinate: [u32; 5], value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: coordinate.map(MemberId).to_vec(),
+        coordinate: coordinate.map(MemberIndex).to_vec(),
         value,
     }
 }
@@ -39,8 +39,8 @@ fn commit(sequence: u64, edit: &Edit) -> (Slot, Commit) {
     )
 }
 
-fn cell(engine: &Engine, measure: MeasureUlid, coordinate: &[u32]) -> Option<f64> {
-    let coordinate: Vec<MemberId> = coordinate.iter().copied().map(MemberId).collect();
+fn cell(engine: &Engine, measure: MeasureGlobalId, coordinate: &[u32]) -> Option<f64> {
+    let coordinate: Vec<MemberIndex> = coordinate.iter().copied().map(MemberIndex).collect();
     engine
         .measures()
         .iter()
@@ -106,7 +106,7 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     assert!(matches!(
         check(&quantity([0, versions, 1, 0, 1], Some(2.5)).encode()),
         Err(Invalid::Coordinate(MeasureError::MemberOutOfRange { member, .. }))
-            if member == MemberId(versions)
+            if member == MemberIndex(versions)
     ));
 }
 
@@ -155,7 +155,7 @@ fn a_batch_gives_the_values_of_its_commits_one_by_one() {
     let second = [2, 1, 0, 1, 0];
     let price = Edit {
         measure: PRICE,
-        coordinate: [0, 1, 1].map(MemberId).to_vec(),
+        coordinate: [0, 1, 1].map(MemberIndex).to_vec(),
         value: Some(9.0),
     };
     let edits = [

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use datagen::representative::{self, Size};
 use dimension::Dimension;
 use formula::CheckedExpression;
-use measure::{MeasureDefinition, MeasureUlid};
+use measure::{MeasureDefinition, MeasureGlobalId};
 
 fn main() -> std::io::Result<()> {
     let usage = "usage: edit <directory> <edits per input>";
@@ -23,7 +23,7 @@ fn main() -> std::io::Result<()> {
         .map(|measure| measure.definition().clone())
         .chain(formulas.iter().map(|formula| formula.result.clone()))
         .collect();
-    let checked: Vec<(MeasureUlid, CheckedExpression)> = formulas
+    let checked: Vec<(MeasureGlobalId, CheckedExpression)> = formulas
         .iter()
         .map(|formula| {
             let parsed = formula::parse(&formula.text);
@@ -40,7 +40,7 @@ fn main() -> std::io::Result<()> {
             .expect("the representative formulas evaluate");
         measures.push(result);
     }
-    let order: Vec<(MeasureUlid, &CheckedExpression)> = checked
+    let order: Vec<(MeasureGlobalId, &CheckedExpression)> = checked
         .iter()
         .map(|(ulid, expression)| (*ulid, expression))
         .collect();

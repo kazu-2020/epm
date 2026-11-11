@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use dimension::{Dimension, DimensionUlid};
-use measure::{Measure, MeasureDefinition, MeasureUlid};
+use dimension::{Dimension, DimensionGlobalId};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 
 pub const SEED: u64 = 20_261_103;
@@ -49,11 +49,11 @@ pub fn read_measures(directory: &Path, dimensions: &[&Dimension]) -> std::io::Re
             let metadata = schema.metadata();
             let parse = |text: &str| Ulid::from_string(text).map_err(std::io::Error::other);
             let definition = MeasureDefinition {
-                ulid: MeasureUlid(parse(&metadata[ULID_KEY])?),
+                ulid: MeasureGlobalId(parse(&metadata[ULID_KEY])?),
                 name: metadata[NAME_KEY].clone(),
                 axes: schema.fields()[..schema.fields().len() - 1]
                     .iter()
-                    .map(|field| parse(field.name()).map(DimensionUlid))
+                    .map(|field| parse(field.name()).map(DimensionGlobalId))
                     .collect::<Result<_, _>>()?,
             };
             let batches = reader

@@ -3,16 +3,16 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionKind,
-    DimensionUlid, KeyKind,
+    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionGlobalId,
+    DimensionKind, KeyKind,
 };
-use measure::{MeasureDefinition, MeasureUlid};
+use measure::{MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 
-const PERIOD: DimensionUlid = DimensionUlid(Ulid(1));
-const DEPARTMENT: DimensionUlid = DimensionUlid(Ulid(2));
-const DIVISION: DimensionUlid = DimensionUlid(Ulid(3));
-const VERSION: DimensionUlid = DimensionUlid(Ulid(4));
+const PERIOD: DimensionGlobalId = DimensionGlobalId(Ulid(1));
+const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(2));
+const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(3));
+const VERSION: DimensionGlobalId = DimensionGlobalId(Ulid(4));
 
 pub fn dimensions() -> Vec<DimensionDefinition> {
     let dimension = |ulid, name: &str, attributes| DimensionDefinition {
@@ -29,7 +29,7 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
             DEPARTMENT,
             "部門",
             vec![AttributeDefinition {
-                ulid: AttributeUlid(Ulid(21)),
+                ulid: AttributeGlobalId(Ulid(21)),
                 name: "事業部".into(),
                 target: DIVISION,
             }],
@@ -65,8 +65,8 @@ pub fn dimensions_with_members() -> Vec<Dimension> {
 }
 
 pub fn measures() -> Vec<MeasureDefinition> {
-    let measure = |ulid, name: &str, axes: &[DimensionUlid]| MeasureDefinition {
-        ulid: MeasureUlid(Ulid(ulid)),
+    let measure = |ulid, name: &str, axes: &[DimensionGlobalId]| MeasureDefinition {
+        ulid: MeasureGlobalId(Ulid(ulid)),
         name: name.into(),
         axes: axes.to_vec(),
     };
@@ -81,7 +81,7 @@ pub fn measures() -> Vec<MeasureDefinition> {
     ]
 }
 
-pub fn dimension_name(ulid: DimensionUlid) -> String {
+pub fn dimension_name(ulid: DimensionGlobalId) -> String {
     dimensions()
         .into_iter()
         .find(|dimension| dimension.ulid == ulid)

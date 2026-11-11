@@ -1,18 +1,18 @@
 use std::collections::{HashMap, HashSet};
 
-use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
+use dimension::{Attribute, Dimension, DimensionGlobalId, MemberIndex};
 use formula::{ProductOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
 use crate::evaluate_error::EvaluateError;
 
 pub(crate) struct Cells {
-    pub(crate) axes: Vec<DimensionUlid>,
-    values: HashMap<Vec<MemberId>, f64>,
+    pub(crate) axes: Vec<DimensionGlobalId>,
+    values: HashMap<Vec<MemberIndex>, f64>,
 }
 
 pub(crate) struct ByAxis<'d> {
-    pub(crate) output: DimensionUlid,
+    pub(crate) output: DimensionGlobalId,
     pub(crate) source: usize,
     pub(crate) attribute: Option<Attribute<'d>>,
 }
@@ -24,7 +24,7 @@ enum Source {
 
 pub(crate) fn find_dimension<'d>(
     dimensions: &[&'d Dimension],
-    ulid: DimensionUlid,
+    ulid: DimensionGlobalId,
 ) -> Result<&'d Dimension, EvaluateError> {
     dimensions
         .iter()
@@ -34,15 +34,15 @@ pub(crate) fn find_dimension<'d>(
 }
 
 fn normalized(
-    values: impl IntoIterator<Item = (Vec<MemberId>, f64)>,
-) -> HashMap<Vec<MemberId>, f64> {
+    values: impl IntoIterator<Item = (Vec<MemberIndex>, f64)>,
+) -> HashMap<Vec<MemberIndex>, f64> {
     values
         .into_iter()
         .filter_map(|(coordinate, value)| Some((coordinate, normalize(value)?)))
         .collect()
 }
 
-fn join(left: &Cells, right: &Cells, apply: fn(f64, f64) -> f64) -> Vec<(Vec<MemberId>, f64)> {
+fn join(left: &Cells, right: &Cells, apply: fn(f64, f64) -> f64) -> Vec<(Vec<MemberIndex>, f64)> {
     let shared: Vec<(usize, usize)> = left
         .axes
         .iter()
@@ -55,7 +55,7 @@ fn join(left: &Cells, right: &Cells, apply: fn(f64, f64) -> f64) -> Vec<(Vec<Mem
     let extra: Vec<usize> = (0..right.axes.len())
         .filter(|&position| !left.axes.contains(&right.axes[position]))
         .collect();
-    let mut by_shared: HashMap<Vec<MemberId>, Vec<(&Vec<MemberId>, f64)>> = HashMap::new();
+    let mut by_shared: HashMap<Vec<MemberIndex>, Vec<(&Vec<MemberIndex>, f64)>> = HashMap::new();
     for (coordinate, &value) in &right.values {
         let key = shared
             .iter()
@@ -65,7 +65,7 @@ fn join(left: &Cells, right: &Cells, apply: fn(f64, f64) -> f64) -> Vec<(Vec<Mem
     }
     let mut joined = Vec::new();
     for (left_coordinate, &left_value) in &left.values {
-        let key: Vec<MemberId> = shared
+        let key: Vec<MemberIndex> = shared
             .iter()
             .map(|&(position, _)| left_coordinate[position])
             .collect();
@@ -111,7 +111,7 @@ impl Cells {
         terms: Vec<(Sign, Cells)>,
         dimensions: &[&Dimension],
     ) -> Result<Cells, EvaluateError> {
-        let mut axes: Vec<DimensionUlid> = Vec::new();
+        let mut axes: Vec<DimensionGlobalId> = Vec::new();
         for (_, term) in &terms {
             for &axis in &term.axes {
                 if !axes.contains(&axis) {
@@ -121,7 +121,7 @@ impl Cells {
         }
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
         let creates_cells = |term: &Cells| !any_full || term.axes.len() == axes.len();
-        let mut coordinates: HashSet<Vec<MemberId>> = HashSet::new();
+        let mut coordinates: HashSet<Vec<MemberIndex>> = HashSet::new();
         for (_, term) in &terms {
             if creates_cells(term) {
                 coordinates.extend(term.broadcast(&axes, dimensions)?.values.into_keys());
@@ -143,7 +143,7 @@ impl Cells {
         let values = normalized(coordinates.into_iter().map(|coordinate| {
             let mut total = 0.0;
             for ((sign, term), positions) in terms.iter().zip(&positions) {
-                let key: Vec<MemberId> = positions
+                let key: Vec<MemberIndex> = positions
                     .iter()
                     .map(|&position| coordinate[position])
                     .collect();
@@ -160,8 +160,8 @@ impl Cells {
 
     pub(crate) fn filter(
         mut self,
-        dimension: DimensionUlid,
-        members: &[MemberId],
+        dimension: DimensionGlobalId,
+        members: &[MemberIndex],
         keeps_axis: bool,
     ) -> Cells {
         let position = self
@@ -200,7 +200,7 @@ impl Cells {
             .collect::<Result<Vec<_>, EvaluateError>>()?;
         let mut order: Vec<usize> = (0..self.axes.len()).collect();
         order.sort_by_key(|&axis| orders[axis]);
-        let mut cells: Vec<(&Vec<MemberId>, &f64)> = self.values.iter().collect();
+        let mut cells: Vec<(&Vec<MemberIndex>, &f64)> = self.values.iter().collect();
         // Not the map's order: f64 addition depends on order, and the map's changes from run to run.
         cells.sort_unstable_by(|(left, _), (right, _)| {
             order
@@ -208,9 +208,9 @@ impl Cells {
                 .map(|&axis| left[axis])
                 .cmp(order.iter().map(|&axis| right[axis]))
         });
-        let mut groups: HashMap<Vec<MemberId>, f64> = HashMap::new();
+        let mut groups: HashMap<Vec<MemberIndex>, f64> = HashMap::new();
         for (coordinate, &value) in cells {
-            let group: Option<Vec<MemberId>> = by
+            let group: Option<Vec<MemberIndex>> = by
                 .iter()
                 .map(|axis| {
                     let member = coordinate[axis.source];
@@ -232,7 +232,7 @@ impl Cells {
 
     pub(crate) fn broadcast(
         &self,
-        axes: &[DimensionUlid],
+        axes: &[DimensionGlobalId],
         dimensions: &[&Dimension],
     ) -> Result<Cells, EvaluateError> {
         let sources = axes
@@ -249,9 +249,9 @@ impl Cells {
         for (coordinate, &value) in &self.values {
             let mut coordinates = vec![Vec::with_capacity(axes.len())];
             for source in &sources {
-                let members: Vec<MemberId> = match *source {
+                let members: Vec<MemberIndex> = match *source {
                     Source::Kept(position) => vec![coordinate[position]],
-                    Source::Repeated(len) => (0..len).map(MemberId).collect(),
+                    Source::Repeated(len) => (0..len).map(MemberIndex).collect(),
                 };
                 coordinates = coordinates
                     .into_iter()

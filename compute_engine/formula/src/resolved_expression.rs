@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use dimension::{AttributeUlid, DimensionUlid, MemberId};
-use measure::MeasureUlid;
+use dimension::{AttributeGlobalId, DimensionGlobalId, MemberIndex};
+use measure::MeasureGlobalId;
 
 use crate::expression::BinaryOperator;
 
@@ -15,8 +15,8 @@ pub struct ResolvedExpression {
 pub enum ResolvedExpressionKind {
     Number(f64),
     Measure {
-        ulid: MeasureUlid,
-        axes: Vec<DimensionUlid>,
+        ulid: MeasureGlobalId,
+        axes: Vec<DimensionGlobalId>,
     },
     Negate(Box<ResolvedExpression>),
     Binary {
@@ -30,8 +30,8 @@ pub enum ResolvedExpressionKind {
     },
     Filter {
         value: Box<ResolvedExpression>,
-        dimension: DimensionUlid,
-        members: Vec<MemberId>,
+        dimension: DimensionGlobalId,
+        members: Vec<MemberIndex>,
         keeps_axis: bool,
     },
     Error,
@@ -45,11 +45,11 @@ pub struct ResolvedAxis {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedAxisKind {
-    Dimension(DimensionUlid),
+    Dimension(DimensionGlobalId),
     Attribute {
-        dimension: DimensionUlid,
-        attribute: AttributeUlid,
-        target: DimensionUlid,
+        dimension: DimensionGlobalId,
+        attribute: AttributeGlobalId,
+        target: DimensionGlobalId,
     },
     Unresolved,
 }

@@ -4,8 +4,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Slot, Start, Submission, serve};
 use datagen::representative::{self, Size};
-use dimension::MemberId;
-use measure::{MeasureError, MeasureUlid};
+use dimension::MemberIndex;
+use measure::{MeasureError, MeasureGlobalId};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::throttle::{ThrottleConfig, ThrottledStore};
@@ -20,8 +20,8 @@ use tokio::time::Instant;
 use ulid::Ulid;
 
 const WORKSPACE: &str = "ws~";
-const QUANTITY: MeasureUlid = MeasureUlid(Ulid(100));
-const SALES: MeasureUlid = MeasureUlid(Ulid(200));
+const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
+const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
 const CELL: [u32; 5] = [0, 1, 1, 0, 1];
 const CALCULATION: Duration = Duration::from_secs(10);
 
@@ -63,14 +63,14 @@ fn id(name: &str) -> RequestId {
 fn quantity(value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: CELL.map(MemberId).to_vec(),
+        coordinate: CELL.map(MemberIndex).to_vec(),
         value,
     }
 }
 
-fn cells() -> Vec<(MeasureUlid, Vec<MemberId>)> {
+fn cells() -> Vec<(MeasureGlobalId, Vec<MemberIndex>)> {
     [QUANTITY, SALES]
-        .map(|measure| (measure, CELL.map(MemberId).to_vec()))
+        .map(|measure| (measure, CELL.map(MemberIndex).to_vec()))
         .to_vec()
 }
 
@@ -362,14 +362,14 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     assert_eq!(
         owner
             .handle
-            .read(Some(Sequence(0)), &[(SALES, vec![MemberId(0)])])
+            .read(Some(Sequence(0)), &[(SALES, vec![MemberIndex(0)])])
             .await,
         Err(ReadError::Coordinate(MeasureError::CoordinateLength {
             expected: 5,
             found: 1
         }))
     );
-    let unknown = MeasureUlid(Ulid(999));
+    let unknown = MeasureGlobalId(Ulid(999));
     assert_eq!(
         owner
             .handle
@@ -429,7 +429,7 @@ fn quantity_in(engine: &Engine) -> Option<f64> {
         .iter()
         .find(|measure| measure.ulid() == QUANTITY)
         .expect("the engine holds the quantity")
-        .get(&CELL.map(MemberId))
+        .get(&CELL.map(MemberIndex))
         .expect("the cell fits")
 }
 

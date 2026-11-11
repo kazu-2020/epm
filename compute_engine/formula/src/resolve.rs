@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use dimension::{Dimension, MemberId};
+use dimension::{Dimension, MemberIndex};
 use measure::MeasureDefinition;
 
 use crate::expression::{Axis, Expression, ExpressionKind, QuotedName};
@@ -102,7 +102,7 @@ impl<'a> Resolver<'a> {
                 return None;
             }
         };
-        let mut ids: Vec<MemberId> = Vec::with_capacity(members.len());
+        let mut ids: Vec<MemberIndex> = Vec::with_capacity(members.len());
         let mut known = true;
         for member in members {
             match found.member_by_key(&member.name) {

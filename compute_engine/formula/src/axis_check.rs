@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use dimension::DimensionUlid;
+use dimension::DimensionGlobalId;
 
 use crate::axis_error::{AxisError, AxisErrorKind};
 use crate::checked_expression::CheckedExpression;
@@ -11,13 +11,13 @@ use crate::resolved_expression::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxisCheck {
-    pub broadcast: Option<Vec<DimensionUlid>>,
+    pub broadcast: Option<Vec<DimensionGlobalId>>,
     pub errors: Vec<AxisError>,
     pub checked: Option<CheckedExpression>,
 }
 
 #[must_use]
-pub fn check_axes(expression: &ResolvedExpression, result_axes: &[DimensionUlid]) -> AxisCheck {
+pub fn check_axes(expression: &ResolvedExpression, result_axes: &[DimensionGlobalId]) -> AxisCheck {
     let mut checker = Checker { errors: Vec::new() };
     let Some(axes) = checker.axes(expression, Some(result_axes)) else {
         return AxisCheck {
@@ -58,8 +58,8 @@ impl Checker {
     fn axes(
         &mut self,
         expression: &ResolvedExpression,
-        allowed: Option<&[DimensionUlid]>,
-    ) -> Option<BTreeSet<DimensionUlid>> {
+        allowed: Option<&[DimensionGlobalId]>,
+    ) -> Option<BTreeSet<DimensionGlobalId>> {
         match &expression.kind {
             ResolvedExpressionKind::Number(_) => Some(BTreeSet::new()),
             ResolvedExpressionKind::Measure { axes, .. } => Some(axes.iter().copied().collect()),
@@ -100,10 +100,10 @@ impl Checker {
 
     fn sum(
         &mut self,
-        value: Option<&BTreeSet<DimensionUlid>>,
+        value: Option<&BTreeSet<DimensionGlobalId>>,
         by: &[ResolvedAxis],
-        allowed: Option<&[DimensionUlid]>,
-    ) -> Option<BTreeSet<DimensionUlid>> {
+        allowed: Option<&[DimensionGlobalId]>,
+    ) -> Option<BTreeSet<DimensionGlobalId>> {
         let mut axes = BTreeSet::new();
         let mut known = true;
         for axis in by {
@@ -134,7 +134,7 @@ impl Checker {
         known.then_some(axes)
     }
 
-    fn error(&mut self, kind: AxisErrorKind, dimension: DimensionUlid, span: &Range<usize>) {
+    fn error(&mut self, kind: AxisErrorKind, dimension: DimensionGlobalId, span: &Range<usize>) {
         self.errors.push(AxisError {
             kind,
             dimension,

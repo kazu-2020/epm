@@ -9,19 +9,19 @@ use arrow_array::types::{Float64Type, UInt32Type};
 use arrow_array::{Array, ArrayRef, Float64Array, RecordBatch, UInt32Array};
 use arrow_buffer::ScalarBuffer;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use dimension::{Dimension, DimensionUlid, MemberId};
+use dimension::{Dimension, DimensionGlobalId, MemberIndex};
 use ulid::Ulid;
 
 const VALUE_COLUMN: &str = "value";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MeasureUlid(pub Ulid);
+pub struct MeasureGlobalId(pub Ulid);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeasureDefinition {
-    pub ulid: MeasureUlid,
+    pub ulid: MeasureGlobalId,
     pub name: String,
-    pub axes: Vec<DimensionUlid>,
+    pub axes: Vec<DimensionGlobalId>,
 }
 
 impl MeasureDefinition {
@@ -135,23 +135,23 @@ impl KeyLayout {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Axis {
-    dimension: DimensionUlid,
+    dimension: DimensionGlobalId,
     len: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MeasureError {
     NoAxes,
-    DuplicateAxis(DimensionUlid),
-    MissingDimension(DimensionUlid),
+    DuplicateAxis(DimensionGlobalId),
+    MissingDimension(DimensionGlobalId),
     SchemaMismatch {
         expected: SchemaRef,
         found: SchemaRef,
     },
     NullInColumn(String),
     MemberOutOfRange {
-        axis: DimensionUlid,
-        member: MemberId,
+        axis: DimensionGlobalId,
+        member: MemberIndex,
     },
     KeyTooWide,
     KeyMismatch(usize),
@@ -162,7 +162,7 @@ pub enum MeasureError {
         expected: usize,
         found: usize,
     },
-    ForeignDelta(MeasureUlid),
+    ForeignDelta(MeasureGlobalId),
     DeltaAxesMismatch,
 }
 
@@ -225,7 +225,7 @@ impl Measure {
             if let Some(&member) = column.iter().find(|&&member| member >= axis.len) {
                 return Err(MeasureError::MemberOutOfRange {
                     axis: axis.dimension,
-                    member: MemberId(member),
+                    member: MemberIndex(member),
                 });
             }
         }
@@ -259,7 +259,7 @@ impl Measure {
             if let Some(row) = first_row(&keys, |&key| layout.member(key, position) >= axis.len) {
                 return Err(MeasureError::MemberOutOfRange {
                     axis: axis.dimension,
-                    member: MemberId(layout.member(keys[row], position)),
+                    member: MemberIndex(layout.member(keys[row], position)),
                 });
             }
         }
@@ -323,7 +323,7 @@ impl Measure {
 
     pub fn from_cells(
         definition: MeasureDefinition,
-        mut cells: Vec<(Vec<MemberId>, f64)>,
+        mut cells: Vec<(Vec<MemberIndex>, f64)>,
         dimensions: &[&Dimension],
     ) -> Result<Self, MeasureError> {
         let width = definition.axes.len();
@@ -352,14 +352,17 @@ impl Measure {
         Self::try_new(definition, base, dimensions)
     }
 
-    pub fn cells(&self) -> impl ExactSizeIterator<Item = (Vec<MemberId>, f64)> {
+    pub fn cells(&self) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, f64)> {
         let measure = self.compact();
         (0..measure.values.len()).map(move |row| measure.cell(row))
     }
 
-    pub fn cell(&self, row: usize) -> (Vec<MemberId>, f64) {
+    pub fn cell(&self, row: usize) -> (Vec<MemberIndex>, f64) {
         (
-            self.layout.members(self.keys[row]).map(MemberId).collect(),
+            self.layout
+                .members(self.keys[row])
+                .map(MemberIndex)
+                .collect(),
             self.values[row],
         )
     }
@@ -368,7 +371,7 @@ impl Measure {
         &self.definition
     }
 
-    pub fn ulid(&self) -> MeasureUlid {
+    pub fn ulid(&self) -> MeasureGlobalId {
         self.definition.ulid
     }
 
@@ -384,7 +387,7 @@ impl Measure {
         &self.layout
     }
 
-    pub fn axis_lengths(&self) -> impl ExactSizeIterator<Item = (DimensionUlid, u32)> + '_ {
+    pub fn axis_lengths(&self) -> impl ExactSizeIterator<Item = (DimensionGlobalId, u32)> + '_ {
         self.axes.iter().map(|axis| (axis.dimension, axis.len))
     }
 
@@ -409,7 +412,7 @@ impl Measure {
             .expect("the unpacked columns follow the measure schema")
     }
 
-    pub fn changes(&self) -> impl Iterator<Item = (Vec<MemberId>, Option<f64>)> + '_ {
+    pub fn changes(&self) -> impl Iterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
         self.deltas.iter().flat_map(|delta| delta.listed())
     }
 
@@ -430,7 +433,7 @@ impl Measure {
         self.deltas.iter().map(|delta| delta.keys.len()).sum()
     }
 
-    pub fn get(&self, coordinate: &[MemberId]) -> Result<Option<f64>, MeasureError> {
+    pub fn get(&self, coordinate: &[MemberIndex]) -> Result<Option<f64>, MeasureError> {
         if coordinate.len() != self.axes.len() {
             return Err(MeasureError::CoordinateLength {
                 expected: self.axes.len(),
@@ -489,7 +492,7 @@ impl Measure {
             {
                 return Err(MeasureError::MemberOutOfRange {
                     axis: axis.dimension,
-                    member: MemberId(self.layout.member(keys[row], position)),
+                    member: MemberIndex(self.layout.member(keys[row], position)),
                 });
             }
         }
@@ -597,7 +600,7 @@ fn merge_changes(
 
 #[derive(Debug, Clone)]
 pub struct Delta {
-    measure: MeasureUlid,
+    measure: MeasureGlobalId,
     axes: Vec<Axis>,
     layout: KeyLayout,
     // Not a hash table on coordinates: sorted keys merge with the measure's keys in one pass, with no allocation for each change.
@@ -606,13 +609,13 @@ pub struct Delta {
 }
 
 impl Delta {
-    pub fn set(&mut self, coordinate: &[MemberId], value: f64) -> Result<(), MeasureError> {
+    pub fn set(&mut self, coordinate: &[MemberIndex], value: f64) -> Result<(), MeasureError> {
         self.check(coordinate)?;
         self.write(coordinate, normalize(value));
         Ok(())
     }
 
-    pub fn delete(&mut self, coordinate: &[MemberId]) -> Result<(), MeasureError> {
+    pub fn delete(&mut self, coordinate: &[MemberIndex]) -> Result<(), MeasureError> {
         self.check(coordinate)?;
         self.write(coordinate, None);
         Ok(())
@@ -632,19 +635,21 @@ impl Delta {
         &self.keys
     }
 
-    pub fn changes(&mut self) -> impl ExactSizeIterator<Item = (Vec<MemberId>, Option<f64>)> + '_ {
+    pub fn changes(
+        &mut self,
+    ) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
         self.settle();
         self.listed()
     }
 
-    fn listed(&self) -> impl ExactSizeIterator<Item = (Vec<MemberId>, Option<f64>)> + '_ {
+    fn listed(&self) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
         self.keys
             .iter()
             .zip(&self.changes)
-            .map(|(&key, &change)| (self.layout.members(key).map(MemberId).collect(), change))
+            .map(|(&key, &change)| (self.layout.members(key).map(MemberIndex).collect(), change))
     }
 
-    fn check(&self, coordinate: &[MemberId]) -> Result<(), MeasureError> {
+    fn check(&self, coordinate: &[MemberIndex]) -> Result<(), MeasureError> {
         if coordinate.len() != self.axes.len() {
             return Err(MeasureError::CoordinateLength {
                 expected: self.axes.len(),
@@ -666,7 +671,7 @@ impl Delta {
     }
 
     // Not a sorted insert: a paste of a million cells in random order took 97 seconds.
-    fn write(&mut self, coordinate: &[MemberId], change: Option<f64>) {
+    fn write(&mut self, coordinate: &[MemberIndex], change: Option<f64>) {
         self.keys
             .push(self.layout.pack(coordinate.iter().map(|member| member.0)));
         self.changes.push(change);

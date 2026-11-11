@@ -16,16 +16,16 @@ const NAME_COLUMN: &str = "name";
 const CODE_COLUMN: &str = "code";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DimensionUlid(pub Ulid);
+pub struct DimensionGlobalId(pub Ulid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MemberUlid(pub Ulid);
+pub struct MemberGlobalId(pub Ulid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct AttributeUlid(pub Ulid);
+pub struct AttributeGlobalId(pub Ulid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MemberId(pub u32);
+pub struct MemberIndex(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyKind {
@@ -42,14 +42,14 @@ pub enum DimensionKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttributeDefinition {
-    pub ulid: AttributeUlid,
+    pub ulid: AttributeGlobalId,
     pub name: String,
-    pub target: DimensionUlid,
+    pub target: DimensionGlobalId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DimensionDefinition {
-    pub ulid: DimensionUlid,
+    pub ulid: DimensionGlobalId,
     pub name: String,
     pub kind: DimensionKind,
     pub key_kind: KeyKind,
@@ -85,34 +85,34 @@ pub struct Dimension {
     keys: StringArray,
     attribute_values: Vec<UInt32Array>,
     hasher: RandomState,
-    // Not HashMap<Ulid, MemberId>: the ULID and key bytes already live in the Arrow arrays.
-    by_ulid: HashTable<MemberId>,
-    by_key: HashTable<MemberId>,
+    // Not HashMap<Ulid, MemberIndex>: the ULID and key bytes already live in the Arrow arrays.
+    by_ulid: HashTable<MemberIndex>,
+    by_key: HashTable<MemberIndex>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum DimensionError {
     TooManyMembers(usize),
     DuplicateAttributeName(String),
-    DuplicateAttributeUlid(AttributeUlid),
+    DuplicateAttributeUlid(AttributeGlobalId),
     AttributeTargetsItself(String),
     SchemaMismatch {
         expected: SchemaRef,
         found: SchemaRef,
     },
-    NullUlid(MemberId),
-    DuplicateUlid(MemberUlid),
-    NullName(MemberId),
-    NullKey(MemberId),
+    NullUlid(MemberIndex),
+    DuplicateUlid(MemberGlobalId),
+    NullName(MemberIndex),
+    NullKey(MemberIndex),
     DuplicateKey(String),
     MissingTarget {
         attribute: String,
-        target: DimensionUlid,
+        target: DimensionGlobalId,
     },
     DanglingTarget {
         attribute: String,
-        member: MemberId,
-        target: MemberId,
+        member: MemberIndex,
+        target: MemberIndex,
     },
 }
 
@@ -191,8 +191,8 @@ impl Dimension {
                 {
                     return Err(DimensionError::DanglingTarget {
                         attribute: attribute.name.clone(),
-                        member: MemberId(row as u32),
-                        target: MemberId(value),
+                        member: MemberIndex(row as u32),
+                        target: MemberIndex(value),
                     });
                 }
             }
@@ -203,7 +203,7 @@ impl Dimension {
         let mut by_ulid = HashTable::with_capacity(rows);
         let mut by_key = HashTable::with_capacity(rows);
         for row in 0..rows {
-            let member = MemberId(row as u32);
+            let member = MemberIndex(row as u32);
             if ulids.is_null(row) {
                 return Err(DimensionError::NullUlid(member));
             }
@@ -216,10 +216,12 @@ impl Dimension {
             let ulid = ulid_at(&ulids, row);
             match by_ulid.entry(
                 hasher.hash_one(ulid),
-                |other: &MemberId| ulid_at(&ulids, other.0 as usize) == ulid,
-                |other: &MemberId| hasher.hash_one(ulid_at(&ulids, other.0 as usize)),
+                |other: &MemberIndex| ulid_at(&ulids, other.0 as usize) == ulid,
+                |other: &MemberIndex| hasher.hash_one(ulid_at(&ulids, other.0 as usize)),
             ) {
-                Entry::Occupied(_) => return Err(DimensionError::DuplicateUlid(MemberUlid(ulid))),
+                Entry::Occupied(_) => {
+                    return Err(DimensionError::DuplicateUlid(MemberGlobalId(ulid)));
+                }
                 Entry::Vacant(slot) => {
                     slot.insert(member);
                 }
@@ -227,8 +229,8 @@ impl Dimension {
             let key = keys.value(row);
             match by_key.entry(
                 hasher.hash_one(key),
-                |other: &MemberId| keys.value(other.0 as usize) == key,
-                |other: &MemberId| hasher.hash_one(keys.value(other.0 as usize)),
+                |other: &MemberIndex| keys.value(other.0 as usize) == key,
+                |other: &MemberIndex| hasher.hash_one(keys.value(other.0 as usize)),
             ) {
                 Entry::Occupied(_) => return Err(DimensionError::DuplicateKey(key.into())),
                 Entry::Vacant(slot) => {
@@ -254,7 +256,7 @@ impl Dimension {
         &self.definition
     }
 
-    pub fn ulid(&self) -> DimensionUlid {
+    pub fn ulid(&self) -> DimensionGlobalId {
         self.definition.ulid
     }
 
@@ -267,7 +269,7 @@ impl Dimension {
     }
 
     // Not the ULID alone: with the calendar and the version first, one period or version is one range of sorted keys.
-    pub fn key_order(&self) -> (DimensionKind, DimensionUlid) {
+    pub fn key_order(&self) -> (DimensionKind, DimensionGlobalId) {
         (self.definition.kind, self.definition.ulid)
     }
 
@@ -283,17 +285,17 @@ impl Dimension {
         &self.members
     }
 
-    pub fn member(&self, id: MemberId) -> Option<Member<'_>> {
+    pub fn member(&self, id: MemberIndex) -> Option<Member<'_>> {
         (id.0 < self.len()).then_some(Member {
             dimension: self,
             id,
         })
     }
 
-    pub fn member_by_ulid(&self, ulid: MemberUlid) -> Option<Member<'_>> {
+    pub fn member_by_ulid(&self, ulid: MemberGlobalId) -> Option<Member<'_>> {
         let id = *self
             .by_ulid
-            .find(self.hasher.hash_one(ulid.0), |id: &MemberId| {
+            .find(self.hasher.hash_one(ulid.0), |id: &MemberIndex| {
                 ulid_at(&self.ulids, id.0 as usize) == ulid.0
             })?;
         self.member(id)
@@ -302,7 +304,7 @@ impl Dimension {
     pub fn member_by_key(&self, key: &str) -> Option<Member<'_>> {
         let id = *self
             .by_key
-            .find(self.hasher.hash_one(key), |id: &MemberId| {
+            .find(self.hasher.hash_one(key), |id: &MemberIndex| {
                 self.keys.value(id.0 as usize) == key
             })?;
         self.member(id)
@@ -324,16 +326,16 @@ impl Dimension {
 #[derive(Clone, Copy)]
 pub struct Member<'d> {
     dimension: &'d Dimension,
-    id: MemberId,
+    id: MemberIndex,
 }
 
 impl<'d> Member<'d> {
-    pub fn id(self) -> MemberId {
+    pub fn id(self) -> MemberIndex {
         self.id
     }
 
-    pub fn ulid(self) -> MemberUlid {
-        MemberUlid(ulid_at(&self.dimension.ulids, self.id.0 as usize))
+    pub fn ulid(self) -> MemberGlobalId {
+        MemberGlobalId(ulid_at(&self.dimension.ulids, self.id.0 as usize))
     }
 
     pub fn name(self) -> &'d str {
@@ -352,7 +354,7 @@ pub struct Attribute<'d> {
 }
 
 impl<'d> Attribute<'d> {
-    pub fn ulid(self) -> AttributeUlid {
+    pub fn ulid(self) -> AttributeGlobalId {
         self.definition.ulid
     }
 
@@ -360,14 +362,14 @@ impl<'d> Attribute<'d> {
         &self.definition.name
     }
 
-    pub fn target(self) -> DimensionUlid {
+    pub fn target(self) -> DimensionGlobalId {
         self.definition.target
     }
 
-    pub fn value(self, member: MemberId) -> Option<MemberId> {
+    pub fn value(self, member: MemberIndex) -> Option<MemberIndex> {
         let row = member.0 as usize;
         (row < self.values.len() && self.values.is_valid(row))
-            .then(|| MemberId(self.values.value(row)))
+            .then(|| MemberIndex(self.values.value(row)))
     }
 
     pub fn values(self) -> &'d UInt32Array {

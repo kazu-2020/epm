@@ -1,20 +1,20 @@
 use std::collections::{BTreeSet, HashMap};
 
-use dimension::{AttributeUlid, Dimension, DimensionKind, DimensionUlid, MemberId};
+use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberIndex};
 use duckdb::Connection;
 use formula::{CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign, Term};
-use measure::{Measure, MeasureUlid};
+use measure::{Measure, MeasureGlobalId};
 
 pub struct Oracle {
     connection: Connection,
     key_orders: KeyOrders,
 }
 
-type KeyOrders = HashMap<DimensionUlid, (DimensionKind, DimensionUlid)>;
+type KeyOrders = HashMap<DimensionGlobalId, (DimensionKind, DimensionGlobalId)>;
 
 struct Query {
     sql: String,
-    axes: BTreeSet<DimensionUlid>,
+    axes: BTreeSet<DimensionGlobalId>,
 }
 
 impl Oracle {
@@ -33,7 +33,7 @@ impl Oracle {
                 ))?;
                 let mut appender = connection.appender(&table)?;
                 for member in 0..dimension.len() {
-                    let target = attribute.value(MemberId(member)).map(|target| target.0);
+                    let target = attribute.value(MemberIndex(member)).map(|target| target.0);
                     appender.append_row(duckdb::params![member, target])?;
                 }
                 appender.flush()?;
@@ -65,8 +65,8 @@ impl Oracle {
     pub fn evaluate(
         &mut self,
         expression: &CheckedExpression,
-        result: MeasureUlid,
-    ) -> duckdb::Result<Vec<(Vec<MemberId>, f64)>> {
+        result: MeasureGlobalId,
+    ) -> duckdb::Result<Vec<(Vec<MemberIndex>, f64)>> {
         let table = measure_table(result);
         self.connection.execute_batch(&format!(
             "CREATE TABLE {table} AS {}",
@@ -81,7 +81,7 @@ impl Oracle {
         let width = expression.result_axes().len();
         let rows = statement.query_map([], |row| {
             let coordinate = (0..width)
-                .map(|axis| row.get(axis).map(MemberId))
+                .map(|axis| row.get(axis).map(MemberIndex))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((coordinate, row.get(width)?))
         })?;
@@ -89,19 +89,19 @@ impl Oracle {
     }
 }
 
-fn member_table(dimension: DimensionUlid) -> String {
+fn member_table(dimension: DimensionGlobalId) -> String {
     format!("member_{}", dimension.0.0)
 }
 
-fn attribute_table(attribute: AttributeUlid) -> String {
+fn attribute_table(attribute: AttributeGlobalId) -> String {
     format!("attribute_{}", attribute.0.0)
 }
 
-fn measure_table(measure: MeasureUlid) -> String {
+fn measure_table(measure: MeasureGlobalId) -> String {
     format!("measure_{}", measure.0.0)
 }
 
-fn column(dimension: DimensionUlid) -> String {
+fn column(dimension: DimensionGlobalId) -> String {
     format!("axis_{}", dimension.0.0)
 }
 
@@ -149,7 +149,7 @@ fn query(node: &CheckedNode, key_orders: &KeyOrders) -> Query {
     }
 }
 
-fn expanded(query: &Query, axes: &[DimensionUlid]) -> String {
+fn expanded(query: &Query, axes: &[DimensionGlobalId]) -> String {
     let mut items = Vec::new();
     let mut joins = String::new();
     for &axis in axes {
@@ -174,11 +174,11 @@ fn sum_of_terms(terms: &[Term], key_orders: &KeyOrders) -> Query {
         .iter()
         .map(|term| (term.sign, query(&term.node, key_orders)))
         .collect();
-    let axes: BTreeSet<DimensionUlid> = terms
+    let axes: BTreeSet<DimensionGlobalId> = terms
         .iter()
         .flat_map(|(_, term)| term.axes.iter().copied())
         .collect();
-    let axes_list: Vec<DimensionUlid> = axes.iter().copied().collect();
+    let axes_list: Vec<DimensionGlobalId> = axes.iter().copied().collect();
     let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
     let creates_cells = |term: &Query| !any_full || term.axes.len() == axes.len();
     let columns = if axes.is_empty() {
@@ -235,7 +235,7 @@ fn sum_of_terms(terms: &[Term], key_orders: &KeyOrders) -> Query {
 }
 
 fn product(operator: ProductOperator, left: &Query, right: &Query) -> Query {
-    let axes: Vec<DimensionUlid> = left.axes.union(&right.axes).copied().collect();
+    let axes: Vec<DimensionGlobalId> = left.axes.union(&right.axes).copied().collect();
     let condition = if axes.is_empty() {
         "TRUE".to_string()
     } else {
@@ -268,8 +268,8 @@ fn product(operator: ProductOperator, left: &Query, right: &Query) -> Query {
 
 fn filter(
     value: &Query,
-    dimension: DimensionUlid,
-    members: &[MemberId],
+    dimension: DimensionGlobalId,
+    members: &[MemberIndex],
     keeps_axis: bool,
 ) -> Query {
     let mut axes = value.axes.clone();
@@ -320,7 +320,7 @@ fn sum(value: &Query, by: &[CheckedAxis], key_orders: &KeyOrders) -> Query {
             }
         }
     }
-    let mut ordered: Vec<DimensionUlid> = value.axes.iter().copied().collect();
+    let mut ordered: Vec<DimensionGlobalId> = value.axes.iter().copied().collect();
     ordered.sort_by_key(|axis| key_orders[axis]);
     let order: Vec<String> = ordered
         .iter()
