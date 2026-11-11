@@ -312,6 +312,20 @@ fn count(length: usize) -> u32 {
     u32::try_from(length).expect("a chunk and a manifest list hold less than 2^32 items")
 }
 
+fn varint(bytes: &[u8]) -> Result<(u64, usize), SnapshotError> {
+    let mut value = 0u64;
+    for (index, &byte) in bytes.iter().take(10).enumerate() {
+        if index == 9 && byte > 1 {
+            return Err(SnapshotError::Truncated);
+        }
+        value |= u64::from(byte & 0x7f) << (7 * index);
+        if byte < 0x80 {
+            return Ok((value, index + 1));
+        }
+    }
+    Err(SnapshotError::Truncated)
+}
+
 struct Reader {
     rest: Bytes,
 }
@@ -336,27 +350,14 @@ impl Reader {
         Ok(self.take(8)?.get_u64_le())
     }
 
-    fn f64(&mut self) -> Result<f64, SnapshotError> {
-        Ok(self.take(8)?.get_f64_le())
-    }
-
     fn ulid(&mut self) -> Result<Ulid, SnapshotError> {
         Ok(Ulid(self.take(16)?.get_u128_le()))
     }
 
     fn varint(&mut self) -> Result<u64, SnapshotError> {
-        let mut value = 0u64;
-        for shift in (0..64).step_by(7) {
-            let byte = self.u8()?;
-            if shift == 63 && byte > 1 {
-                return Err(SnapshotError::Truncated);
-            }
-            value |= u64::from(byte & 0x7f) << shift;
-            if byte < 0x80 {
-                return Ok(value);
-            }
-        }
-        Err(SnapshotError::Truncated)
+        let (value, used) = varint(&self.rest)?;
+        self.rest.advance(used);
+        Ok(value)
     }
 
     fn request_ids(
@@ -378,14 +379,21 @@ impl Reader {
         keys: &mut Vec<u64>,
         values: &mut Vec<f64>,
     ) -> Result<(), SnapshotError> {
+        let bytes = &self.rest[..];
+        let mut at = 0;
         let mut previous = 0u64;
         for _ in 0..count {
+            let (delta, used) = varint(&bytes[at..])?;
+            at += used;
             previous = previous
-                .checked_add(self.varint()?)
+                .checked_add(delta)
                 .ok_or(SnapshotError::Truncated)?;
+            let value = bytes.get(at..at + 8).ok_or(SnapshotError::Truncated)?;
+            at += 8;
             keys.push(previous);
-            values.push(self.f64()?);
+            values.push(f64::from_le_bytes(value.try_into().expect("8 bytes")));
         }
+        self.rest.advance(at);
         self.end()
     }
 
