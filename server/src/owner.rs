@@ -103,6 +103,10 @@ pub fn start(
     workspace: String,
     epoch: Epoch,
 ) -> (Handle, impl Future<Output = Exit>) {
+    assert!(
+        engine.next.index() == start.request_ids.len() && engine.slot == start.slot,
+        "the engine starts where the change log starts"
+    );
     let (requests, waiting) = mpsc::channel(WAITING_REQUESTS);
     let (commits, received) = mpsc::unbounded_channel();
     let engine_next = engine.next.0;

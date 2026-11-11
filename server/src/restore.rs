@@ -69,6 +69,6 @@ async fn read(
 }
 
 async fn get(store: &dyn ObjectStore, folder: &Path, name: &str) -> Option<Bytes> {
-    let path = Path::from(format!("{folder}/{name}"));
+    let path = Path::from_iter(folder.parts().chain(Path::from(name).parts()));
     store.get(&path).await.ok()?.bytes().await.ok()
 }

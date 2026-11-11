@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Start, Submission, serve};
+use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Slot, Start, Submission, serve};
 use datagen::representative::{self, Size};
 use dimension::MemberId;
 use measure::{MeasureError, MeasureUlid};
@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use ulid::Ulid;
 
-const WORKSPACE: &str = "ws";
+const WORKSPACE: &str = "ws~";
 const QUANTITY: MeasureUlid = MeasureUlid(Ulid(100));
 const SALES: MeasureUlid = MeasureUlid(Ulid(200));
 const CELL: [u32; 5] = [0, 1, 1, 0, 1];
@@ -524,4 +524,34 @@ async fn a_new_owner_starts_from_the_newest_snapshot_it_can_read() {
     let (engine, start) = restored(&store).await;
     assert_eq!(start, Start::default(), "no snapshot is complete");
     assert_eq!(quantity_in(&engine), None);
+}
+
+fn start_from(start: Start) {
+    let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
+    let _ = server::start(
+        engine,
+        start,
+        Settings::default(),
+        Arc::new(InMemory::new()),
+        WORKSPACE.to_owned(),
+        Epoch(1),
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "the engine starts where the change log starts")]
+async fn an_owner_does_not_start_when_the_engine_and_the_log_start_at_different_slots() {
+    start_from(Start {
+        slot: Slot(1),
+        ..Start::default()
+    });
+}
+
+#[tokio::test]
+#[should_panic(expected = "the engine starts where the change log starts")]
+async fn an_owner_does_not_start_when_the_engine_and_the_log_start_at_different_counts() {
+    start_from(Start {
+        request_ids: vec![RequestId(Bytes::from_static(b"r0"))],
+        ..Start::default()
+    });
 }

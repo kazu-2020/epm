@@ -72,7 +72,7 @@ impl Applier {
         });
         if let Some(engine) = published
             && !self.writing
-            && engine.slot.0 >= self.snapshot_slot.0 + self.snapshot_every
+            && engine.slot.0 >= self.snapshot_slot.0.saturating_add(self.snapshot_every)
         {
             self.writing = true;
             effects.push(Effect::WriteSnapshot(engine.snapshot(&self.request_ids)));
@@ -121,7 +121,7 @@ fn calculate(
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use change_log::{RequestId, Sequence};
+    use change_log::{RequestId, Sequence, Start};
 
     use crate::snapshot::Snapshot;
     use datagen::representative::{self, Size};
@@ -321,5 +321,19 @@ mod tests {
             Some((Slot(6), 5)),
             "a failed write is tried again, and holds only the published commits"
         );
+    }
+
+    #[test]
+    fn no_snapshot_is_written_when_the_interval_is_the_largest_count() {
+        let start = Start {
+            slot: Slot(5),
+            ..Start::default()
+        };
+        let restored = Arc::new(
+            Engine::resume(representative::generate(&Size::TINY, 7), &start)
+                .expect("valid formulas"),
+        );
+        let mut applier = applier(Arc::clone(&restored));
+        assert_eq!(written(&published(&mut applier, &restored, 0, 6)), None);
     }
 }
