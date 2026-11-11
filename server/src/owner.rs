@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use change_log::{Admit, Commit, Epoch, Request, RequestId, Sequence, Slot, Start, Submission};
-use dimension::MemberId;
-use measure::{MeasureError, MeasureUlid};
+use dimension::MemberIndex;
+use measure::{MeasureError, MeasureGlobalId};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -62,7 +62,7 @@ pub enum SubmitError {
 #[derive(Debug, PartialEq)]
 pub enum ReadError {
     NotCommitted(Lag),
-    NoMeasure(MeasureUlid),
+    NoMeasure(MeasureGlobalId),
     Coordinate(MeasureError),
     Stopped,
 }
@@ -337,7 +337,7 @@ impl Handle {
     pub async fn read(
         &self,
         at_least: Option<Sequence>,
-        cells: &[(MeasureUlid, Vec<MemberId>)],
+        cells: &[(MeasureGlobalId, Vec<MemberIndex>)],
     ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
         // Not only after the wait: a read that can never succeed would get NotCommitted, and the caller would try it again.
         values(&self.published.borrow(), cells)?;
@@ -374,7 +374,7 @@ impl Handle {
 
 fn values(
     engine: &Engine,
-    cells: &[(MeasureUlid, Vec<MemberId>)],
+    cells: &[(MeasureGlobalId, Vec<MemberIndex>)],
 ) -> Result<Vec<Option<f64>>, ReadError> {
     cells
         .iter()

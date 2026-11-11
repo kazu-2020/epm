@@ -1,16 +1,16 @@
 use std::fmt;
 
-use dimension::{AttributeUlid, DimensionUlid};
-use measure::{MeasureError, MeasureUlid};
+use dimension::{AttributeGlobalId, DimensionGlobalId};
+use measure::{MeasureError, MeasureGlobalId};
 
 #[derive(Debug, PartialEq)]
 pub enum EvaluateError {
-    ResultAxesChanged(MeasureUlid),
-    MissingMeasure(MeasureUlid),
-    MeasureAxesChanged(MeasureUlid),
-    MeasureLayoutChanged(MeasureUlid),
-    MissingDimension(DimensionUlid),
-    MissingAttribute(AttributeUlid),
+    ResultAxesChanged(MeasureGlobalId),
+    MissingMeasure(MeasureGlobalId),
+    MeasureAxesChanged(MeasureGlobalId),
+    MeasureLayoutChanged(MeasureGlobalId),
+    MissingDimension(DimensionGlobalId),
+    MissingAttribute(AttributeGlobalId),
     InvalidResult(MeasureError),
 }
 

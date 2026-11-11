@@ -15,7 +15,7 @@ use change_log::{Commit, RequestId, Sequence, Slot, Start};
 use dimension::Dimension;
 use evaluator::EvaluateError;
 use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
-use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureUlid};
+use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
 use workspace::Workspace;
 
 pub use crate::edit::{DecodeError, Edit};
@@ -32,7 +32,7 @@ pub enum Exit {
 pub struct Engine {
     dimensions: Arc<[Dimension]>,
     measures: Vec<Measure>,
-    formulas: Arc<[(MeasureUlid, CheckedExpression)]>,
+    formulas: Arc<[(MeasureGlobalId, CheckedExpression)]>,
     definitions: Definitions,
     next: Sequence,
     slot: Slot,
@@ -40,25 +40,25 @@ pub struct Engine {
 
 #[derive(Clone, Debug)]
 pub struct Definitions {
-    inputs: BTreeMap<MeasureUlid, Delta>,
+    inputs: BTreeMap<MeasureGlobalId, Delta>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum FormulaError {
     Syntax {
-        result: MeasureUlid,
+        result: MeasureGlobalId,
         errors: Vec<SyntaxError>,
     },
     Resolve {
-        result: MeasureUlid,
+        result: MeasureGlobalId,
         errors: Vec<ResolveError>,
     },
     Axes {
-        result: MeasureUlid,
+        result: MeasureGlobalId,
         errors: Vec<AxisError>,
     },
     Evaluate {
-        result: MeasureUlid,
+        result: MeasureGlobalId,
         error: EvaluateError,
     },
 }
@@ -66,7 +66,7 @@ pub enum FormulaError {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Invalid {
     Undecodable(DecodeError),
-    NotAnInput(MeasureUlid),
+    NotAnInput(MeasureGlobalId),
     Coordinate(MeasureError),
 }
 
@@ -182,7 +182,7 @@ impl Engine {
             next = sequence.next();
         }
         let dimensions: Vec<&Dimension> = self.dimensions.iter().collect();
-        let formulas: Vec<(MeasureUlid, &CheckedExpression)> = self
+        let formulas: Vec<(MeasureGlobalId, &CheckedExpression)> = self
             .formulas
             .iter()
             .map(|(result, expression)| (*result, expression))
@@ -237,7 +237,7 @@ impl Engine {
 }
 
 impl Definitions {
-    pub fn is_input(&self, measure: MeasureUlid) -> bool {
+    pub fn is_input(&self, measure: MeasureGlobalId) -> bool {
         self.inputs.contains_key(&measure)
     }
 
@@ -248,7 +248,7 @@ impl Definitions {
     fn add(
         &self,
         payload: &Bytes,
-        deltas: &mut BTreeMap<MeasureUlid, Delta>,
+        deltas: &mut BTreeMap<MeasureGlobalId, Delta>,
     ) -> Result<(), Invalid> {
         let edit = Edit::decode(payload.clone()).map_err(Invalid::Undecodable)?;
         let empty = self

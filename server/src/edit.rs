@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use dimension::MemberId;
-use measure::MeasureUlid;
+use dimension::MemberIndex;
+use measure::MeasureGlobalId;
 use ulid::Ulid;
 
 const VERSION: u8 = 1;
@@ -9,8 +9,8 @@ const SET: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Edit {
-    pub measure: MeasureUlid,
-    pub coordinate: Vec<MemberId>,
+    pub measure: MeasureGlobalId,
+    pub coordinate: Vec<MemberIndex>,
     pub value: Option<f64>,
 }
 
@@ -48,12 +48,12 @@ impl Edit {
         if version != VERSION {
             return Err(DecodeError::Version(version));
         }
-        let measure = MeasureUlid(Ulid(take(&mut bytes, 16)?.get_u128()));
+        let measure = MeasureGlobalId(Ulid(take(&mut bytes, 16)?.get_u128()));
         let count = take(&mut bytes, 4)?.get_u32_le();
         // Not Vec::with_capacity(count): the count is untrusted until the bytes behind it are read.
         let mut coordinate = Vec::new();
         for _ in 0..count {
-            coordinate.push(MemberId(take(&mut bytes, 4)?.get_u32_le()));
+            coordinate.push(MemberIndex(take(&mut bytes, 4)?.get_u32_le()));
         }
         let value = match take(&mut bytes, 1)?.get_u8() {
             CLEAR => None,
@@ -87,8 +87,8 @@ mod tests {
 
     fn edit(value: Option<f64>) -> Edit {
         Edit {
-            measure: MeasureUlid(Ulid(0x0102)),
-            coordinate: vec![MemberId(3), MemberId(0x0405)],
+            measure: MeasureGlobalId(Ulid(0x0102)),
+            coordinate: vec![MemberIndex(3), MemberIndex(0x0405)],
             value,
         }
     }

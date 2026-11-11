@@ -421,7 +421,7 @@ fn a_bracket_removes_its_axis_and_filter_keeps_it() {
     );
     assert_eq!(
         render(check.checked.expect("the check passes").root()),
-        "(Terms +(Filter [部門 期間] 部門: [MemberId(1)] keeps_axis=false) +(Filter (Filter [部門 期間] 期間: [MemberId(0)] keeps_axis=false) 部門: [MemberId(0), MemberId(1)] keeps_axis=true))"
+        "(Terms +(Filter [部門 期間] 部門: [MemberIndex(1)] keeps_axis=false) +(Filter (Filter [部門 期間] 期間: [MemberIndex(0)] keeps_axis=false) 部門: [MemberIndex(0), MemberIndex(1)] keeps_axis=true))"
     );
 }
 

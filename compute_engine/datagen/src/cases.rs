@@ -2,16 +2,16 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionKind,
-    DimensionUlid, KeyKind, MemberId,
+    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionGlobalId,
+    DimensionKind, KeyKind, MemberIndex,
 };
 use formula::{CheckedExpression, ResolvedExpression};
-use measure::{Measure, MeasureDefinition, MeasureUlid};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 
-const PERIOD: DimensionUlid = DimensionUlid(Ulid(1));
-const DEPARTMENT: DimensionUlid = DimensionUlid(Ulid(2));
-const DIVISION: DimensionUlid = DimensionUlid(Ulid(3));
+const PERIOD: DimensionGlobalId = DimensionGlobalId(Ulid(1));
+const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(2));
+const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(3));
 
 type Cells = [(&'static [u32], f64)];
 
@@ -249,7 +249,7 @@ impl Default for Fixture {
             "部門",
             &["営業部", "開発部", "管理部"],
             vec![AttributeDefinition {
-                ulid: AttributeUlid(Ulid(21)),
+                ulid: AttributeGlobalId(Ulid(21)),
                 name: "事業部".into(),
                 target: DIVISION,
             }],
@@ -308,9 +308,9 @@ impl Default for Fixture {
             .find(|input| input.definition().name == "改定")
             .expect("the fixture defines '改定'");
         let mut delta = revised.delta();
-        delta.set(&[MemberId(0), MemberId(0)], 5.0).unwrap();
-        delta.delete(&[MemberId(1), MemberId(0)]).unwrap();
-        delta.set(&[MemberId(2), MemberId(1)], 3.0).unwrap();
+        delta.set(&[MemberIndex(0), MemberIndex(0)], 5.0).unwrap();
+        delta.delete(&[MemberIndex(1), MemberIndex(0)]).unwrap();
+        delta.set(&[MemberIndex(2), MemberIndex(1)], 3.0).unwrap();
         *revised = revised.apply(delta).unwrap();
         Fixture {
             dimensions,
@@ -347,7 +347,7 @@ impl Fixture {
     }
 }
 
-pub fn exact(cells: &[(Vec<MemberId>, f64)]) -> Vec<(Vec<u32>, String)> {
+pub fn exact(cells: &[(Vec<MemberIndex>, f64)]) -> Vec<(Vec<u32>, String)> {
     // Not the f64 itself: 0.0 == -0.0, and the cases must tell them apart.
     cells
         .iter()
@@ -366,7 +366,7 @@ pub fn expected(case: &Case) -> Vec<(Vec<u32>, String)> {
 }
 
 fn dimension(
-    ulid: DimensionUlid,
+    ulid: DimensionGlobalId,
     name: &str,
     names: &[&str],
     attributes: Vec<AttributeDefinition>,
@@ -397,9 +397,9 @@ fn dimension(
     Dimension::try_new(definition, batch, targets).unwrap()
 }
 
-fn measure_definition(ulid: u128, name: &str, axes: &[DimensionUlid]) -> MeasureDefinition {
+fn measure_definition(ulid: u128, name: &str, axes: &[DimensionGlobalId]) -> MeasureDefinition {
     MeasureDefinition {
-        ulid: MeasureUlid(Ulid(ulid)),
+        ulid: MeasureGlobalId(Ulid(ulid)),
         name: name.into(),
         axes: axes.to_vec(),
     }
@@ -412,7 +412,7 @@ fn measure(
 ) -> Measure {
     let cells = cells
         .iter()
-        .map(|&(coordinate, value)| (coordinate.iter().copied().map(MemberId).collect(), value))
+        .map(|&(coordinate, value)| (coordinate.iter().copied().map(MemberIndex).collect(), value))
         .collect();
     Measure::from_cells(definition, cells, dimensions).unwrap()
 }

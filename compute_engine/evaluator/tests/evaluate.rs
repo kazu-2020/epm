@@ -1,8 +1,8 @@
 use datagen::cases::{self, CASES, Fixture};
-use dimension::{AttributeUlid, Dimension};
+use dimension::{AttributeGlobalId, Dimension};
 use evaluator::EvaluateError;
 use formula::{CheckedExpression, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
-use measure::{Measure, MeasureDefinition, MeasureError, MeasureUlid};
+use measure::{Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
 use ulid::Ulid;
 
 #[test]
@@ -103,7 +103,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
     let ResolvedAxisKind::Attribute { attribute, .. } = &mut by[0].kind else {
         panic!("the first BY axis is an attribute");
     };
-    *attribute = AttributeUlid(Ulid(999));
+    *attribute = AttributeGlobalId(Ulid(999));
     assert_eq!(
         evaluator::evaluate(
             &checked(&unknown_attribute, division_result),
@@ -112,10 +112,10 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &dimensions
         )
         .unwrap_err(),
-        EvaluateError::MissingAttribute(AttributeUlid(Ulid(999)))
+        EvaluateError::MissingAttribute(AttributeGlobalId(Ulid(999)))
     );
     let without_axes = MeasureDefinition {
-        ulid: MeasureUlid(Ulid(99)),
+        ulid: MeasureGlobalId(Ulid(99)),
         name: "軸なし".into(),
         axes: Vec::new(),
     };

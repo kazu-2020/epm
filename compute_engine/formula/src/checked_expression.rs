@@ -1,5 +1,5 @@
-use dimension::{AttributeUlid, DimensionUlid, MemberId};
-use measure::MeasureUlid;
+use dimension::{AttributeGlobalId, DimensionGlobalId, MemberIndex};
+use measure::MeasureGlobalId;
 
 use crate::expression::BinaryOperator;
 use crate::resolved_expression::{ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
@@ -7,15 +7,15 @@ use crate::resolved_expression::{ResolvedAxisKind, ResolvedExpression, ResolvedE
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckedExpression {
     root: CheckedNode,
-    result_axes: Vec<DimensionUlid>,
+    result_axes: Vec<DimensionGlobalId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckedNode {
     Number(f64),
     Measure {
-        ulid: MeasureUlid,
-        axes: Vec<DimensionUlid>,
+        ulid: MeasureGlobalId,
+        axes: Vec<DimensionGlobalId>,
     },
     Terms(Vec<Term>),
     Product {
@@ -29,8 +29,8 @@ pub enum CheckedNode {
     },
     Filter {
         value: Box<CheckedNode>,
-        dimension: DimensionUlid,
-        members: Vec<MemberId>,
+        dimension: DimensionGlobalId,
+        members: Vec<MemberIndex>,
         keeps_axis: bool,
     },
 }
@@ -64,18 +64,18 @@ impl Sign {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckedAxis {
-    Dimension(DimensionUlid),
+    Dimension(DimensionGlobalId),
     Attribute {
-        dimension: DimensionUlid,
-        attribute: AttributeUlid,
-        target: DimensionUlid,
+        dimension: DimensionGlobalId,
+        attribute: AttributeGlobalId,
+        target: DimensionGlobalId,
     },
 }
 
 impl CheckedExpression {
     pub(crate) fn new(
         expression: &ResolvedExpression,
-        result_axes: &[DimensionUlid],
+        result_axes: &[DimensionGlobalId],
     ) -> CheckedExpression {
         CheckedExpression {
             root: node(expression).expect("the checker reports every unresolved node"),
@@ -89,7 +89,7 @@ impl CheckedExpression {
     }
 
     #[must_use]
-    pub fn result_axes(&self) -> &[DimensionUlid] {
+    pub fn result_axes(&self) -> &[DimensionGlobalId] {
         &self.result_axes
     }
 }

@@ -3,9 +3,9 @@ use std::collections::{BTreeSet, HashMap};
 use column_engine::Region;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::{Dimension, DimensionUlid, MemberId};
+use dimension::{Dimension, DimensionGlobalId, MemberIndex};
 use formula::CheckedExpression;
-use measure::{Measure, MeasureDefinition, MeasureUlid};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use ulid::Ulid;
@@ -19,14 +19,14 @@ const SMALL: Size = Size {
     account_fill: 0.5,
 };
 
-const CATEGORY: DimensionUlid = DimensionUlid(Ulid(1));
-const GROUP: DimensionUlid = DimensionUlid(Ulid(2));
-const ACCOUNT: DimensionUlid = DimensionUlid(Ulid(3));
-const DEPARTMENT: DimensionUlid = DimensionUlid(Ulid(5));
-const PRODUCT: DimensionUlid = DimensionUlid(Ulid(7));
-const CUSTOMER: DimensionUlid = DimensionUlid(Ulid(8));
-const PERIOD: DimensionUlid = DimensionUlid(Ulid(9));
-const VERSION: DimensionUlid = DimensionUlid(Ulid(10));
+const CATEGORY: DimensionGlobalId = DimensionGlobalId(Ulid(1));
+const GROUP: DimensionGlobalId = DimensionGlobalId(Ulid(2));
+const ACCOUNT: DimensionGlobalId = DimensionGlobalId(Ulid(3));
+const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(5));
+const PRODUCT: DimensionGlobalId = DimensionGlobalId(Ulid(7));
+const CUSTOMER: DimensionGlobalId = DimensionGlobalId(Ulid(8));
+const PERIOD: DimensionGlobalId = DimensionGlobalId(Ulid(9));
+const VERSION: DimensionGlobalId = DimensionGlobalId(Ulid(10));
 
 struct Model {
     workspace: Workspace,
@@ -76,7 +76,7 @@ impl Model {
         self.workspace.dimensions.iter().collect()
     }
 
-    fn dimension(&self, ulid: DimensionUlid) -> &Dimension {
+    fn dimension(&self, ulid: DimensionGlobalId) -> &Dimension {
         self.workspace
             .dimensions
             .iter()
@@ -84,7 +84,7 @@ impl Model {
             .expect("the representative model has the dimension")
     }
 
-    fn member(&self, dimension: DimensionUlid, key: &str) -> u32 {
+    fn member(&self, dimension: DimensionGlobalId, key: &str) -> u32 {
         self.dimension(dimension)
             .member_by_key(key)
             .expect("the member exists")
@@ -92,7 +92,7 @@ impl Model {
             .0
     }
 
-    fn measure(&self, name: &str) -> MeasureUlid {
+    fn measure(&self, name: &str) -> MeasureGlobalId {
         self.workspace
             .inputs
             .iter()
@@ -111,12 +111,12 @@ impl Model {
     fn changed(
         &self,
         measure: &str,
-        changed: &[(DimensionUlid, u32)],
+        changed: &[(DimensionGlobalId, u32)],
         formula: &str,
     ) -> Option<Region> {
-        let (axes, members): (Vec<DimensionUlid>, Vec<MemberId>) = changed
+        let (axes, members): (Vec<DimensionGlobalId>, Vec<MemberIndex>) = changed
             .iter()
-            .map(|&(axis, member)| (axis, MemberId(member)))
+            .map(|&(axis, member)| (axis, MemberIndex(member)))
             .unzip();
         let region = Region::of_changes(&axes, [members.as_slice()]).expect("one cell changed");
         let changed = HashMap::from([(self.measure(measure), region)]);
@@ -129,7 +129,7 @@ impl Model {
             .expect("the region is found")
     }
 
-    fn formulas(&self) -> Vec<(MeasureUlid, &CheckedExpression)> {
+    fn formulas(&self) -> Vec<(MeasureGlobalId, &CheckedExpression)> {
         self.checked
             .iter()
             .map(|(result, expression)| (result.ulid, expression))
@@ -153,7 +153,7 @@ fn only(members: &[u32]) -> Option<BTreeSet<u32>> {
     Some(members.iter().copied().collect())
 }
 
-fn assert_region(region: &Region, expected: &[(DimensionUlid, Option<BTreeSet<u32>>)]) {
+fn assert_region(region: &Region, expected: &[(DimensionGlobalId, Option<BTreeSet<u32>>)]) {
     for (axis, members) in expected {
         assert_eq!(region.members(*axis), members.as_ref(), "{axis:?}");
     }
@@ -247,7 +247,7 @@ fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
                 .attributes()
                 .next()
                 .expect("an account has a group")
-                .value(MemberId(account))
+                .value(MemberIndex(account))
                 .is_some()
         })
         .expect("some account has a group");
@@ -255,7 +255,7 @@ fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
         .attributes()
         .next()
         .expect("an account has a group")
-        .value(MemberId(account))
+        .value(MemberIndex(account))
         .expect("the account has a group")
         .0;
     let amount = [
@@ -295,13 +295,13 @@ fn edit_and_compare(model: &Model) {
     let mut random = StdRng::seed_from_u64(11);
     for _ in 0..40 {
         let input = random.random_range(0..inputs.len());
-        let cells: Vec<(Vec<MemberId>, f64)> = inputs[input].cells().collect();
-        let coordinate: Vec<MemberId> = match random.random_range(0..3) {
+        let cells: Vec<(Vec<MemberIndex>, f64)> = inputs[input].cells().collect();
+        let coordinate: Vec<MemberIndex> = match random.random_range(0..3) {
             0 => inputs[input]
                 .definition()
                 .axes
                 .iter()
-                .map(|&axis| MemberId(random.random_range(0..model.dimension(axis).len())))
+                .map(|&axis| MemberIndex(random.random_range(0..model.dimension(axis).len())))
                 .collect(),
             _ => cells[random.random_range(0..cells.len())].0.clone(),
         };
@@ -343,10 +343,10 @@ fn two_deltas_for_one_measure_recalculate_the_cells_of_both() {
         .iter()
         .position(|input| input.ulid() == quantity)
         .expect("the quantity is an input");
-    let cells: Vec<(Vec<MemberId>, f64)> = inputs[input].cells().collect();
+    let cells: Vec<(Vec<MemberIndex>, f64)> = inputs[input].cells().collect();
     let (first, last) = (&cells[0].0, &cells[cells.len() - 1].0);
     assert_ne!(first[0], last[0], "the two cells are in different periods");
-    let delta = |measure: &Measure, coordinate: &[MemberId]| {
+    let delta = |measure: &Measure, coordinate: &[MemberIndex]| {
         let mut delta = measure.delta();
         delta.set(coordinate, 1_234.5).expect("the coordinate fits");
         delta

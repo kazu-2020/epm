@@ -7,15 +7,15 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
 use change_log::{Epoch, Start};
 use datagen::representative::{self, Size};
-use measure::MeasureUlid;
+use measure::MeasureGlobalId;
 use object_store::memory::InMemory;
 use serde_json::{Value, json};
 use server::{Calculation, Engine, Settings};
 use tower::ServiceExt;
 use ulid::Ulid;
 
-const QUANTITY: MeasureUlid = MeasureUlid(Ulid(100));
-const SALES: MeasureUlid = MeasureUlid(Ulid(200));
+const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
+const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
 
 struct App {
     router: Router,
@@ -69,7 +69,12 @@ async fn call_as(app: &App, method: &str, content_type: &str, body: Value) -> (S
     (status, serde_json::from_slice(&bytes).expect("a JSON body"))
 }
 
-fn edit(request_id: &str, measure: MeasureUlid, coordinate: &[u32], value: Option<f64>) -> Value {
+fn edit(
+    request_id: &str,
+    measure: MeasureGlobalId,
+    coordinate: &[u32],
+    value: Option<f64>,
+) -> Value {
     json!({
         "request_id": request_id,
         "measure": measure.0.to_string(),
@@ -78,7 +83,7 @@ fn edit(request_id: &str, measure: MeasureUlid, coordinate: &[u32], value: Optio
     })
 }
 
-fn cell(measure: MeasureUlid, coordinate: &[u32]) -> Value {
+fn cell(measure: MeasureGlobalId, coordinate: &[u32]) -> Value {
     json!({ "measure": measure.0.to_string(), "coordinate": coordinate })
 }
 
@@ -225,7 +230,7 @@ async fn each_refusal_has_its_connect_code() {
         calculation: Calculation::Inline(Duration::from_secs(10)),
         ..Settings::default()
     });
-    let unknown = MeasureUlid(Ulid(999));
+    let unknown = MeasureGlobalId(Ulid(999));
     let read_of = |at_least: u64, cell: Value| json!({ "at_least": at_least, "cells": [cell] });
     assert_eq!(
         refusal(&app, "ReadCells", read_of(5, cell(unknown, &[]))).await,
@@ -270,7 +275,7 @@ async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions()
     let (status, definitions) = call(&app, "ListDefinitions", json!({})).await;
     assert_eq!(status, StatusCode::OK);
     let measures = definitions["measures"].as_array().expect("measures");
-    let kind = |ulid: MeasureUlid| {
+    let kind = |ulid: MeasureGlobalId| {
         measures
             .iter()
             .find(|measure| measure["ulid"] == ulid.0.to_string())

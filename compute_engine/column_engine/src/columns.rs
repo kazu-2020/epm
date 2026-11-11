@@ -3,7 +3,7 @@ use std::iter;
 use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
-use dimension::{Attribute, Dimension, DimensionUlid, MemberId};
+use dimension::{Attribute, Dimension, DimensionGlobalId, MemberIndex};
 use evaluator::EvaluateError;
 use formula::{ProductOperator, Sign};
 use measure::{
@@ -25,14 +25,14 @@ const PARALLEL_ROWS: usize = 1 << 14;
 
 #[derive(Clone)]
 pub(crate) struct Columns {
-    axes: Vec<DimensionUlid>,
+    axes: Vec<DimensionGlobalId>,
     layout: KeyLayout,
     keys: ScalarBuffer<u64>,
     values: ScalarBuffer<f64>,
 }
 
 pub(crate) struct ByAxis<'d> {
-    pub(crate) output: DimensionUlid,
+    pub(crate) output: DimensionGlobalId,
     pub(crate) source: usize,
     pub(crate) attribute: Option<Attribute<'d>>,
 }
@@ -44,7 +44,7 @@ enum Source<'c> {
 
 pub(crate) fn find_dimension<'d>(
     dimensions: &[&'d Dimension],
-    ulid: DimensionUlid,
+    ulid: DimensionGlobalId,
 ) -> Result<&'d Dimension, EvaluateError> {
     dimensions
         .iter()
@@ -55,7 +55,7 @@ pub(crate) fn find_dimension<'d>(
 
 pub(crate) fn sort_in_key_order<T>(
     items: &mut [T],
-    axis: impl Fn(&T) -> DimensionUlid,
+    axis: impl Fn(&T) -> DimensionGlobalId,
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {
     for item in items.iter() {
@@ -69,7 +69,10 @@ pub(crate) fn sort_in_key_order<T>(
     Ok(())
 }
 
-fn lengths(dimensions: &[&Dimension], axes: &[DimensionUlid]) -> Result<Vec<u32>, EvaluateError> {
+fn lengths(
+    dimensions: &[&Dimension],
+    axes: &[DimensionGlobalId],
+) -> Result<Vec<u32>, EvaluateError> {
     axes.iter()
         .map(|&axis| find_dimension(dimensions, axis).map(Dimension::len))
         .collect()
@@ -77,7 +80,7 @@ fn lengths(dimensions: &[&Dimension], axes: &[DimensionUlid]) -> Result<Vec<u32>
 
 pub(crate) fn layout_of(
     dimensions: &[&Dimension],
-    axes: &[DimensionUlid],
+    axes: &[DimensionGlobalId],
 ) -> Result<KeyLayout, EvaluateError> {
     KeyLayout::new(&lengths(dimensions, axes)?)
         .ok_or(EvaluateError::InvalidResult(MeasureError::KeyTooWide))
@@ -178,21 +181,22 @@ impl ByAxis<'_> {
         let member = columns.layout.member(columns.keys[row], self.source);
         match self.attribute {
             None => Some(member),
-            Some(attribute) => attribute.value(MemberId(member)).map(|target| target.0),
+            Some(attribute) => attribute.value(MemberIndex(member)).map(|target| target.0),
         }
     }
 }
 
 impl Columns {
     fn build(
-        axes: Vec<DimensionUlid>,
+        axes: Vec<DimensionGlobalId>,
         members: Vec<Vec<u32>>,
         values: Vec<f64>,
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
-        let mut by_axis: Vec<(DimensionUlid, Vec<u32>)> = axes.into_iter().zip(members).collect();
+        let mut by_axis: Vec<(DimensionGlobalId, Vec<u32>)> =
+            axes.into_iter().zip(members).collect();
         sort_in_key_order(&mut by_axis, |&(axis, _)| axis, dimensions)?;
-        let (axes, members): (Vec<DimensionUlid>, Vec<Vec<u32>>) = by_axis.into_iter().unzip();
+        let (axes, members): (Vec<DimensionGlobalId>, Vec<Vec<u32>>) = by_axis.into_iter().unzip();
         let layout = layout_of(dimensions, &axes)?;
         let keys: Vec<u64> = (0..values.len())
             .into_par_iter()
@@ -203,7 +207,7 @@ impl Columns {
     }
 
     fn from_keys(
-        axes: Vec<DimensionUlid>,
+        axes: Vec<DimensionGlobalId>,
         layout: KeyLayout,
         keys: Vec<u64>,
         values: impl Into<ScalarBuffer<f64>>,
@@ -524,7 +528,7 @@ impl Columns {
         &self.layout
     }
 
-    pub(crate) fn position(&self, dimension: DimensionUlid) -> usize {
+    pub(crate) fn position(&self, dimension: DimensionGlobalId) -> usize {
         self.axes
             .iter()
             .position(|&axis| axis == dimension)
@@ -533,8 +537,8 @@ impl Columns {
 
     pub(crate) fn filter(
         self,
-        dimension: DimensionUlid,
-        members: &[MemberId],
+        dimension: DimensionGlobalId,
+        members: &[MemberIndex],
         keeps_axis: bool,
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
@@ -712,7 +716,7 @@ impl Columns {
         terms: Vec<(Sign, Columns)>,
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
-        let mut axes: Vec<DimensionUlid> = terms
+        let mut axes: Vec<DimensionGlobalId> = terms
             .iter()
             .flat_map(|(_, term)| term.axes.iter().copied())
             .collect();
@@ -815,7 +819,7 @@ impl Columns {
     ) -> Result<Columns, EvaluateError> {
         let mut outputs: Vec<&ByAxis<'_>> = by.iter().collect();
         sort_in_key_order(&mut outputs, |axis| axis.output, dimensions)?;
-        let axes: Vec<DimensionUlid> = outputs.iter().map(|axis| axis.output).collect();
+        let axes: Vec<DimensionGlobalId> = outputs.iter().map(|axis| axis.output).collect();
         let lengths = lengths(dimensions, &axes)?;
         let layout = layout_of(dimensions, &axes)?;
         if let Some((space, strides)) = dense_strides(&lengths) {
@@ -915,7 +919,7 @@ impl Columns {
 
     pub(crate) fn broadcast(
         &self,
-        axes: &[DimensionUlid],
+        axes: &[DimensionGlobalId],
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         if axes.iter().all(|axis| self.axes.contains(axis)) {
@@ -988,7 +992,7 @@ mod tests {
 
     #[test]
     fn sorted_keys_still_drop_values_that_are_not_normalized() {
-        let axis = DimensionUlid(ulid::Ulid(1));
+        let axis = DimensionGlobalId(ulid::Ulid(1));
         let layout = KeyLayout::new(&[8]).expect("3 bits fit in a key");
 
         let columns = Columns::from_keys(vec![axis], layout, vec![0, 1], vec![f64::NAN, -0.0]);

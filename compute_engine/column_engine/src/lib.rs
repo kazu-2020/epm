@@ -4,10 +4,10 @@ mod region;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
-use dimension::{Attribute, Dimension, MemberId};
+use dimension::{Attribute, Dimension, MemberIndex};
 use evaluator::EvaluateError;
 use formula::{CheckedAxis, CheckedExpression, CheckedNode};
-use measure::{Delta, Measure, MeasureDefinition, MeasureUlid};
+use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
 use crate::columns::{ByAxis, Columns, find_dimension, layout_of};
 pub use crate::region::Region;
@@ -25,8 +25,8 @@ pub fn evaluate(
 
 pub fn edit(
     measures: &[Measure],
-    deltas: impl IntoIterator<Item = (MeasureUlid, Delta)>,
-    formulas: &[(MeasureUlid, &CheckedExpression)],
+    deltas: impl IntoIterator<Item = (MeasureGlobalId, Delta)>,
+    formulas: &[(MeasureGlobalId, &CheckedExpression)],
     dimensions: &[&Dimension],
 ) -> Result<Vec<Measure>, EvaluateError> {
     let mut next = measures.to_vec();
@@ -48,9 +48,9 @@ pub fn edit(
 
 fn apply(
     measures: &mut [Measure],
-    ulid: MeasureUlid,
+    ulid: MeasureGlobalId,
     mut delta: Delta,
-    changed: &mut HashMap<MeasureUlid, Region>,
+    changed: &mut HashMap<MeasureGlobalId, Region>,
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {
     let index = position(measures, ulid)?;
@@ -75,7 +75,7 @@ fn apply(
     Ok(())
 }
 
-fn position(measures: &[Measure], ulid: MeasureUlid) -> Result<usize, EvaluateError> {
+fn position(measures: &[Measure], ulid: MeasureGlobalId) -> Result<usize, EvaluateError> {
     measures
         .iter()
         .position(|measure| measure.ulid() == ulid)
@@ -84,7 +84,7 @@ fn position(measures: &[Measure], ulid: MeasureUlid) -> Result<usize, EvaluateEr
 
 pub fn changed_region(
     expression: &CheckedExpression,
-    changed: &HashMap<MeasureUlid, Region>,
+    changed: &HashMap<MeasureGlobalId, Region>,
     dimensions: &[&Dimension],
 ) -> Result<Option<Region>, EvaluateError> {
     changed_in(expression.root(), changed, dimensions)
@@ -164,7 +164,7 @@ fn evaluate_in(
 
 fn changed_in(
     node: &CheckedNode,
-    changed: &HashMap<MeasureUlid, Region>,
+    changed: &HashMap<MeasureGlobalId, Region>,
     dimensions: &[&Dimension],
 ) -> Result<Option<Region>, EvaluateError> {
     Ok(match node {
@@ -217,7 +217,7 @@ fn changed_in(
                                 target,
                                 members
                                     .iter()
-                                    .filter_map(|&member| attribute.value(MemberId(member)))
+                                    .filter_map(|&member| attribute.value(MemberIndex(member)))
                                     .map(|target| target.0)
                                     .collect(),
                             );
@@ -239,8 +239,8 @@ fn check_layout(measure: &Measure, dimensions: &[&Dimension]) -> Result<(), Eval
 
 fn find_attribute<'d>(
     dimensions: &[&'d Dimension],
-    dimension: dimension::DimensionUlid,
-    attribute: dimension::AttributeUlid,
+    dimension: dimension::DimensionGlobalId,
+    attribute: dimension::AttributeGlobalId,
 ) -> Result<Attribute<'d>, EvaluateError> {
     find_dimension(dimensions, dimension)?
         .attributes()
@@ -426,7 +426,7 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                             (0..find_dimension(self.dimensions, dimension)?.len())
                                 .filter(|&member| {
                                     attribute
-                                        .value(MemberId(member))
+                                        .value(MemberIndex(member))
                                         .is_some_and(|target| targets.contains(&target.0))
                                 })
                                 .collect();

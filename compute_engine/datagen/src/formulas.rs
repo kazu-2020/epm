@@ -1,6 +1,6 @@
-use dimension::{Dimension, DimensionUlid, MemberId};
+use dimension::{Dimension, DimensionGlobalId, MemberIndex};
 use formula::BinaryOperator;
-use measure::{Measure, MeasureDefinition, MeasureUlid};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::RngExt;
 use rand::seq::{IndexedRandom, index};
 use workspace::Formula;
@@ -12,7 +12,7 @@ const NUMBERS: [&str; 7] = ["0", "1", "2", "3", "10", "0.5", "1.5"];
 #[derive(Clone)]
 struct Generated {
     text: String,
-    axes: Vec<DimensionUlid>,
+    axes: Vec<DimensionGlobalId>,
 }
 
 #[derive(Clone, Copy)]
@@ -93,7 +93,7 @@ impl Formulas<'_, '_, '_> {
             }
         };
         let definition = MeasureDefinition {
-            ulid: MeasureUlid(self.generator.ulid()),
+            ulid: MeasureGlobalId(self.generator.ulid()),
             name: format!("計算{index}"),
             axes,
         };
@@ -107,7 +107,7 @@ impl Formulas<'_, '_, '_> {
         }
     }
 
-    fn expression(&mut self, allowed: &[DimensionUlid], depth: usize) -> Generated {
+    fn expression(&mut self, allowed: &[DimensionGlobalId], depth: usize) -> Generated {
         if depth == 0 || self.generator.random.random_bool(0.2) {
             return self.leaf(allowed);
         }
@@ -135,7 +135,7 @@ impl Formulas<'_, '_, '_> {
         }
     }
 
-    fn leaf(&mut self, allowed: &[DimensionUlid]) -> Generated {
+    fn leaf(&mut self, allowed: &[DimensionGlobalId]) -> Generated {
         if !self.references.is_empty() && self.generator.random.random_bool(0.75) {
             let reference = self.generator.random.random_range(0..self.references.len());
             return self.reference(reference, allowed);
@@ -149,7 +149,7 @@ impl Formulas<'_, '_, '_> {
         }
     }
 
-    fn reference(&mut self, reference: usize, allowed: &[DimensionUlid]) -> Generated {
+    fn reference(&mut self, reference: usize, allowed: &[DimensionGlobalId]) -> Generated {
         let mut generated = self.references[reference].clone();
         if !generated.axes.is_empty() && self.generator.random.random_bool(0.3) {
             generated = self.filter(generated);
@@ -176,7 +176,7 @@ impl Formulas<'_, '_, '_> {
         .into_iter()
         .map(|member| {
             let member = filtered
-                .member(MemberId(member as u32))
+                .member(MemberIndex(member as u32))
                 .expect("the sample is within the dimension");
             quote(member.key())
         })
@@ -198,12 +198,12 @@ impl Formulas<'_, '_, '_> {
         Generated { text, axes }
     }
 
-    fn sum(&mut self, value: Generated, allowed: &[DimensionUlid]) -> Generated {
-        let mut outputs: Vec<DimensionUlid> = Vec::new();
+    fn sum(&mut self, value: Generated, allowed: &[DimensionGlobalId]) -> Generated {
+        let mut outputs: Vec<DimensionGlobalId> = Vec::new();
         let mut by: Vec<String> = Vec::new();
         for &axis in &value.axes {
             let source = dimension(self.dimensions, axis);
-            let mut options: Vec<(DimensionUlid, String)> = Vec::new();
+            let mut options: Vec<(DimensionGlobalId, String)> = Vec::new();
             if allowed.contains(&axis) {
                 options.push((axis, quote(source.name())));
             }
@@ -243,7 +243,10 @@ fn binary(left: Generated, operator: BinaryOperator, right: Generated) -> Genera
     }
 }
 
-fn union(mut left: Vec<DimensionUlid>, right: Vec<DimensionUlid>) -> Vec<DimensionUlid> {
+fn union(
+    mut left: Vec<DimensionGlobalId>,
+    right: Vec<DimensionGlobalId>,
+) -> Vec<DimensionGlobalId> {
     for axis in right {
         if !left.contains(&axis) {
             left.push(axis);
@@ -252,7 +255,7 @@ fn union(mut left: Vec<DimensionUlid>, right: Vec<DimensionUlid>) -> Vec<Dimensi
     left
 }
 
-fn fits(axes: &[DimensionUlid], allowed: &[DimensionUlid]) -> bool {
+fn fits(axes: &[DimensionGlobalId], allowed: &[DimensionGlobalId]) -> bool {
     axes.iter().all(|axis| allowed.contains(axis))
 }
 

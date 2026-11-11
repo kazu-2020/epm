@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionKind,
-    DimensionUlid, KeyKind, MemberId,
+    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionGlobalId,
+    DimensionKind, KeyKind, MemberIndex,
 };
-use measure::{Measure, MeasureDefinition, MeasureUlid};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{RngExt, SeedableRng};
@@ -76,15 +76,15 @@ impl Generator<'_> {
         self.random.sample(zipf) as u32 - 1
     }
 
-    fn axes(&mut self, dimensions: &[Dimension]) -> Vec<DimensionUlid> {
-        let mut axes: Vec<DimensionUlid> = dimensions.iter().map(Dimension::ulid).collect();
+    fn axes(&mut self, dimensions: &[Dimension]) -> Vec<DimensionGlobalId> {
+        let mut axes: Vec<DimensionGlobalId> = dimensions.iter().map(Dimension::ulid).collect();
         axes.shuffle(&mut self.random);
         axes.truncate(self.random.random_range(1..=axes.len()));
         axes
     }
 
     fn dimension(&mut self, index: usize, earlier: &[Dimension]) -> Dimension {
-        let ulid = DimensionUlid(self.ulid());
+        let ulid = DimensionGlobalId(self.ulid());
         let len = self
             .random
             .random_range(1..=self.configuration.members_per_dimension);
@@ -92,7 +92,7 @@ impl Generator<'_> {
             .then(|| &earlier[self.random.random_range(0..earlier.len())]);
         let attributes: Vec<AttributeDefinition> = parent
             .map(|parent| AttributeDefinition {
-                ulid: AttributeUlid(self.ulid()),
+                ulid: AttributeGlobalId(self.ulid()),
                 name: "親".into(),
                 target: parent.ulid(),
             })
@@ -128,7 +128,7 @@ impl Generator<'_> {
 
     fn input(&mut self, index: usize, dimensions: &[Dimension]) -> Measure {
         let definition = MeasureDefinition {
-            ulid: MeasureUlid(self.ulid()),
+            ulid: MeasureGlobalId(self.ulid()),
             name: format!("入力{index}"),
             axes: self.axes(dimensions),
         };
@@ -139,9 +139,9 @@ impl Generator<'_> {
             .collect();
         let mut cells = BTreeMap::new();
         for _ in 0..self.configuration.cells_per_input {
-            let coordinate: Vec<MemberId> = lengths
+            let coordinate: Vec<MemberIndex> = lengths
                 .iter()
-                .map(|&length| MemberId(self.skewed(length)))
+                .map(|&length| MemberIndex(self.skewed(length)))
                 .collect();
             let value = self.value();
             cells.insert(coordinate, value);
@@ -167,7 +167,7 @@ impl Generator<'_> {
     }
 }
 
-fn dimension(dimensions: &[Dimension], ulid: DimensionUlid) -> &Dimension {
+fn dimension(dimensions: &[Dimension], ulid: DimensionGlobalId) -> &Dimension {
     dimensions
         .iter()
         .find(|dimension| dimension.ulid() == ulid)

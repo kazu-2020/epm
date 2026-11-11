@@ -1,7 +1,7 @@
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::Dimension;
-use measure::{Measure, MeasureDefinition, MeasureUlid};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 use workspace::Formula;
 
@@ -82,7 +82,7 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
     for (index, text) in extra_formulas.iter().enumerate() {
         workspace.formulas.push(Formula {
             result: MeasureDefinition {
-                ulid: MeasureUlid(Ulid(300 + index as u128)),
+                ulid: MeasureGlobalId(Ulid(300 + index as u128)),
                 name: text.to_string(),
                 axes: sales_axes.clone(),
             },

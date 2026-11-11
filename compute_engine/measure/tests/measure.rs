@@ -5,16 +5,18 @@ use arrow_array::{
     cast::AsArray, types::Float64Type,
 };
 use arrow_schema::{Field, Schema};
-use dimension::{Dimension, DimensionDefinition, DimensionKind, DimensionUlid, KeyKind, MemberId};
-use measure::{KeyLayout, Measure, MeasureDefinition, MeasureError, MeasureUlid, normalize};
+use dimension::{
+    Dimension, DimensionDefinition, DimensionGlobalId, DimensionKind, KeyKind, MemberIndex,
+};
+use measure::{KeyLayout, Measure, MeasureDefinition, MeasureError, MeasureGlobalId, normalize};
 use ulid::Ulid;
 
-const PERIOD: DimensionUlid = DimensionUlid(Ulid(100));
-const DEPARTMENT: DimensionUlid = DimensionUlid(Ulid(200));
-const SALES: MeasureUlid = MeasureUlid(Ulid(300));
-const COST: MeasureUlid = MeasureUlid(Ulid(400));
+const PERIOD: DimensionGlobalId = DimensionGlobalId(Ulid(100));
+const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(200));
+const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(300));
+const COST: MeasureGlobalId = MeasureGlobalId(Ulid(400));
 
-fn dimension(ulid: DimensionUlid, names: &[&str]) -> Dimension {
+fn dimension(ulid: DimensionGlobalId, names: &[&str]) -> Dimension {
     let definition = DimensionDefinition {
         ulid,
         name: "ディメンション".into(),
@@ -39,7 +41,7 @@ fn departments() -> Dimension {
     dimension(DEPARTMENT, &["営業部", "開発部"])
 }
 
-fn definition(ulid: MeasureUlid, axes: Vec<DimensionUlid>) -> MeasureDefinition {
+fn definition(ulid: MeasureGlobalId, axes: Vec<DimensionGlobalId>) -> MeasureDefinition {
     MeasureDefinition {
         ulid,
         name: "売上".into(),
@@ -65,8 +67,8 @@ fn sales() -> Measure {
     try_sales(&[(0, 0, 10.0), (0, 1, 20.0), (2, 0, 30.0)]).unwrap()
 }
 
-fn coordinate(period: u32, department: u32) -> [MemberId; 2] {
-    [MemberId(period), MemberId(department)]
+fn coordinate(period: u32, department: u32) -> [MemberIndex; 2] {
+    [MemberIndex(period), MemberIndex(department)]
 }
 
 fn rows(measure: &Measure) -> Vec<(u32, u32, f64)> {
@@ -93,7 +95,7 @@ fn cell_is_read_by_its_member_ids_and_missing_cells_are_empty() {
     assert_eq!(measure.get(&coordinate(2, 0)).unwrap(), Some(30.0));
     assert_eq!(measure.get(&coordinate(1, 0)).unwrap(), None);
     assert_eq!(
-        measure.get(&[MemberId(0)]).unwrap_err(),
+        measure.get(&[MemberIndex(0)]).unwrap_err(),
         MeasureError::CoordinateLength {
             expected: 2,
             found: 1
@@ -185,7 +187,7 @@ fn member_outside_the_axis_dimension_is_rejected() {
         try_sales(&[(0, 2, 1.0)]).unwrap_err(),
         MeasureError::MemberOutOfRange {
             axis: DEPARTMENT,
-            member: MemberId(2)
+            member: MemberIndex(2)
         }
     );
 }
@@ -237,7 +239,7 @@ fn delta_overrides_base_and_newer_delta_wins() {
     assert_eq!(measure.get(&coordinate(1, 1)).unwrap(), Some(6.0));
     assert_eq!(measure.get(&coordinate(2, 0)).unwrap(), Some(30.0));
     assert_eq!(measure.delta_len(), 4);
-    let changes: Vec<(Vec<MemberId>, Option<f64>)> = measure
+    let changes: Vec<(Vec<MemberIndex>, Option<f64>)> = measure
         .changes()
         .map(|(coordinate, value)| (coordinate.to_vec(), value))
         .collect();
@@ -288,7 +290,7 @@ fn delta_rejects_coordinates_that_do_not_fit_the_measure() {
     let measure = sales();
     let mut delta = measure.delta();
     assert_eq!(
-        delta.set(&[MemberId(0)], 1.0).unwrap_err(),
+        delta.set(&[MemberIndex(0)], 1.0).unwrap_err(),
         MeasureError::CoordinateLength {
             expected: 2,
             found: 1
@@ -298,7 +300,7 @@ fn delta_rejects_coordinates_that_do_not_fit_the_measure() {
         delta.delete(&coordinate(3, 0)).unwrap_err(),
         MeasureError::MemberOutOfRange {
             axis: PERIOD,
-            member: MemberId(3)
+            member: MemberIndex(3)
         }
     );
     assert!(delta.is_empty());
@@ -419,7 +421,7 @@ fn delta_lists_each_coordinate_with_its_latest_change() {
     delta.set(&coordinate(1, 0), 1.0).unwrap();
     delta.delete(&coordinate(0, 1)).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
-    let changes: Vec<(Vec<MemberId>, Option<f64>)> = delta
+    let changes: Vec<(Vec<MemberIndex>, Option<f64>)> = delta
         .changes()
         .map(|(coordinate, change)| (coordinate.to_vec(), change))
         .collect();
@@ -472,9 +474,10 @@ fn folding_deltas_keeps_the_cells_that_only_one_delta_changes() {
             measure = measure.apply(delta).unwrap();
         }
 
-        let changes: Vec<(Vec<MemberId>, Option<f64>)> = measure.fold_deltas().changes().collect();
+        let changes: Vec<(Vec<MemberIndex>, Option<f64>)> =
+            measure.fold_deltas().changes().collect();
 
-        let mut expected: Vec<(Vec<MemberId>, Option<f64>)> = older
+        let mut expected: Vec<(Vec<MemberIndex>, Option<f64>)> = older
             .iter()
             .chain(&newer)
             .map(|(coordinate, value)| (coordinate.to_vec(), Some(*value)))
@@ -507,7 +510,7 @@ fn cells_must_fit_the_measure() {
     assert_eq!(
         Measure::from_cells(
             sales_definition(),
-            vec![(vec![MemberId(0)], 1.0)],
+            vec![(vec![MemberIndex(0)], 1.0)],
             &dimensions
         )
         .unwrap_err(),
@@ -617,7 +620,7 @@ fn keys_from_the_engine_are_checked_like_a_base() {
         from_keys(vec![layout.pack([3, 0])]).unwrap_err(),
         MeasureError::MemberOutOfRange {
             axis: PERIOD,
-            member: MemberId(3)
+            member: MemberIndex(3)
         }
     );
     assert_eq!(
@@ -634,8 +637,8 @@ fn keys_from_the_engine_are_checked_like_a_base() {
             .cells()
             .collect::<Vec<_>>(),
         vec![
-            (vec![MemberId(0), MemberId(1)], 1.0),
-            (vec![MemberId(2), MemberId(0)], 1.0)
+            (vec![MemberIndex(0), MemberIndex(1)], 1.0),
+            (vec![MemberIndex(2), MemberIndex(0)], 1.0)
         ]
     );
 }
@@ -652,7 +655,7 @@ fn values_read_from_part_of_a_larger_buffer_are_copied_out() {
     assert_eq!(measure.values().inner().capacity(), 8);
     assert_eq!(
         measure.cells().collect::<Vec<_>>(),
-        vec![(vec![MemberId(0), MemberId(1)], 2.0)]
+        vec![(vec![MemberIndex(0), MemberIndex(1)], 2.0)]
     );
 }
 
@@ -712,7 +715,7 @@ fn a_delta_from_sorted_keys_takes_only_sorted_keys_that_fit_the_measure() {
             .unwrap_err(),
         MeasureError::MemberOutOfRange {
             axis: PERIOD,
-            member: MemberId(3)
+            member: MemberIndex(3)
         }
     );
 }

@@ -1,17 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use dimension::{DimensionUlid, MemberId};
+use dimension::{DimensionGlobalId, MemberIndex};
 use measure::KeyLayout;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Region {
-    members: BTreeMap<DimensionUlid, BTreeSet<u32>>,
+    members: BTreeMap<DimensionGlobalId, BTreeSet<u32>>,
 }
 
 impl Region {
     pub fn of_changes<'c>(
-        axes: &[DimensionUlid],
-        coordinates: impl IntoIterator<Item = &'c [MemberId]>,
+        axes: &[DimensionGlobalId],
+        coordinates: impl IntoIterator<Item = &'c [MemberIndex]>,
     ) -> Option<Region> {
         let mut region = Region {
             members: axes.iter().map(|&axis| (axis, BTreeSet::new())).collect(),
@@ -29,7 +29,7 @@ impl Region {
     }
 
     pub(crate) fn of_keys(
-        axes: &[DimensionUlid],
+        axes: &[DimensionGlobalId],
         layout: &KeyLayout,
         keys: &[u64],
     ) -> Option<Region> {
@@ -59,11 +59,11 @@ impl Region {
         .non_empty()
     }
 
-    pub fn members(&self, dimension: DimensionUlid) -> Option<&BTreeSet<u32>> {
+    pub fn members(&self, dimension: DimensionGlobalId) -> Option<&BTreeSet<u32>> {
         self.members.get(&dimension)
     }
 
-    pub(crate) fn constrain(&mut self, dimension: DimensionUlid, members: BTreeSet<u32>) {
+    pub(crate) fn constrain(&mut self, dimension: DimensionGlobalId, members: BTreeSet<u32>) {
         let members = match self.members.get(&dimension) {
             Some(kept) => kept.intersection(&members).copied().collect(),
             None => members,
@@ -71,7 +71,7 @@ impl Region {
         self.members.insert(dimension, members);
     }
 
-    pub(crate) fn without(mut self, dimension: DimensionUlid) -> Region {
+    pub(crate) fn without(mut self, dimension: DimensionGlobalId) -> Region {
         self.members.remove(&dimension);
         self
     }
@@ -100,9 +100,15 @@ mod tests {
 
     #[test]
     fn the_region_of_keys_holds_only_the_members_that_changed() {
-        let axes = [DimensionUlid(ulid::Ulid(1)), DimensionUlid(ulid::Ulid(2))];
+        let axes = [
+            DimensionGlobalId(ulid::Ulid(1)),
+            DimensionGlobalId(ulid::Ulid(2)),
+        ];
         let layout = KeyLayout::new(&[8, 8]).expect("6 bits fit in a key");
-        let coordinates = [[MemberId(1), MemberId(5)], [MemberId(3), MemberId(5)]];
+        let coordinates = [
+            [MemberIndex(1), MemberIndex(5)],
+            [MemberIndex(3), MemberIndex(5)],
+        ];
         let keys: Vec<u64> = coordinates
             .iter()
             .map(|coordinate| layout.pack(coordinate.iter().map(|member| member.0)))

@@ -8,8 +8,8 @@ use axum::routing::post;
 use axum::{Json, Router};
 use bytes::Bytes;
 use change_log::{RequestId, Sequence};
-use dimension::MemberId;
-use measure::{MeasureError, MeasureUlid};
+use dimension::MemberIndex;
+use measure::{MeasureError, MeasureGlobalId};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -138,7 +138,7 @@ async fn list_definitions(State(handle): State<Handle>) -> Json<Value> {
         .iter()
         .map(|dimension| {
             let members: Vec<Value> = (0..dimension.len())
-                .filter_map(|id| dimension.member(MemberId(id)))
+                .filter_map(|id| dimension.member(MemberIndex(id)))
                 .map(|member| json!({ "id": member.id().0, "key": member.key(), "name": member.name() }))
                 .collect();
             json!({
@@ -177,14 +177,14 @@ fn parse<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, Fai
         .map_err(|error| Failure::new(Code::InvalidArgument, error.to_string()))
 }
 
-fn measure(text: &str) -> Result<MeasureUlid, Failure> {
+fn measure(text: &str) -> Result<MeasureGlobalId, Failure> {
     Ulid::from_string(text)
-        .map(MeasureUlid)
+        .map(MeasureGlobalId)
         .map_err(|error| Failure::new(Code::InvalidArgument, format!("measure {text:?}: {error}")))
 }
 
-fn coordinate(members: Vec<u32>) -> Vec<MemberId> {
-    members.into_iter().map(MemberId).collect()
+fn coordinate(members: Vec<u32>) -> Vec<MemberIndex> {
+    members.into_iter().map(MemberIndex).collect()
 }
 
 fn submit_failure(error: SubmitError) -> Failure {

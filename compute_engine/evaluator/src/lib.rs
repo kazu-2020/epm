@@ -1,7 +1,7 @@
 mod cells;
 mod evaluate_error;
 
-use dimension::{Dimension, DimensionUlid};
+use dimension::{Dimension, DimensionGlobalId};
 use formula::{CheckedAxis, CheckedExpression, CheckedNode};
 use measure::{Measure, MeasureDefinition};
 
@@ -88,7 +88,7 @@ impl<'a> Evaluator<'a> {
     fn by_axis(
         &self,
         axis: &CheckedAxis,
-        value_axes: &[DimensionUlid],
+        value_axes: &[DimensionGlobalId],
     ) -> Result<ByAxis<'a>, EvaluateError> {
         let position = |dimension| {
             value_axes

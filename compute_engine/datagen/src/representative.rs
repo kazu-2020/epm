@@ -5,10 +5,10 @@ use arrow_array::{
     ArrayRef, FixedSizeBinaryArray, Float64Array, RecordBatch, StringArray, UInt32Array,
 };
 use dimension::{
-    AttributeDefinition, AttributeUlid, Dimension, DimensionDefinition, DimensionKind,
-    DimensionUlid, KeyKind,
+    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionGlobalId,
+    DimensionKind, KeyKind,
 };
-use measure::{Measure, MeasureDefinition, MeasureUlid};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use rand_distr::Zipf;
@@ -43,16 +43,16 @@ impl Size {
     };
 }
 
-const CATEGORY: DimensionUlid = DimensionUlid(Ulid(1));
-const GROUP: DimensionUlid = DimensionUlid(Ulid(2));
-const ACCOUNT: DimensionUlid = DimensionUlid(Ulid(3));
-const DIVISION: DimensionUlid = DimensionUlid(Ulid(4));
-const DEPARTMENT: DimensionUlid = DimensionUlid(Ulid(5));
-const PRODUCT_CATEGORY: DimensionUlid = DimensionUlid(Ulid(6));
-const PRODUCT: DimensionUlid = DimensionUlid(Ulid(7));
-const CUSTOMER: DimensionUlid = DimensionUlid(Ulid(8));
-const PERIOD: DimensionUlid = DimensionUlid(Ulid(9));
-const VERSION: DimensionUlid = DimensionUlid(Ulid(10));
+const CATEGORY: DimensionGlobalId = DimensionGlobalId(Ulid(1));
+const GROUP: DimensionGlobalId = DimensionGlobalId(Ulid(2));
+const ACCOUNT: DimensionGlobalId = DimensionGlobalId(Ulid(3));
+const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(4));
+const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(5));
+const PRODUCT_CATEGORY: DimensionGlobalId = DimensionGlobalId(Ulid(6));
+const PRODUCT: DimensionGlobalId = DimensionGlobalId(Ulid(7));
+const CUSTOMER: DimensionGlobalId = DimensionGlobalId(Ulid(8));
+const PERIOD: DimensionGlobalId = DimensionGlobalId(Ulid(9));
+const VERSION: DimensionGlobalId = DimensionGlobalId(Ulid(10));
 
 const PERIODS: u32 = 36;
 const VERSIONS: [&str; 3] = ["実績", "予算", "見込"];
@@ -107,7 +107,7 @@ const DEPARTMENT_KINDS: [DepartmentKind; 3] = [
     DepartmentKind::Administration,
 ];
 
-const FORMULAS: [(&str, &[DimensionUlid], &str); 15] = [
+const FORMULAS: [(&str, &[DimensionGlobalId], &str); 15] = [
     (
         "売上",
         &[PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER],
@@ -214,7 +214,7 @@ pub fn formulas() -> Vec<Formula> {
         .enumerate()
         .map(|(index, &(name, axes, text))| Formula {
             result: MeasureDefinition {
-                ulid: MeasureUlid(Ulid(200 + index as u128)),
+                ulid: MeasureGlobalId(Ulid(200 + index as u128)),
                 name: name.into(),
                 axes: axes.to_vec(),
             },
@@ -232,16 +232,16 @@ struct Representative {
     random: StdRng,
 }
 
-fn attribute(ulid: u128, name: &str, target: DimensionUlid) -> AttributeDefinition {
+fn attribute(ulid: u128, name: &str, target: DimensionGlobalId) -> AttributeDefinition {
     AttributeDefinition {
-        ulid: AttributeUlid(Ulid(ulid)),
+        ulid: AttributeGlobalId(Ulid(ulid)),
         name: name.into(),
         target,
     }
 }
 
 fn dimension(
-    ulid: DimensionUlid,
+    ulid: DimensionGlobalId,
     name: &str,
     names: Vec<String>,
     attribute: Option<(AttributeDefinition, Vec<u32>)>,
@@ -446,7 +446,7 @@ impl Representative {
         ]
     }
 
-    fn lengths(&self, axes: &[DimensionUlid]) -> Vec<u32> {
+    fn lengths(&self, axes: &[DimensionGlobalId]) -> Vec<u32> {
         axes.iter()
             .map(|&axis| match axis {
                 PRODUCT => self.size.products,
@@ -459,7 +459,7 @@ impl Representative {
             .collect()
     }
 
-    fn dense_columns(&self, axes: &[DimensionUlid]) -> Vec<Vec<u32>> {
+    fn dense_columns(&self, axes: &[DimensionGlobalId]) -> Vec<Vec<u32>> {
         let lengths = self.lengths(axes);
         let cells: u32 = lengths.iter().product();
         let mut columns = vec![Vec::with_capacity(cells as usize); axes.len()];
@@ -473,7 +473,11 @@ impl Representative {
         columns
     }
 
-    fn dense(&mut self, axes: &[DimensionUlid], value: impl Fn(&mut StdRng) -> f64) -> Vec<f64> {
+    fn dense(
+        &mut self,
+        axes: &[DimensionGlobalId],
+        value: impl Fn(&mut StdRng) -> f64,
+    ) -> Vec<f64> {
         let cells: u32 = self.lengths(axes).iter().product();
         (0..cells).map(|_| value(&mut self.random)).collect()
     }
@@ -568,7 +572,7 @@ impl Representative {
         let mut pairs = Vec::new();
         for account in 0..accounts.len() {
             let group = group_of
-                .value(dimension::MemberId(account))
+                .value(dimension::MemberIndex(account))
                 .expect("every account has a group");
             let group_name = groups.member(group).expect("the group exists").name();
             if FROM_QUANTITY_GROUPS.contains(&group_name) {
@@ -636,13 +640,13 @@ fn unpack(mut packed: u64, lengths: &[u32]) -> Vec<u32> {
 fn measure(
     index: u128,
     name: &str,
-    axes: &[DimensionUlid],
+    axes: &[DimensionGlobalId],
     columns: Vec<Vec<u32>>,
     values: Vec<f64>,
     references: &[&Dimension],
 ) -> Measure {
     let definition = MeasureDefinition {
-        ulid: MeasureUlid(Ulid(100 + index)),
+        ulid: MeasureGlobalId(Ulid(100 + index)),
         name: name.into(),
         axes: axes.to_vec(),
     };
