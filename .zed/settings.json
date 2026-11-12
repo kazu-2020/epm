@@ -4,6 +4,7 @@
       "initialization_options": {
         "linkedProjects": [
           "compute_engine/Cargo.toml",
+          "compute_engine/formula/fuzz/Cargo.toml",
           "server/Cargo.toml",
           "storage/change_log/Cargo.toml"
         ]
