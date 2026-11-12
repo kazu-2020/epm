@@ -7,7 +7,8 @@ use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
 use evaluator::EvaluateError;
 use formula::{ProductOperator, Sign};
 use measure::{
-    KeyLayout, Measure, MeasureDefinition, MeasureError, first_row, first_unsorted, normalize,
+    CoordinatePacking, Measure, MeasureDefinition, MeasureError, first_row, first_unsorted,
+    normalize,
 };
 use rayon::prelude::*;
 
@@ -26,8 +27,8 @@ const PARALLEL_ROWS: usize = 1 << 14;
 #[derive(Clone)]
 pub(crate) struct Columns {
     axes: Vec<DimensionGlobalId>,
-    layout: KeyLayout,
-    keys: ScalarBuffer<u64>,
+    packing: CoordinatePacking,
+    packed_coordinates: ScalarBuffer<u64>,
     values: ScalarBuffer<f64>,
 }
 
@@ -53,7 +54,7 @@ pub(crate) fn find_dimension<'d>(
         .ok_or(EvaluateError::MissingDimension(ulid))
 }
 
-pub(crate) fn sort_in_key_order<T>(
+pub(crate) fn sort_in_packing_order<T>(
     items: &mut [T],
     axis: impl Fn(&T) -> DimensionGlobalId,
     dimensions: &[&Dimension],
@@ -64,7 +65,7 @@ pub(crate) fn sort_in_key_order<T>(
     items.sort_by_cached_key(|item| {
         find_dimension(dimensions, axis(item))
             .expect("every axis was found above")
-            .key_order()
+            .packing_order()
     });
     Ok(())
 }
@@ -78,12 +79,12 @@ fn lengths(
         .collect()
 }
 
-pub(crate) fn layout_of(
+pub(crate) fn packing_of(
     dimensions: &[&Dimension],
     axes: &[DimensionGlobalId],
-) -> Result<KeyLayout, EvaluateError> {
-    KeyLayout::new(&lengths(dimensions, axes)?)
-        .ok_or(EvaluateError::InvalidResult(MeasureError::KeyTooWide))
+) -> Result<CoordinatePacking, EvaluateError> {
+    CoordinatePacking::new(&lengths(dimensions, axes)?)
+        .ok_or(EvaluateError::InvalidResult(MeasureError::PackingTooWide))
 }
 
 fn dense_strides(lengths: &[u32]) -> Option<(usize, Vec<usize>)> {
@@ -100,33 +101,37 @@ fn is_normalized(value: f64) -> bool {
     normalize(value).map(f64::to_bits) == Some(value.to_bits())
 }
 
-fn stable_order(keys: &[u64]) -> Vec<usize> {
-    let mut rows: Vec<usize> = (0..keys.len()).collect();
-    if first_unsorted(keys).is_some() {
+fn stable_order(packed_coordinates: &[u64]) -> Vec<usize> {
+    let mut rows: Vec<usize> = (0..packed_coordinates.len()).collect();
+    if first_unsorted(packed_coordinates).is_some() {
         // Not sort_unstable: SUM adds each group in coordinate order.
-        rows.par_sort_by_key(|&row| keys[row]);
+        rows.par_sort_by_key(|&row| packed_coordinates[row]);
     }
     rows
 }
 
-fn reorder(layout: &KeyLayout, keys: &[u64], positions: &[usize]) -> (KeyLayout, Vec<u64>) {
-    let reordered = layout.reordered(positions);
-    let keys = keys
+fn reorder(
+    packing: &CoordinatePacking,
+    packed_coordinates: &[u64],
+    positions: &[usize],
+) -> (CoordinatePacking, Vec<u64>) {
+    let reordered = packing.reordered(positions);
+    let packed_coordinates = packed_coordinates
         .par_iter()
         .with_min_len(PARALLEL_ROWS)
-        .map(|&key| {
+        .map(|&packed| {
             reordered.pack(
                 positions
                     .iter()
-                    .map(|&position| layout.member(key, position)),
+                    .map(|&position| packing.member(packed, position)),
             )
         })
         .collect();
-    (reordered, keys)
+    (reordered, packed_coordinates)
 }
 
-fn runs<'r>(keys: &[u64], rows: &'r [usize]) -> Vec<&'r [usize]> {
-    rows.chunk_by(|&left, &right| keys[left] == keys[right])
+fn runs<'r>(packed_coordinates: &[u64], rows: &'r [usize]) -> Vec<&'r [usize]> {
+    rows.chunk_by(|&left, &right| packed_coordinates[left] == packed_coordinates[right])
         .collect()
 }
 
@@ -143,10 +148,10 @@ impl<'c> Index<'c> {
     fn new(columns: &'c Columns, dimensions: &[&Dimension]) -> Result<Self, EvaluateError> {
         let dense = dense_strides(&lengths(dimensions, &columns.axes)?).map(|(space, strides)| {
             let mut rows = vec![u32::MAX; space];
-            for (row, &key) in columns.keys.iter().enumerate() {
+            for (row, &packed) in columns.packed_coordinates.iter().enumerate() {
                 let slot: usize = strides
                     .iter()
-                    .zip(columns.layout.members(key))
+                    .zip(columns.packing.unpack(packed))
                     .map(|(stride, member)| stride * member as usize)
                     .sum();
                 rows[slot] = row as u32;
@@ -169,8 +174,8 @@ impl<'c> Index<'c> {
             }
             None => self
                 .columns
-                .keys
-                .binary_search(&self.columns.layout.pack(members.iter().copied()))
+                .packed_coordinates
+                .binary_search(&self.columns.packing.pack(members.iter().copied()))
                 .ok(),
         }
     }
@@ -178,7 +183,9 @@ impl<'c> Index<'c> {
 
 impl ByAxis<'_> {
     fn member(&self, columns: &Columns, row: usize) -> Option<u32> {
-        let member = columns.layout.member(columns.keys[row], self.source);
+        let member = columns
+            .packing
+            .member(columns.packed_coordinates[row], self.source);
         match self.attribute {
             None => Some(member),
             Some(attribute) => attribute.value(MemberIndex(member)).map(|target| target.0),
@@ -195,43 +202,48 @@ impl Columns {
     ) -> Result<Columns, EvaluateError> {
         let mut by_axis: Vec<(DimensionGlobalId, Vec<u32>)> =
             axes.into_iter().zip(members).collect();
-        sort_in_key_order(&mut by_axis, |&(axis, _)| axis, dimensions)?;
+        sort_in_packing_order(&mut by_axis, |&(axis, _)| axis, dimensions)?;
         let (axes, members): (Vec<DimensionGlobalId>, Vec<Vec<u32>>) = by_axis.into_iter().unzip();
-        let layout = layout_of(dimensions, &axes)?;
-        let keys: Vec<u64> = (0..values.len())
+        let packing = packing_of(dimensions, &axes)?;
+        let packed_coordinates: Vec<u64> = (0..values.len())
             .into_par_iter()
             .with_min_len(PARALLEL_ROWS)
-            .map(|row| layout.pack(members.iter().map(|column| column[row])))
+            .map(|row| packing.pack(members.iter().map(|column| column[row])))
             .collect();
-        Ok(Columns::from_keys(axes, layout, keys, values))
+        Ok(Columns::from_packed(
+            axes,
+            packing,
+            packed_coordinates,
+            values,
+        ))
     }
 
-    fn from_keys(
+    fn from_packed(
         axes: Vec<DimensionGlobalId>,
-        layout: KeyLayout,
-        keys: Vec<u64>,
+        packing: CoordinatePacking,
+        packed_coordinates: Vec<u64>,
         values: impl Into<ScalarBuffer<f64>>,
     ) -> Columns {
         let values = values.into();
-        if first_unsorted(&keys).is_none()
+        if first_unsorted(&packed_coordinates).is_none()
             && first_row(&values, |&value| !is_normalized(value)).is_none()
         {
             return Columns {
                 axes,
-                layout,
-                keys: keys.into(),
+                packing,
+                packed_coordinates: packed_coordinates.into(),
                 values,
             };
         }
-        let rows: Vec<usize> = stable_order(&keys)
+        let rows: Vec<usize> = stable_order(&packed_coordinates)
             .into_par_iter()
             .with_min_len(PARALLEL_ROWS)
             .filter(|&row| normalize(values[row]).is_some())
             .collect();
         Columns {
             axes,
-            layout,
-            keys: rows::gather(&rows, &keys).into(),
+            packing,
+            packed_coordinates: rows::gather(&rows, &packed_coordinates).into(),
             values: rows
                 .par_iter()
                 .with_min_len(PARALLEL_ROWS)
@@ -268,23 +280,24 @@ impl Columns {
         counts: &[usize],
         piece_rows: impl Fn(usize) -> Rows + Sync,
     ) -> Columns {
-        let (keys, values) = rows::copy_rows(&self.keys, &self.values, counts, piece_rows);
+        let (packed_coordinates, values) =
+            rows::copy_rows(&self.packed_coordinates, &self.values, counts, piece_rows);
         Columns {
             axes: self.axes.clone(),
-            layout: self.layout.clone(),
-            keys: keys.into(),
+            packing: self.packing.clone(),
+            packed_coordinates: packed_coordinates.into(),
             values: values.into(),
         }
     }
 
     fn len(&self) -> usize {
-        self.keys.len()
+        self.packed_coordinates.len()
     }
 
     pub(crate) fn number(value: f64) -> Columns {
-        Columns::from_keys(
+        Columns::from_packed(
             Vec::new(),
-            KeyLayout::new(&[]).expect("no axes fit in a key"),
+            CoordinatePacking::new(&[]).expect("no axes fit in a packed coordinate"),
             vec![0],
             vec![value],
         )
@@ -314,29 +327,29 @@ impl Columns {
                     .expect("the columns keep the measure's axes")
             })
             .collect();
-        let layout = measure.layout();
-        let (keys, changes) = measure.merged_changes();
-        let mut inside: Vec<(u64, Option<f64>)> = keys
+        let packing = measure.packing();
+        let (packed_coordinates, changes) = measure.merged_changes();
+        let mut inside: Vec<(u64, Option<f64>)> = packed_coordinates
             .iter()
             .zip(changes)
-            .filter(|&(&key, _)| {
+            .filter(|&(&packed, _)| {
                 base.axes.iter().zip(&positions).all(|(&axis, &position)| {
                     region
                         .members(axis)
-                        .is_none_or(|members| members.contains(&layout.member(key, position)))
+                        .is_none_or(|members| members.contains(&packing.member(packed, position)))
                 })
             })
-            .map(|(&key, change)| (key, change))
+            .map(|(&packed, change)| (packed, change))
             .collect();
         if !positions.is_sorted() {
-            for (key, _) in &mut inside {
-                *key = base.layout.pack(
+            for (packed, _) in &mut inside {
+                *packed = base.packing.pack(
                     positions
                         .iter()
-                        .map(|&position| layout.member(*key, position)),
+                        .map(|&position| packing.member(*packed, position)),
                 );
             }
-            inside.sort_unstable_by_key(|&(key, _)| key);
+            inside.sort_unstable_by_key(|&(packed, _)| packed);
         }
         Ok(base.with_changes(inside))
     }
@@ -345,15 +358,16 @@ impl Columns {
         if changes.is_empty() {
             return self;
         }
-        let mut keys = Vec::new();
+        let mut packed_coordinates = Vec::new();
         let mut values = Vec::new();
         let (mut rows, mut changes) = ((0..self.len()).peekable(), changes.into_iter().peekable());
         loop {
-            let (key, value) = match (rows.peek(), changes.peek()) {
+            let (packed, value) = match (rows.peek(), changes.peek()) {
                 (None, None) => break,
                 (Some(_), None) => self.entry(rows.next()),
                 (None, Some(_)) => changes.next().expect("peeked above"),
-                (Some(&row), Some(&(key, _))) => match self.keys[row].cmp(&key) {
+                (Some(&row), Some(&(packed, _))) => match self.packed_coordinates[row].cmp(&packed)
+                {
                     std::cmp::Ordering::Less => self.entry(rows.next()),
                     std::cmp::Ordering::Greater => changes.next().expect("peeked above"),
                     std::cmp::Ordering::Equal => {
@@ -363,21 +377,21 @@ impl Columns {
                 },
             };
             if let Some(value) = value {
-                keys.push(key);
+                packed_coordinates.push(packed);
                 values.push(value);
             }
         }
         Columns {
             axes: self.axes,
-            layout: self.layout,
-            keys: keys.into(),
+            packing: self.packing,
+            packed_coordinates: packed_coordinates.into(),
             values: values.into(),
         }
     }
 
     fn entry(&self, row: Option<usize>) -> (u64, Option<f64>) {
         let row = row.expect("peeked above");
-        (self.keys[row], Some(self.values[row]))
+        (self.packed_coordinates[row], Some(self.values[row]))
     }
 
     fn narrow(
@@ -391,10 +405,12 @@ impl Columns {
             Some(&Some(members)) if searched(members) => members,
             _ => return kept.push(rows),
         };
-        let keys = &self.keys[rows.clone()];
+        let packed_coordinates = &self.packed_coordinates[rows.clone()];
         for &member in members {
-            let start = keys.partition_point(|&key| self.layout.member(key, axis) < member);
-            let end = keys.partition_point(|&key| self.layout.member(key, axis) <= member);
+            let start = packed_coordinates
+                .partition_point(|&packed| self.packing.member(packed, axis) < member);
+            let end = packed_coordinates
+                .partition_point(|&packed| self.packing.member(packed, axis) <= member);
             self.narrow(
                 constraints,
                 axis + 1,
@@ -412,7 +428,7 @@ impl Columns {
         }
         let mut ranges = Vec::new();
         self.narrow(&constraints, 0, 0..self.len(), &mut ranges);
-        // Not one bitmap per axis for a single member: one mask and compare over the whole key tests them all.
+        // Not one bitmap per axis for a single member: one mask and compare over the whole packed coordinate tests them all.
         let (mut mask, mut pattern) = (0, 0);
         let mut checks: Vec<(usize, Vec<bool>)> = Vec::new();
         for (axis, constraint) in constraints.iter().enumerate() {
@@ -421,10 +437,10 @@ impl Columns {
             };
             if members.len() == 1
                 && let Some(&member) = members.first()
-                && self.layout.fits(axis, member)
+                && self.packing.fits(axis, member)
             {
-                mask |= self.layout.field(axis);
-                pattern |= self.layout.place(axis, member);
+                mask |= self.packing.axis_mask(axis);
+                pattern |= self.packing.place(axis, member);
                 continue;
             }
             let mut inside = vec![false; members.last().map_or(0, |&last| last as usize + 1)];
@@ -442,18 +458,18 @@ impl Columns {
                     .map(move |start| start..(start + SCANNED_ROWS).min(range.end))
             })
             .collect();
-        // Not select: it reads every key twice, and an edit keeps a few rows out of millions, so the second read is the cost.
+        // Not select: it reads every packed coordinate twice, and an edit keeps a few rows out of millions, so the second read is the cost.
         let kept: Vec<Vec<usize>> = pieces
             .par_iter()
             .map(|piece| {
-                self.keys[piece.clone()]
+                self.packed_coordinates[piece.clone()]
                     .iter()
                     .enumerate()
-                    .filter(|&(_, &key)| {
-                        key & mask == pattern
+                    .filter(|&(_, &packed)| {
+                        packed & mask == pattern
                             && checks.iter().all(|(axis, inside)| {
                                 inside
-                                    .get(self.layout.member(key, *axis) as usize)
+                                    .get(self.packing.member(packed, *axis) as usize)
                                     .copied()
                                     .unwrap_or(false)
                             })
@@ -470,28 +486,28 @@ impl Columns {
     }
 
     pub(crate) fn changes_from(&self, old: &Columns) -> (Vec<u64>, Vec<Option<f64>>) {
-        let (mut keys, mut changes) = (Vec::new(), Vec::new());
+        let (mut packed_coordinates, mut changes) = (Vec::new(), Vec::new());
         let (mut new, mut old_row) = (0, 0);
         while new < self.len() || old_row < old.len() {
             let order = match (new < self.len(), old_row < old.len()) {
-                (true, true) => self.keys[new].cmp(&old.keys[old_row]),
+                (true, true) => self.packed_coordinates[new].cmp(&old.packed_coordinates[old_row]),
                 (true, false) => std::cmp::Ordering::Less,
                 _ => std::cmp::Ordering::Greater,
             };
             match order {
                 std::cmp::Ordering::Less => {
-                    keys.push(self.keys[new]);
+                    packed_coordinates.push(self.packed_coordinates[new]);
                     changes.push(Some(self.values[new]));
                     new += 1;
                 }
                 std::cmp::Ordering::Greater => {
-                    keys.push(old.keys[old_row]);
+                    packed_coordinates.push(old.packed_coordinates[old_row]);
                     changes.push(None);
                     old_row += 1;
                 }
                 std::cmp::Ordering::Equal => {
                     if self.values[new].to_bits() != old.values[old_row].to_bits() {
-                        keys.push(self.keys[new]);
+                        packed_coordinates.push(self.packed_coordinates[new]);
                         changes.push(Some(self.values[new]));
                     }
                     new += 1;
@@ -499,33 +515,34 @@ impl Columns {
                 }
             }
         }
-        (keys, changes)
+        (packed_coordinates, changes)
     }
 
     fn from_base(measure: &Measure, dimensions: &[&Dimension]) -> Result<Columns, EvaluateError> {
         let axes = measure.definition().axes.clone();
         let mut order: Vec<usize> = (0..axes.len()).collect();
-        sort_in_key_order(&mut order, |&position| axes[position], dimensions)?;
+        sort_in_packing_order(&mut order, |&position| axes[position], dimensions)?;
         if order.is_sorted() {
-            // Not Columns::from_keys: Measure already rejects unsorted or unnormalized cells.
+            // Not Columns::from_packed: Measure already rejects unsorted or unnormalized cells.
             return Ok(Columns {
                 axes,
-                layout: measure.layout().clone(),
-                keys: measure.keys().clone(),
-                values: measure.values().clone(),
+                packing: measure.packing().clone(),
+                packed_coordinates: measure.base_packed_coordinates().clone(),
+                values: measure.base_values().clone(),
             });
         }
-        let (layout, keys) = reorder(measure.layout(), measure.keys(), &order);
-        Ok(Columns::from_keys(
+        let (packing, packed_coordinates) =
+            reorder(measure.packing(), measure.base_packed_coordinates(), &order);
+        Ok(Columns::from_packed(
             order.iter().map(|&position| axes[position]).collect(),
-            layout,
-            keys,
-            measure.values().clone(),
+            packing,
+            packed_coordinates,
+            measure.base_values().clone(),
         ))
     }
 
-    pub(crate) fn layout(&self) -> &KeyLayout {
-        &self.layout
+    pub(crate) fn packing(&self) -> &CoordinatePacking {
+        &self.packing
     }
 
     pub(crate) fn position(&self, dimension: DimensionGlobalId) -> usize {
@@ -551,23 +568,28 @@ impl Columns {
         let position = columns.position(dimension);
         let mut axes = columns.axes.clone();
         axes.remove(position);
-        let layout = layout_of(dimensions, &axes)?;
-        let keys = columns
-            .keys
+        let packing = packing_of(dimensions, &axes)?;
+        let packed_coordinates = columns
+            .packed_coordinates
             .par_iter()
             .with_min_len(PARALLEL_ROWS)
-            .map(|&key| {
-                layout.pack(
+            .map(|&packed| {
+                packing.pack(
                     columns
-                        .layout
-                        .members(key)
+                        .packing
+                        .unpack(packed)
                         .enumerate()
                         .filter(|&(axis, _)| axis != position)
                         .map(|(_, member)| member),
                 )
             })
             .collect();
-        Ok(Columns::from_keys(axes, layout, keys, columns.values))
+        Ok(Columns::from_packed(
+            axes,
+            packing,
+            packed_coordinates,
+            columns.values,
+        ))
     }
 
     pub(crate) fn product(
@@ -603,7 +625,7 @@ impl Columns {
         let extra: Vec<usize> = (0..right.axes.len())
             .filter(|&position| !left.axes.contains(&right.axes[position]))
             .collect();
-        let shared_layout = layout_of(
+        let shared_packing = packing_of(
             dimensions,
             &shared
                 .iter()
@@ -612,32 +634,32 @@ impl Columns {
         )?;
         let project = |columns: &Columns, positions: Vec<usize>| -> Vec<u64> {
             columns
-                .keys
+                .packed_coordinates
                 .iter()
-                .map(|&key| {
-                    shared_layout.pack(
+                .map(|&packed| {
+                    shared_packing.pack(
                         positions
                             .iter()
-                            .map(|&position| columns.layout.member(key, position)),
+                            .map(|&position| columns.packing.member(packed, position)),
                     )
                 })
                 .collect()
         };
-        let left_key = project(left, shared.iter().map(|&(position, _)| position).collect());
-        let right_key = project(
+        let left_packed = project(left, shared.iter().map(|&(position, _)| position).collect());
+        let right_packed = project(
             right,
             shared.iter().map(|&(_, position)| position).collect(),
         );
-        let left_rows = stable_order(&left_key);
-        let right_rows = stable_order(&right_key);
+        let left_rows = stable_order(&left_packed);
+        let right_rows = stable_order(&right_packed);
         let mut axes = left.axes.clone();
         axes.extend(extra.iter().map(|&position| right.axes[position]));
         let mut members: Vec<Vec<u32>> = vec![Vec::new(); axes.len()];
         let mut values = Vec::new();
-        let mut left_runs = runs(&left_key, &left_rows).into_iter().peekable();
-        let mut right_runs = runs(&right_key, &right_rows).into_iter().peekable();
+        let mut left_runs = runs(&left_packed, &left_rows).into_iter().peekable();
+        let mut right_runs = runs(&right_packed, &right_rows).into_iter().peekable();
         while let (Some(&left_run), Some(&right_run)) = (left_runs.peek(), right_runs.peek()) {
-            match left_key[left_run[0]].cmp(&right_key[right_run[0]]) {
+            match left_packed[left_run[0]].cmp(&right_packed[right_run[0]]) {
                 std::cmp::Ordering::Less => {
                     left_runs.next();
                 }
@@ -650,12 +672,16 @@ impl Columns {
                             let (from_left, from_right) = members.split_at_mut(left.axes.len());
                             for (column, member) in from_left
                                 .iter_mut()
-                                .zip(left.layout.members(left.keys[left_row]))
+                                .zip(left.packing.unpack(left.packed_coordinates[left_row]))
                             {
                                 column.push(member);
                             }
                             for (column, &position) in from_right.iter_mut().zip(&extra) {
-                                column.push(right.layout.member(right.keys[right_row], position));
+                                column.push(
+                                    right
+                                        .packing
+                                        .member(right.packed_coordinates[right_row], position),
+                                );
                             }
                             values.push(apply(left.values[left_row], right.values[right_row]));
                         }
@@ -681,18 +707,18 @@ impl Columns {
             .collect();
         let index = Index::new(smaller, dimensions)?;
         let values: Vec<f64> = larger
-            .keys
+            .packed_coordinates
             .par_iter()
             .zip(&larger.values[..])
             .with_min_len(PARALLEL_ROWS)
             .map_init(
                 || vec![0; positions.len()],
-                |key, (&larger_key, &value)| {
-                    for (member, &position) in key.iter_mut().zip(&positions) {
-                        *member = larger.layout.member(larger_key, position);
+                |packed, (&larger_packed, &value)| {
+                    for (member, &position) in packed.iter_mut().zip(&positions) {
+                        *member = larger.packing.member(larger_packed, position);
                     }
                     index
-                        .find(key)
+                        .find(packed)
                         .and_then(|other| normalize(apply(value, smaller.values[other])))
                         .unwrap_or(f64::NAN)
                 },
@@ -700,8 +726,8 @@ impl Columns {
             .collect();
         let columns = Columns {
             axes: larger.axes.clone(),
-            layout: larger.layout.clone(),
-            keys: larger.keys.clone(),
+            packing: larger.packing.clone(),
+            packed_coordinates: larger.packed_coordinates.clone(),
             values: values.into(),
         };
         if !columns.values.par_iter().any(|value| value.is_nan()) {
@@ -720,7 +746,7 @@ impl Columns {
             .iter()
             .flat_map(|(_, term)| term.axes.iter().copied())
             .collect();
-        sort_in_key_order(&mut axes, |&axis| axis, dimensions)?;
+        sort_in_packing_order(&mut axes, |&axis| axis, dimensions)?;
         axes.dedup();
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
         let spread: Vec<Columns> = if any_full {
@@ -741,11 +767,12 @@ impl Columns {
             spread.iter().collect()
         };
         let first = creators[0];
-        let keys = creators[1..]
-            .iter()
-            .fold(first.keys.clone(), |keys, creator| {
-                rows::union(keys, &creator.keys)
-            });
+        let packed_coordinates = creators[1..].iter().fold(
+            first.packed_coordinates.clone(),
+            |packed_coordinates, creator| {
+                rows::union(packed_coordinates, &creator.packed_coordinates)
+            },
+        );
         let sources = terms
             .iter()
             .map(|(sign, term)| {
@@ -760,19 +787,21 @@ impl Columns {
                 Ok((*sign, term, source))
             })
             .collect::<Result<Vec<_>, EvaluateError>>()?;
-        let mut values = vec![0.0; keys.len()];
+        let mut values = vec![0.0; packed_coordinates.len()];
         values
             .par_chunks_mut(PARALLEL_ROWS)
-            .zip(keys.par_chunks(PARALLEL_ROWS))
+            .zip(packed_coordinates.par_chunks(PARALLEL_ROWS))
             .for_each(|(totals, coordinates)| {
                 let mut cursors: Vec<usize> = sources
                     .iter()
                     .map(|(_, term, source)| match source {
-                        Source::Cursor => term.keys.partition_point(|&key| key < coordinates[0]),
+                        Source::Cursor => term
+                            .packed_coordinates
+                            .partition_point(|&packed| packed < coordinates[0]),
                         Source::Indexed(..) => 0,
                     })
                     .collect();
-                let mut key = Vec::new();
+                let mut packed = Vec::new();
                 for (output, &coordinate) in totals.iter_mut().zip(coordinates) {
                     // Not `*output += value`: a read of the zeroed page before the write makes the kernel copy the zero page and flush the TLB of every core.
                     let mut total = 0.0;
@@ -780,7 +809,9 @@ impl Columns {
                         let value =
                             match source {
                                 Source::Cursor => {
-                                    if *next < term.len() && term.keys[*next] == coordinate {
+                                    if *next < term.len()
+                                        && term.packed_coordinates[*next] == coordinate
+                                    {
                                         *next += 1;
                                         term.values[*next - 1]
                                     } else {
@@ -788,11 +819,11 @@ impl Columns {
                                     }
                                 }
                                 Source::Indexed(index, positions) => {
-                                    key.clear();
-                                    key.extend(positions.iter().map(|&position| {
-                                        first.layout.member(coordinate, position)
+                                    packed.clear();
+                                    packed.extend(positions.iter().map(|&position| {
+                                        first.packing.member(coordinate, position)
                                     }));
-                                    index.find(&key).map_or(0.0, |found| term.values[found])
+                                    index.find(&packed).map_or(0.0, |found| term.values[found])
                                 }
                             };
                         match sign {
@@ -805,8 +836,8 @@ impl Columns {
             });
         Ok(Columns {
             axes: first.axes.clone(),
-            layout: first.layout.clone(),
-            keys,
+            packing: first.packing.clone(),
+            packed_coordinates,
             values: values.into(),
         }
         .normalized())
@@ -818,10 +849,10 @@ impl Columns {
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         let mut outputs: Vec<&ByAxis<'_>> = by.iter().collect();
-        sort_in_key_order(&mut outputs, |axis| axis.output, dimensions)?;
+        sort_in_packing_order(&mut outputs, |axis| axis.output, dimensions)?;
         let axes: Vec<DimensionGlobalId> = outputs.iter().map(|axis| axis.output).collect();
         let lengths = lengths(dimensions, &axes)?;
-        let layout = layout_of(dimensions, &axes)?;
+        let packing = packing_of(dimensions, &axes)?;
         if let Some((space, strides)) = dense_strides(&lengths) {
             let slot_of = |row: usize| -> Option<usize> {
                 outputs
@@ -879,11 +910,11 @@ impl Columns {
                 .with_min_len(PARALLEL_ROWS)
                 .filter(|&slot| seen[slot])
                 .collect();
-            let keys = slots
+            let packed_coordinates = slots
                 .par_iter()
                 .with_min_len(PARALLEL_ROWS)
                 .map(|&slot| {
-                    layout.pack(
+                    packing.pack(
                         strides
                             .iter()
                             .zip(&lengths)
@@ -892,20 +923,25 @@ impl Columns {
                 })
                 .collect();
             let values = rows::gather(&slots, &totals);
-            return Ok(Columns::from_keys(axes, layout, keys, values));
+            return Ok(Columns::from_packed(
+                axes,
+                packing,
+                packed_coordinates,
+                values,
+            ));
         }
-        let (kept, group_keys): (Vec<usize>, Vec<u64>) = (0..self.len())
+        let (kept, group_packed): (Vec<usize>, Vec<u64>) = (0..self.len())
             .into_par_iter()
             .with_min_len(PARALLEL_ROWS)
             .filter_map(|row| {
                 let members: Option<Vec<u32>> =
                     outputs.iter().map(|axis| axis.member(self, row)).collect();
-                Some((row, layout.pack(members?)))
+                Some((row, packing.pack(members?)))
             })
             .unzip();
-        let order = stable_order(&group_keys);
-        let runs = runs(&group_keys, &order);
-        let keys = runs.iter().map(|run| group_keys[run[0]]).collect();
+        let order = stable_order(&group_packed);
+        let runs = runs(&group_packed, &order);
+        let packed_coordinates = runs.iter().map(|run| group_packed[run[0]]).collect();
         let values: Vec<f64> = runs
             .par_iter()
             .map(|run| {
@@ -914,7 +950,12 @@ impl Columns {
                 })
             })
             .collect();
-        Ok(Columns::from_keys(axes, layout, keys, values))
+        Ok(Columns::from_packed(
+            axes,
+            packing,
+            packed_coordinates,
+            values,
+        ))
     }
 
     pub(crate) fn broadcast(
@@ -925,17 +966,17 @@ impl Columns {
         if axes.iter().all(|axis| self.axes.contains(axis)) {
             return Ok(Columns {
                 axes: self.axes.clone(),
-                layout: self.layout.clone(),
-                keys: self.keys.clone(),
+                packing: self.packing.clone(),
+                packed_coordinates: self.packed_coordinates.clone(),
                 values: self.values.clone(),
             });
         }
         let mut spread_axes = self.axes.clone();
         let mut members: Vec<Vec<u32>> = (0..self.axes.len())
             .map(|axis| {
-                self.keys
+                self.packed_coordinates
                     .iter()
-                    .map(|&key| self.layout.member(key, axis))
+                    .map(|&packed| self.packing.member(packed, axis))
                     .collect()
             })
             .collect();
@@ -973,13 +1014,18 @@ impl Columns {
             .map(|&axis| self.position(axis))
             .collect();
         if positions.is_sorted() {
-            return Measure::try_from_keys(definition, self.keys, self.values, dimensions);
+            return Measure::try_from_packed(
+                definition,
+                self.packed_coordinates,
+                self.values,
+                dimensions,
+            );
         }
-        let (_, keys) = reorder(&self.layout, &self.keys, &positions);
-        let rows = stable_order(&keys);
-        Measure::try_from_keys(
+        let (_, packed_coordinates) = reorder(&self.packing, &self.packed_coordinates, &positions);
+        let rows = stable_order(&packed_coordinates);
+        Measure::try_from_packed(
             definition,
-            rows.iter().map(|&row| keys[row]).collect(),
+            rows.iter().map(|&row| packed_coordinates[row]).collect(),
             rows.iter().map(|&row| self.values[row]).collect(),
             dimensions,
         )
@@ -991,40 +1037,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sorted_keys_still_drop_values_that_are_not_normalized() {
+    fn sorted_packed_coordinates_still_drop_values_that_are_not_normalized() {
         let axis = DimensionGlobalId(ulid::Ulid(1));
-        let layout = KeyLayout::new(&[8]).expect("3 bits fit in a key");
+        let packing = CoordinatePacking::new(&[8]).expect("3 bits fit in a packed coordinate");
 
-        let columns = Columns::from_keys(vec![axis], layout, vec![0, 1], vec![f64::NAN, -0.0]);
+        let columns = Columns::from_packed(vec![axis], packing, vec![0, 1], vec![f64::NAN, -0.0]);
 
-        assert_eq!(&columns.keys[..], &[1]);
+        assert_eq!(&columns.packed_coordinates[..], &[1]);
         assert_eq!(columns.values[0].to_bits(), 0);
     }
 
     #[test]
-    fn adding_terms_on_the_same_coordinates_keeps_their_keys() {
+    fn adding_terms_on_the_same_coordinates_keeps_their_packed_coordinates() {
         let fixture = datagen::cases::Fixture::default();
         let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
         let axis = dimensions[1].ulid();
-        let layout = KeyLayout::new(&[3]).expect("2 bits fit in a key");
-        let sales = Columns::from_keys(
+        let packing = CoordinatePacking::new(&[3]).expect("2 bits fit in a packed coordinate");
+        let sales = Columns::from_packed(
             vec![axis],
-            layout.clone(),
+            packing.clone(),
             vec![0, 1, 2],
             vec![3.0, 4.0, 5.0],
         );
         let cost = Columns {
             axes: sales.axes.clone(),
-            layout: sales.layout.clone(),
-            keys: sales.keys.clone(),
+            packing: sales.packing.clone(),
+            packed_coordinates: sales.packed_coordinates.clone(),
             values: vec![1.0, 1.0, 1.0].into(),
         };
-        let keys = sales.keys.clone();
+        let packed_coordinates = sales.packed_coordinates.clone();
 
         let profit = Columns::add(vec![(Sign::Plus, sales), (Sign::Minus, cost)], &dimensions)
             .expect("both terms have every axis");
 
-        assert!(profit.keys.ptr_eq(&keys));
+        assert!(profit.packed_coordinates.ptr_eq(&packed_coordinates));
         assert_eq!(&profit.values[..], &[2.0, 3.0, 4.0]);
     }
 }

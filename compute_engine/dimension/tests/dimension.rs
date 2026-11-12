@@ -485,7 +485,7 @@ fn column_with_the_right_name_but_wrong_type_is_rejected() {
 }
 
 #[test]
-fn key_order_puts_the_calendar_then_the_version_then_the_rest_by_ulid() {
+fn packing_order_puts_the_calendar_then_the_version_then_the_rest_by_ulid() {
     let dimension = |ulid: u128, kind| {
         let definition = definition_without_attributes(DimensionGlobalId(Ulid(ulid)), kind);
         let columns = vec![ulids(&[Some(ulid)]), strings(&[Some("メンバー")])];
@@ -498,7 +498,7 @@ fn key_order_puts_the_calendar_then_the_version_then_the_rest_by_ulid() {
         dimension(4, DimensionKind::Ordinary),
     ];
 
-    dimensions.sort_by_key(Dimension::key_order);
+    dimensions.sort_by_key(Dimension::packing_order);
 
     let ulids: Vec<u128> = dimensions
         .iter()

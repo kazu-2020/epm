@@ -9,7 +9,7 @@ use evaluator::EvaluateError;
 use formula::{CheckedAxis, CheckedExpression, CheckedNode};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
-use crate::columns::{ByAxis, Columns, find_dimension, layout_of};
+use crate::columns::{ByAxis, Columns, find_dimension, packing_of};
 pub use crate::region::Region;
 
 pub fn evaluate(
@@ -55,7 +55,9 @@ fn apply(
 ) -> Result<(), EvaluateError> {
     let index = position(measures, ulid)?;
     let axes = &measures[index].definition().axes;
-    if let Some(mut region) = Region::of_keys(axes, measures[index].layout(), delta.keys()) {
+    if let Some(mut region) =
+        Region::of_packed(axes, measures[index].packing(), delta.packed_coordinates())
+    {
         for &axis in axes {
             if region.members(axis).map(BTreeSet::len)
                 == Some(find_dimension(dimensions, axis)?.len() as usize)
@@ -98,7 +100,7 @@ pub fn recalculate(
     dimensions: &[&Dimension],
 ) -> Result<Delta, EvaluateError> {
     let definition = result.definition();
-    check_layout(result, dimensions)?;
+    check_packing(result, dimensions)?;
     let new = evaluate_in(expression, definition, measures, dimensions, region)?;
     let old = Columns::from_measure_in(result, region, dimensions)?;
     let positions: Vec<usize> = definition
@@ -106,24 +108,24 @@ pub fn recalculate(
         .iter()
         .map(|&axis| new.position(axis))
         .collect();
-    let (mut keys, mut changes) = new.changes_from(&old);
+    let (mut packed_coordinates, mut changes) = new.changes_from(&old);
     if !positions.is_sorted() {
-        let layout = new.layout();
-        let mut pairs: Vec<(u64, Option<f64>)> = keys
+        let packing = new.packing();
+        let mut pairs: Vec<(u64, Option<f64>)> = packed_coordinates
             .iter()
             .zip(changes)
-            .map(|(&key, change)| {
+            .map(|(&packed, change)| {
                 let members = positions
                     .iter()
-                    .map(|&position| layout.member(key, position));
-                (result.layout().pack(members), change)
+                    .map(|&position| packing.member(packed, position));
+                (result.packing().pack(members), change)
             })
             .collect();
-        pairs.sort_unstable_by_key(|&(key, _)| key);
-        (keys, changes) = pairs.into_iter().unzip();
+        pairs.sort_unstable_by_key(|&(packed, _)| packed);
+        (packed_coordinates, changes) = pairs.into_iter().unzip();
     }
     result
-        .delta_from_sorted(keys, changes)
+        .delta_from_packed(packed_coordinates, changes)
         .map_err(EvaluateError::InvalidResult)
 }
 
@@ -230,9 +232,9 @@ fn changed_in(
     })
 }
 
-fn check_layout(measure: &Measure, dimensions: &[&Dimension]) -> Result<(), EvaluateError> {
-    if *measure.layout() != layout_of(dimensions, &measure.definition().axes)? {
-        return Err(EvaluateError::MeasureLayoutChanged(measure.ulid()));
+fn check_packing(measure: &Measure, dimensions: &[&Dimension]) -> Result<(), EvaluateError> {
+    if *measure.packing() != packing_of(dimensions, &measure.definition().axes)? {
+        return Err(EvaluateError::MeasurePackingChanged(measure.ulid()));
     }
     Ok(())
 }
@@ -363,7 +365,7 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 if measure.definition().axes != *axes {
                     return Err(EvaluateError::MeasureAxesChanged(*ulid));
                 }
-                check_layout(measure, self.dimensions)?;
+                check_packing(measure, self.dimensions)?;
                 if axes.iter().any(|&axis| region.members(axis).is_some()) {
                     Columns::from_measure_in(measure, region, self.dimensions)
                 } else {

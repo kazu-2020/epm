@@ -5,7 +5,7 @@ exclude_re = [
     "<impl fmt::Debug for (Text|Reference)Attribute",
     "<impl fmt::Display for MeasureError>::fmt",
     "<impl fmt::Display for EvaluateError>::fmt",
-    # Not tested: these keep a cursor at 0, so the merge loop never ends and grows its key buffer until the CI runner runs out of memory.
+    # Not tested: these keep a cursor at 0, so the merge loop never ends and grows its buffer of packed coordinates until the CI runner runs out of memory.
     "replace \\+= with \\*= in (merge|merge_changes|(Columns::)?changes_from)",
     # Not tested: these only choose a slower path (sort, filter or binary search) that builds the same cells.
     "replace is_normalized -> bool with false",
@@ -21,9 +21,9 @@ exclude_re = [
     "replace searched -> bool",
     "replace <= with > in searched",
     "replace match guard searched\\(members\\) with (true|false) in (Columns::)?narrow",
-    # Not tested: the arms are equivalent here. Equal keys take the arm before, and the axes of a key never overlap, so | and ^ give the same key.
+    # Not tested: the arms are equivalent here. Equal packed coordinates take the arm before, and the axes of a packed coordinate never overlap, so | and ^ give the same packed coordinate.
     "replace < with <= in merge$",
-    "replace \\| with \\^ in KeyLayout::pack",
+    "replace \\| with \\^ in CoordinatePacking::pack",
     # Not tested: these only read more cells than the region needs, and restrict at the end keeps the same cells.
     "replace Evaluator<[^>]*>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
     "replace Evaluator<[^>]*>::operand_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",

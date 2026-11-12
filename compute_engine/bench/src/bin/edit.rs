@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use datagen::representative::{self, Size};
-use dimension::Dimension;
+use dimension::{Dimension, MemberIndex};
 use formula::CheckedExpression;
 use measure::{MeasureDefinition, MeasureGlobalId};
 
@@ -47,11 +47,17 @@ fn main() -> std::io::Result<()> {
     let mut all = Vec::new();
     for input in 0..inputs {
         let name = measures[input].definition().name.clone();
-        let rows = measures[input].len();
+        let rows = measures[input].base_values().len();
         let mut times = Vec::new();
         for edit in 0..edits {
             let row = (edit * 7_919 * 104_729) % rows;
-            let (coordinate, value) = measures[input].cell(row);
+            let measure = &measures[input];
+            let coordinate: Vec<MemberIndex> = measure
+                .packing()
+                .unpack(measure.base_packed_coordinates()[row])
+                .map(MemberIndex)
+                .collect();
+            let value = measure.base_values()[row];
             let mut delta = measures[input].delta();
             delta
                 .set(&coordinate, value * 1.01 + 1.0)

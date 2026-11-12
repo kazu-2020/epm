@@ -122,7 +122,7 @@ fn a_few_members_hold_most_cells() {
 }
 
 #[test]
-fn the_representative_model_declares_its_axes_in_key_order() {
+fn the_representative_model_declares_its_axes_in_packing_order() {
     let size = datagen::representative::Size {
         products: 4,
         customers: 3,
@@ -131,13 +131,13 @@ fn the_representative_model_declares_its_axes_in_key_order() {
         account_fill: 0.5,
     };
     let workspace = datagen::representative::generate(&size, 1);
-    let key_order = |axis| {
+    let packing_order = |axis| {
         workspace
             .dimensions
             .iter()
             .find(|dimension| dimension.ulid() == axis)
             .expect("every axis is a dimension")
-            .key_order()
+            .packing_order()
     };
     let declared = workspace
         .inputs
@@ -147,7 +147,9 @@ fn the_representative_model_declares_its_axes_in_key_order() {
 
     for definition in declared {
         assert!(
-            definition.axes.is_sorted_by_key(|&axis| key_order(axis)),
+            definition
+                .axes
+                .is_sorted_by_key(|&axis| packing_order(axis)),
             "{}",
             definition.name
         );
@@ -169,5 +171,5 @@ fn the_quantity_has_exactly_the_requested_cells_when_they_do_not_divide_evenly()
         .iter()
         .find(|input| input.definition().name == "数量")
         .expect("the quantity is an input");
-    assert_eq!(quantity.len(), size.quantity_cells);
+    assert_eq!(quantity.cells().len(), size.quantity_cells);
 }

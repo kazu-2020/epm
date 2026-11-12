@@ -246,6 +246,13 @@ async fn each_refusal_has_its_connect_code() {
         .await,
         (StatusCode::BAD_REQUEST, json!("invalid_argument"))
     );
+    let mut outside = app.coordinate.clone();
+    outside[0] = u32::MAX;
+    assert_eq!(
+        refusal(&app, "ReadCells", read_of(5, cell(SALES, &outside))).await,
+        (StatusCode::BAD_REQUEST, json!("invalid_argument")),
+        "not an empty cell: the member is not in the dimension"
+    );
     assert_eq!(
         refusal(&app, "ReadCells", read_of(5, cell(SALES, &app.coordinate))).await,
         (StatusCode::SERVICE_UNAVAILABLE, json!("unavailable"))

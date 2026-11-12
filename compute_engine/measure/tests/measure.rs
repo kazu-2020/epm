@@ -9,7 +9,9 @@ use dimension::{
     AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
     DimensionGlobalId, DimensionKind, MemberIndex,
 };
-use measure::{KeyLayout, Measure, MeasureDefinition, MeasureError, MeasureGlobalId, normalize};
+use measure::{
+    CoordinatePacking, Measure, MeasureDefinition, MeasureError, MeasureGlobalId, normalize,
+};
 use ulid::Ulid;
 
 const PERIOD: DimensionGlobalId = DimensionGlobalId(Ulid(100));
@@ -107,6 +109,21 @@ fn cell_is_read_by_its_member_ids_and_missing_cells_are_empty() {
             expected: 2,
             found: 1
         }
+    );
+}
+
+#[test]
+fn reading_a_member_outside_the_dimension_is_an_error_like_writing_it() {
+    let measure = sales();
+    let outside = MeasureError::MemberOutOfRange {
+        axis: DEPARTMENT,
+        member: MemberIndex(2),
+    };
+
+    assert_eq!(measure.get(&coordinate(0, 2)).unwrap_err(), outside);
+    assert_eq!(
+        measure.delta().set(&coordinate(0, 2), 1.0).unwrap_err(),
+        outside
     );
 }
 
@@ -229,6 +246,15 @@ fn normalize_turns_non_finite_into_empty_and_negative_zero_into_zero() {
     assert_eq!(normalize(1.5), Some(1.5));
 }
 
+fn merged_changes(measure: &Measure) -> Vec<(Vec<MemberIndex>, Option<f64>)> {
+    let (packed_coordinates, changes) = measure.merged_changes();
+    packed_coordinates
+        .iter()
+        .map(|&packed| measure.packing().unpack(packed).map(MemberIndex).collect())
+        .zip(changes)
+        .collect()
+}
+
 #[test]
 fn delta_overrides_base_and_newer_delta_wins() {
     let measure = sales();
@@ -246,16 +272,11 @@ fn delta_overrides_base_and_newer_delta_wins() {
     assert_eq!(measure.get(&coordinate(1, 1)).unwrap(), Some(6.0));
     assert_eq!(measure.get(&coordinate(2, 0)).unwrap(), Some(30.0));
     assert_eq!(measure.delta_len(), 4);
-    let changes: Vec<(Vec<MemberIndex>, Option<f64>)> = measure
-        .changes()
-        .map(|(coordinate, value)| (coordinate.to_vec(), value))
-        .collect();
     assert_eq!(
-        changes,
+        merged_changes(&measure),
         [
             (coordinate(0, 0).to_vec(), Some(11.0)),
             (coordinate(0, 1).to_vec(), None),
-            (coordinate(1, 1).to_vec(), Some(5.0)),
             (coordinate(1, 1).to_vec(), Some(6.0)),
         ]
     );
@@ -268,10 +289,8 @@ fn later_write_in_one_delta_replaces_the_earlier_one() {
     delta.set(&coordinate(1, 0), 1.0).unwrap();
     delta.set(&coordinate(0, 1), 3.0).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
-    assert!(!delta.is_empty());
-    assert_eq!(delta.len(), 2);
-    assert_eq!(delta.keys().len(), 2);
-    assert!(delta.keys().is_sorted());
+    assert_eq!(delta.packed_coordinates().len(), 2);
+    assert!(delta.packed_coordinates().is_sorted());
     let measure = measure.apply(delta).unwrap();
     assert_eq!(measure.get(&coordinate(1, 0)).unwrap(), Some(2.0));
 }
@@ -310,7 +329,6 @@ fn delta_rejects_coordinates_that_do_not_fit_the_measure() {
             member: MemberIndex(3)
         }
     );
-    assert!(delta.is_empty());
 }
 
 #[test]
@@ -428,12 +446,8 @@ fn delta_lists_each_coordinate_with_its_latest_change() {
     delta.set(&coordinate(1, 0), 1.0).unwrap();
     delta.delete(&coordinate(0, 1)).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
-    let changes: Vec<(Vec<MemberIndex>, Option<f64>)> = delta
-        .changes()
-        .map(|(coordinate, change)| (coordinate.to_vec(), change))
-        .collect();
     assert_eq!(
-        changes,
+        merged_changes(&measure.apply(delta).unwrap()),
         vec![
             (coordinate(0, 1).to_vec(), None),
             (coordinate(1, 0).to_vec(), Some(2.0))
@@ -458,6 +472,11 @@ fn folding_deltas_leaves_one_layer_over_the_same_base() {
     assert_eq!(measure.delta_len(), 4);
     assert_eq!(folded.delta_len(), 2);
     assert_eq!(rows(&folded), rows(&measure));
+    assert_eq!(
+        folded.base_packed_coordinates(),
+        measure.base_packed_coordinates()
+    );
+    assert_eq!(folded.base_values(), measure.base_values());
     assert_eq!(folded.get(&coordinate(0, 0)).unwrap(), Some(12.0));
     assert_eq!(folded.get(&coordinate(1, 1)).unwrap(), None);
     assert_eq!(folded.get(&coordinate(0, 1)).unwrap(), Some(20.0));
@@ -481,8 +500,7 @@ fn folding_deltas_keeps_the_cells_that_only_one_delta_changes() {
             measure = measure.apply(delta).unwrap();
         }
 
-        let changes: Vec<(Vec<MemberIndex>, Option<f64>)> =
-            measure.fold_deltas().changes().collect();
+        let changes = merged_changes(&measure.fold_deltas());
 
         let mut expected: Vec<(Vec<MemberIndex>, Option<f64>)> = older
             .iter()
@@ -558,88 +576,95 @@ fn cells_read_through_the_deltas() {
 }
 
 #[test]
-fn keys_order_coordinates_as_the_member_columns_do() {
-    let layout = KeyLayout::new(&[3, 2]).unwrap();
-    let keys: Vec<u64> = [(0, 1), (1, 0), (2, 1)]
+fn packed_coordinates_order_cells_as_the_member_columns_do() {
+    let packing = CoordinatePacking::new(&[3, 2]).unwrap();
+    let packed_coordinates: Vec<u64> = [(0, 1), (1, 0), (2, 1)]
         .iter()
-        .map(|&(period, department)| layout.pack([period, department]))
+        .map(|&(period, department)| packing.pack([period, department]))
         .collect();
-    assert!(keys.is_sorted());
-    assert_eq!(layout.members(keys[2]).collect::<Vec<_>>(), vec![2, 1]);
+    assert!(packed_coordinates.is_sorted());
+    assert_eq!(
+        packing.unpack(packed_coordinates[2]).collect::<Vec<_>>(),
+        vec![2, 1]
+    );
     assert_eq!(
         try_sales(&[(0, 1, 1.0), (2, 0, 2.0)])
             .unwrap()
-            .keys()
+            .base_packed_coordinates()
             .to_vec(),
-        vec![layout.pack([0, 1]), layout.pack([2, 0])]
+        vec![packing.pack([0, 1]), packing.pack([2, 0])]
     );
 }
 
 #[test]
-fn keys_wider_than_64_bits_are_rejected() {
-    assert!(KeyLayout::new(&[u32::MAX, u32::MAX]).is_some());
-    assert!(KeyLayout::new(&[u32::MAX, u32::MAX, 2]).is_none());
+fn packings_wider_than_64_bits_are_rejected() {
+    assert!(CoordinatePacking::new(&[u32::MAX, u32::MAX]).is_some());
+    assert!(CoordinatePacking::new(&[u32::MAX, u32::MAX, 2]).is_none());
 }
 
 #[test]
 fn a_one_member_axis_in_front_of_64_bits_packs_without_overflow() {
-    let layout = KeyLayout::new(&[1, u32::MAX, u32::MAX]).unwrap();
-    let key = layout.pack([0, u32::MAX, 9]);
+    let packing = CoordinatePacking::new(&[1, u32::MAX, u32::MAX]).unwrap();
+    let packed = packing.pack([0, u32::MAX, 9]);
     assert_eq!(
-        layout.members(key).collect::<Vec<_>>(),
+        packing.unpack(packed).collect::<Vec<_>>(),
         vec![0, u32::MAX, 9]
     );
-    assert!(layout.holds(key));
 }
 
 #[test]
-fn a_reordered_layout_keeps_each_axis_width() {
-    let layout = KeyLayout::new(&[3, 2]).unwrap();
-    assert_eq!(layout.reordered(&[1, 0]), KeyLayout::new(&[2, 3]).unwrap());
+fn a_reordered_packing_keeps_each_axis_width() {
+    let packing = CoordinatePacking::new(&[3, 2]).unwrap();
+    assert_eq!(
+        packing.reordered(&[1, 0]),
+        CoordinatePacking::new(&[2, 3]).unwrap()
+    );
 }
 
 #[test]
-fn one_axis_of_a_key_is_a_field_that_a_member_fits_in() {
-    let layout = KeyLayout::new(&[5, 3]).unwrap();
-    assert_eq!(layout.len(), 2);
-    assert!(!layout.is_empty());
-    assert!(KeyLayout::new(&[]).unwrap().is_empty());
-    assert_eq!(layout.field(0), 0b11100);
-    assert_eq!(layout.field(1), 0b00011);
-    assert_eq!(layout.place(0, 4), 0b10000);
-    assert_eq!(layout.place(1, 2), 0b00010);
-    assert!(layout.fits(0, 7));
-    assert!(!layout.fits(0, 8));
-    assert!(layout.fits(1, 3));
-    assert!(!layout.fits(1, 4));
+fn one_axis_mask_holds_every_member_that_fits() {
+    let packing = CoordinatePacking::new(&[5, 3]).unwrap();
+    assert_eq!(packing.axis_mask(0), 0b11100);
+    assert_eq!(packing.axis_mask(1), 0b00011);
+    assert_eq!(packing.place(0, 4), 0b10000);
+    assert_eq!(packing.place(1, 2), 0b00010);
+    assert!(packing.fits(0, 7));
+    assert!(!packing.fits(0, 8));
+    assert!(packing.fits(1, 3));
+    assert!(!packing.fits(1, 4));
 }
 
 #[test]
-fn keys_from_the_engine_are_checked_like_a_base() {
+fn packed_coordinates_from_the_engine_are_checked_like_a_base() {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
-    let layout = KeyLayout::new(&[3, 2]).unwrap();
+    let packing = CoordinatePacking::new(&[3, 2]).unwrap();
     let dimensions = [&periods(), &departments()];
-    let from_keys = |keys: Vec<u64>| {
-        let values = vec![1.0; keys.len()];
-        Measure::try_from_keys(definition.clone(), keys.into(), values.into(), &dimensions)
+    let from_packed = |packed_coordinates: Vec<u64>| {
+        let values = vec![1.0; packed_coordinates.len()];
+        Measure::try_from_packed(
+            definition.clone(),
+            packed_coordinates.into(),
+            values.into(),
+            &dimensions,
+        )
     };
     assert_eq!(
-        from_keys(vec![layout.pack([3, 0])]).unwrap_err(),
+        from_packed(vec![packing.pack([3, 0])]).unwrap_err(),
         MeasureError::MemberOutOfRange {
             axis: PERIOD,
             member: MemberIndex(3)
         }
     );
     assert_eq!(
-        from_keys(vec![1 << 3]).unwrap_err(),
-        MeasureError::KeyMismatch(0)
+        from_packed(vec![1 << 3]).unwrap_err(),
+        MeasureError::BitsOutsidePacking(0)
     );
     assert_eq!(
-        from_keys(vec![layout.pack([1, 0]), layout.pack([0, 1])]).unwrap_err(),
+        from_packed(vec![packing.pack([1, 0]), packing.pack([0, 1])]).unwrap_err(),
         MeasureError::UnsortedCoordinate(1)
     );
     assert_eq!(
-        from_keys(vec![layout.pack([0, 1]), layout.pack([2, 0])])
+        from_packed(vec![packing.pack([0, 1]), packing.pack([2, 0])])
             .unwrap()
             .cells()
             .collect::<Vec<_>>(),
@@ -659,7 +684,7 @@ fn values_read_from_part_of_a_larger_buffer_are_copied_out() {
     }
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
     let measure = Measure::try_new(definition, batch, &[&periods(), &departments()]).unwrap();
-    assert_eq!(measure.values().inner().capacity(), 8);
+    assert_eq!(measure.base_values().inner().capacity(), 8);
     assert_eq!(
         measure.cells().collect::<Vec<_>>(),
         vec![(vec![MemberIndex(0), MemberIndex(1)], 2.0)]
@@ -674,10 +699,9 @@ fn values_that_fill_their_buffer_are_kept_without_a_copy() {
     assert_eq!(given.inner().capacity(), given.inner().len());
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
     let measure = Measure::try_new(definition, batch, &[&periods(), &departments()]).unwrap();
-    assert!(measure.values().inner().ptr_eq(given.inner()));
-    assert_eq!(measure.values().to_vec(), vec![1.0, 3.0]);
-    assert_eq!(measure.len(), 2);
-    assert!(!measure.is_empty());
+    assert!(measure.base_values().inner().ptr_eq(given.inner()));
+    assert_eq!(measure.base_values().to_vec(), vec![1.0, 3.0]);
+
     let batch =
         RecordBatch::try_new(Arc::new(measure.definition().schema()), crate::columns(&[])).unwrap();
     let empty = Measure::try_new(
@@ -686,16 +710,16 @@ fn values_that_fill_their_buffer_are_kept_without_a_copy() {
         &[&periods(), &departments()],
     )
     .unwrap();
-    assert!(empty.is_empty());
+    assert!(empty.base_values().is_empty());
 }
 
 #[test]
-fn a_delta_from_sorted_keys_takes_only_sorted_keys_that_fit_the_measure() {
+fn a_delta_from_packed_coordinates_takes_only_sorted_ones_that_fit_the_measure() {
     let measure = sales();
-    let key = |period, department| measure.layout().pack([period, department]);
+    let packed = |period, department| measure.packing().pack([period, department]);
 
     let delta = measure
-        .delta_from_sorted(vec![key(0, 0), key(1, 1)], vec![Some(-0.0), None])
+        .delta_from_packed(vec![packed(0, 0), packed(1, 1)], vec![Some(-0.0), None])
         .unwrap();
     let applied = measure.apply(delta).unwrap();
 
@@ -706,19 +730,19 @@ fn a_delta_from_sorted_keys_takes_only_sorted_keys_that_fit_the_measure() {
     assert_eq!(applied.get(&coordinate(1, 1)).unwrap(), None);
     assert_eq!(
         measure
-            .delta_from_sorted(vec![key(1, 1), key(0, 0)], vec![None, None])
+            .delta_from_packed(vec![packed(1, 1), packed(0, 0)], vec![None, None])
             .unwrap_err(),
         MeasureError::UnsortedCoordinate(1)
     );
     assert_eq!(
         measure
-            .delta_from_sorted(vec![key(0, 0), key(0, 0)], vec![None, None])
+            .delta_from_packed(vec![packed(0, 0), packed(0, 0)], vec![None, None])
             .unwrap_err(),
         MeasureError::DuplicateCoordinate(1)
     );
     assert_eq!(
         measure
-            .delta_from_sorted(vec![key(3, 0)], vec![None])
+            .delta_from_packed(vec![packed(3, 0)], vec![None])
             .unwrap_err(),
         MeasureError::MemberOutOfRange {
             axis: PERIOD,
@@ -734,4 +758,78 @@ fn a_measure_gives_the_lengths_of_its_axes_in_order() {
         measure.axis_lengths().collect::<Vec<_>>(),
         [(PERIOD, 3), (DEPARTMENT, 2)]
     );
+}
+
+#[test]
+fn base_functions_skip_the_pending_deltas_and_the_others_include_them() {
+    let measure = sales();
+    let mut delta = measure.delta();
+    delta.set(&coordinate(1, 1), 5.0).unwrap();
+    delta.delete(&coordinate(0, 0)).unwrap();
+    let measure = measure.apply(delta).unwrap();
+
+    assert_eq!(measure.base_values().to_vec(), vec![10.0, 20.0, 30.0]);
+    assert_eq!(measure.base_packed_coordinates().len(), 3);
+    assert_eq!(measure.get(&coordinate(0, 0)).unwrap(), None);
+    assert_eq!(measure.get(&coordinate(1, 1)).unwrap(), Some(5.0));
+    assert_eq!(
+        rows(&measure),
+        vec![(0, 1, 20.0), (1, 1, 5.0), (2, 0, 30.0)]
+    );
+    assert_eq!(
+        measure.cells().collect::<Vec<_>>(),
+        vec![
+            (coordinate(0, 1).to_vec(), 20.0),
+            (coordinate(1, 1).to_vec(), 5.0),
+            (coordinate(2, 0).to_vec(), 30.0),
+        ]
+    );
+}
+
+#[test]
+fn an_empty_delta_adds_no_layer_and_a_delta_that_changes_nothing_keeps_the_cells() {
+    let measure = sales();
+
+    let unchanged = measure.apply(measure.delta()).unwrap();
+    assert_eq!(unchanged.delta_len(), 0);
+
+    let mut delta = measure.delta();
+    delta.delete(&coordinate(1, 0)).unwrap();
+    delta.set(&coordinate(0, 0), 10.0).unwrap();
+    let applied = measure.apply(delta).unwrap();
+    assert_eq!(rows(&applied), rows(&measure));
+    assert_eq!(applied.get(&coordinate(1, 0)).unwrap(), None);
+}
+
+#[test]
+fn a_shared_unsorted_delta_gives_the_same_cells_to_every_measure_it_is_applied_to() {
+    let measure = sales();
+    let mut delta = measure.delta();
+    delta.set(&coordinate(2, 1), 1.0).unwrap();
+    delta.set(&coordinate(0, 1), 2.0).unwrap();
+    delta.set(&coordinate(2, 1), 3.0).unwrap();
+    let shared = Arc::new(delta);
+
+    let first = measure.apply(Arc::clone(&shared)).unwrap();
+    let second = measure.apply(Arc::clone(&shared)).unwrap();
+
+    let expected = vec![(0, 0, 10.0), (0, 1, 2.0), (2, 0, 30.0), (2, 1, 3.0)];
+    assert_eq!(rows(&first), expected);
+    assert_eq!(rows(&second), expected);
+    assert_eq!(first.delta_len(), 2);
+}
+
+#[test]
+fn two_axes_that_fill_64_bits_pack_and_unpack_every_member() {
+    let packing = CoordinatePacking::new(&[u32::MAX, u32::MAX]).unwrap();
+    let largest = u32::MAX - 1;
+
+    let packed = packing.pack([largest, largest]);
+
+    assert_eq!(packed, (u64::from(largest) << 32) | u64::from(largest));
+    assert_eq!(
+        packing.unpack(packed).collect::<Vec<_>>(),
+        vec![largest, largest]
+    );
+    assert!(packing.pack([0, 1]) < packing.pack([1, 0]));
 }

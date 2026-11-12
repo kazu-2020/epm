@@ -283,7 +283,7 @@ fn edits_recalculate_to_the_same_cells_as_a_full_recalculation() {
 }
 
 #[test]
-fn edits_match_a_full_recalculation_when_results_declare_axes_out_of_key_order() {
+fn edits_match_a_full_recalculation_when_results_declare_axes_out_of_packing_order() {
     edit_and_compare(&Model::with_results_reversed(true));
 }
 

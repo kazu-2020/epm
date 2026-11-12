@@ -1,5 +1,4 @@
 use rayon::prelude::*;
-use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
@@ -47,14 +46,14 @@ pub fn normalize(value: f64) -> Option<f64> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyLayout {
+pub struct CoordinatePacking {
     shifts: Vec<u32>,
     masks: Vec<u64>,
     width: u32,
 }
 
-impl KeyLayout {
-    pub fn new(lengths: &[u32]) -> Option<KeyLayout> {
+impl CoordinatePacking {
+    pub fn new(lengths: &[u32]) -> Option<CoordinatePacking> {
         let widths: Vec<u32> = lengths
             .iter()
             .map(|&len| u32::BITS - len.saturating_sub(1).leading_zeros())
@@ -62,15 +61,15 @@ impl KeyLayout {
         Self::of_widths(&widths)
     }
 
-    pub fn reordered(&self, positions: &[usize]) -> KeyLayout {
+    pub fn reordered(&self, positions: &[usize]) -> CoordinatePacking {
         let widths: Vec<u32> = positions
             .iter()
             .map(|&position| self.masks[position].count_ones())
             .collect();
-        Self::of_widths(&widths).expect("the same widths fit in a key")
+        Self::of_widths(&widths).expect("the same widths fit in a packed coordinate")
     }
 
-    fn of_widths(widths: &[u32]) -> Option<KeyLayout> {
+    fn of_widths(widths: &[u32]) -> Option<CoordinatePacking> {
         let width = widths.iter().sum::<u32>();
         if width > u64::BITS {
             return None;
@@ -82,27 +81,19 @@ impl KeyLayout {
             *slot = shift.min(u64::BITS - 1);
             shift += width;
         }
-        Some(KeyLayout {
+        Some(CoordinatePacking {
             shifts,
             masks: widths.iter().map(|&width| (1u64 << width) - 1).collect(),
             width,
         })
     }
 
-    pub fn len(&self) -> usize {
-        self.shifts.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.shifts.is_empty()
-    }
-
     pub fn pack(&self, members: impl IntoIterator<Item = u32>) -> u64 {
         self.shifts.iter().zip(&self.masks).zip(members).fold(
             0,
-            |key, ((&shift, &mask), member)| {
+            |packed, ((&shift, &mask), member)| {
                 debug_assert!(u64::from(member) <= mask);
-                key | (u64::from(member) << shift)
+                packed | (u64::from(member) << shift)
             },
         )
     }
@@ -116,20 +107,20 @@ impl KeyLayout {
         u64::from(member) <= self.masks[axis]
     }
 
-    pub fn field(&self, axis: usize) -> u64 {
+    pub fn axis_mask(&self, axis: usize) -> u64 {
         self.masks[axis] << self.shifts[axis]
     }
 
-    pub fn member(&self, key: u64, axis: usize) -> u32 {
-        ((key >> self.shifts[axis]) & self.masks[axis]) as u32
+    pub fn member(&self, packed: u64, axis: usize) -> u32 {
+        ((packed >> self.shifts[axis]) & self.masks[axis]) as u32
     }
 
-    pub fn holds(&self, key: u64) -> bool {
-        key.checked_shr(self.width).unwrap_or(0) == 0
+    fn holds(&self, packed: u64) -> bool {
+        packed.checked_shr(self.width).unwrap_or(0) == 0
     }
 
-    pub fn members(&self, key: u64) -> impl Iterator<Item = u32> + '_ {
-        (0..self.len()).map(move |axis| self.member(key, axis))
+    pub fn unpack(&self, packed: u64) -> impl Iterator<Item = u32> + '_ {
+        (0..self.shifts.len()).map(move |axis| self.member(packed, axis))
     }
 }
 
@@ -153,8 +144,8 @@ pub enum MeasureError {
         axis: DimensionGlobalId,
         member: MemberIndex,
     },
-    KeyTooWide,
-    KeyMismatch(usize),
+    PackingTooWide,
+    BitsOutsidePacking(usize),
     UnnormalizedValue(usize),
     UnsortedCoordinate(usize),
     DuplicateCoordinate(usize),
@@ -178,9 +169,9 @@ impl std::error::Error for MeasureError {}
 pub struct Measure {
     definition: MeasureDefinition,
     axes: Vec<Axis>,
-    layout: KeyLayout,
-    // Not the u32 columns of the base: one packed key per row takes 8 B in place of 4 B per axis.
-    keys: ScalarBuffer<u64>,
+    packing: CoordinatePacking,
+    // Not the u32 columns of the base: one packed coordinate per row takes 8 B in place of 4 B per axis.
+    packed_coordinates: ScalarBuffer<u64>,
     values: ScalarBuffer<f64>,
     // Not Vec<Delta>: every version would copy all earlier deltas of the measure.
     deltas: Vec<Arc<Delta>>,
@@ -192,7 +183,7 @@ impl Measure {
         base: RecordBatch,
         dimensions: &[&Dimension],
     ) -> Result<Self, MeasureError> {
-        let (axes, layout) = Self::axes(&definition, dimensions)?;
+        let (axes, packing) = Self::axes(&definition, dimensions)?;
         let expected = definition.schema();
         let found = base.schema();
         let same_shape =
@@ -229,8 +220,8 @@ impl Measure {
                 });
             }
         }
-        let keys = (0..base.num_rows())
-            .map(|row| layout.pack(columns.iter().map(|column| column[row])))
+        let packed_coordinates = (0..base.num_rows())
+            .map(|row| packing.pack(columns.iter().map(|column| column[row])))
             .collect();
         let values = base.columns()[axes.len()]
             .as_primitive::<Float64Type>()
@@ -241,35 +232,29 @@ impl Measure {
         } else {
             values.clone()
         };
-        Self::checked(definition, axes, layout, keys, values)
+        Self::checked(definition, axes, packing, packed_coordinates, values)
     }
 
-    pub fn try_from_keys(
+    pub fn try_from_packed(
         definition: MeasureDefinition,
-        keys: ScalarBuffer<u64>,
+        packed_coordinates: ScalarBuffer<u64>,
         values: ScalarBuffer<f64>,
         dimensions: &[&Dimension],
     ) -> Result<Self, MeasureError> {
-        let (axes, layout) = Self::axes(&definition, dimensions)?;
-        assert_eq!(keys.len(), values.len(), "one value per key");
-        if let Some(row) = first_row(&keys, |&key| !layout.holds(key)) {
-            return Err(MeasureError::KeyMismatch(row));
-        }
-        for (position, axis) in axes.iter().enumerate() {
-            if let Some(row) = first_row(&keys, |&key| layout.member(key, position) >= axis.len) {
-                return Err(MeasureError::MemberOutOfRange {
-                    axis: axis.dimension,
-                    member: MemberIndex(layout.member(keys[row], position)),
-                });
-            }
-        }
-        Self::checked(definition, axes, layout, keys, values)
+        let (axes, packing) = Self::axes(&definition, dimensions)?;
+        assert_eq!(
+            packed_coordinates.len(),
+            values.len(),
+            "one value per packed coordinate"
+        );
+        check_in_range(&axes, &packing, &packed_coordinates)?;
+        Self::checked(definition, axes, packing, packed_coordinates, values)
     }
 
     fn axes(
         definition: &MeasureDefinition,
         dimensions: &[&Dimension],
-    ) -> Result<(Vec<Axis>, KeyLayout), MeasureError> {
+    ) -> Result<(Vec<Axis>, CoordinatePacking), MeasureError> {
         if definition.axes.is_empty() {
             return Err(MeasureError::NoAxes);
         }
@@ -288,16 +273,16 @@ impl Measure {
                 len: dimension.len(),
             });
         }
-        let layout = KeyLayout::new(&axes.iter().map(|axis| axis.len).collect::<Vec<_>>())
-            .ok_or(MeasureError::KeyTooWide)?;
-        Ok((axes, layout))
+        let packing = CoordinatePacking::new(&axes.iter().map(|axis| axis.len).collect::<Vec<_>>())
+            .ok_or(MeasureError::PackingTooWide)?;
+        Ok((axes, packing))
     }
 
     fn checked(
         definition: MeasureDefinition,
         axes: Vec<Axis>,
-        layout: KeyLayout,
-        keys: ScalarBuffer<u64>,
+        packing: CoordinatePacking,
+        packed_coordinates: ScalarBuffer<u64>,
         values: ScalarBuffer<f64>,
     ) -> Result<Self, MeasureError> {
         if let Some(row) = first_row(&values, |&value| {
@@ -305,17 +290,12 @@ impl Measure {
         }) {
             return Err(MeasureError::UnnormalizedValue(row));
         }
-        if let Some(row) = first_unsorted(&keys) {
-            return Err(match keys[row - 1].cmp(&keys[row]) {
-                Ordering::Equal => MeasureError::DuplicateCoordinate(row),
-                _ => MeasureError::UnsortedCoordinate(row),
-            });
-        }
+        check_sorted(&packed_coordinates)?;
         Ok(Measure {
             definition,
             axes,
-            layout,
-            keys,
+            packing,
+            packed_coordinates,
             values,
             deltas: Vec::new(),
         })
@@ -323,48 +303,37 @@ impl Measure {
 
     pub fn from_cells(
         definition: MeasureDefinition,
-        mut cells: Vec<(Vec<MemberIndex>, f64)>,
+        cells: Vec<(Vec<MemberIndex>, f64)>,
         dimensions: &[&Dimension],
     ) -> Result<Self, MeasureError> {
-        let width = definition.axes.len();
-        if let Some((coordinate, _)) = cells
-            .iter()
-            .find(|(coordinate, _)| coordinate.len() != width)
-        {
-            return Err(MeasureError::CoordinateLength {
-                expected: width,
-                found: coordinate.len(),
-            });
-        }
-        cells.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-        let mut columns: Vec<ArrayRef> = (0..width)
-            .map(|axis| {
-                Arc::new(UInt32Array::from_iter_values(
-                    cells.iter().map(|(coordinate, _)| coordinate[axis].0),
-                )) as ArrayRef
-            })
-            .collect();
-        columns.push(Arc::new(Float64Array::from_iter_values(
-            cells.iter().map(|&(_, value)| value),
-        )));
-        let base = RecordBatch::try_new(Arc::new(definition.schema()), columns)
-            .expect("every coordinate has one member per axis");
-        Self::try_new(definition, base, dimensions)
+        let (axes, packing) = Self::axes(&definition, dimensions)?;
+        let mut packed_cells = cells
+            .into_iter()
+            .map(|(coordinate, value)| Ok((pack_checked(&axes, &packing, &coordinate)?, value)))
+            .collect::<Result<Vec<(u64, f64)>, MeasureError>>()?;
+        packed_cells.sort_unstable_by_key(|&(packed, _)| packed);
+        let (packed_coordinates, values): (Vec<u64>, Vec<f64>) = packed_cells.into_iter().unzip();
+        Self::checked(
+            definition,
+            axes,
+            packing,
+            packed_coordinates.into(),
+            values.into(),
+        )
     }
 
     pub fn cells(&self) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, f64)> {
         let measure = self.compact();
-        (0..measure.values.len()).map(move |row| measure.cell(row))
-    }
-
-    pub fn cell(&self, row: usize) -> (Vec<MemberIndex>, f64) {
-        (
-            self.layout
-                .members(self.keys[row])
-                .map(MemberIndex)
-                .collect(),
-            self.values[row],
-        )
+        (0..measure.values.len()).map(move |row| {
+            (
+                measure
+                    .packing
+                    .unpack(measure.packed_coordinates[row])
+                    .map(MemberIndex)
+                    .collect(),
+                measure.values[row],
+            )
+        })
     }
 
     pub fn definition(&self) -> &MeasureDefinition {
@@ -375,88 +344,74 @@ impl Measure {
         self.definition.ulid
     }
 
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
-    }
-
-    pub fn layout(&self) -> &KeyLayout {
-        &self.layout
+    pub fn packing(&self) -> &CoordinatePacking {
+        &self.packing
     }
 
     pub fn axis_lengths(&self) -> impl ExactSizeIterator<Item = (DimensionGlobalId, u32)> + '_ {
         self.axes.iter().map(|axis| (axis.dimension, axis.len))
     }
 
-    pub fn keys(&self) -> &ScalarBuffer<u64> {
-        &self.keys
+    pub fn base_packed_coordinates(&self) -> &ScalarBuffer<u64> {
+        &self.packed_coordinates
     }
 
-    pub fn values(&self) -> &ScalarBuffer<f64> {
+    pub fn base_values(&self) -> &ScalarBuffer<f64> {
         &self.values
     }
 
     pub fn to_record_batch(&self) -> RecordBatch {
-        let mut columns: Vec<ArrayRef> = (0..self.axes.len())
+        let measure = self.compact();
+        let mut columns: Vec<ArrayRef> = (0..measure.axes.len())
             .map(|axis| {
                 Arc::new(UInt32Array::from_iter_values(
-                    self.keys.iter().map(|&key| self.layout.member(key, axis)),
+                    measure
+                        .packed_coordinates
+                        .iter()
+                        .map(|&packed| measure.packing.member(packed, axis)),
                 )) as ArrayRef
             })
             .collect();
-        columns.push(Arc::new(Float64Array::new(self.values.clone(), None)));
-        RecordBatch::try_new(Arc::new(self.definition.schema()), columns)
+        columns.push(Arc::new(Float64Array::new(measure.values.clone(), None)));
+        RecordBatch::try_new(Arc::new(measure.definition.schema()), columns)
             .expect("the unpacked columns follow the measure schema")
-    }
-
-    pub fn changes(&self) -> impl Iterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
-        self.deltas.iter().flat_map(|delta| delta.listed())
     }
 
     pub fn merged_changes(&self) -> (Vec<u64>, Vec<Option<f64>>) {
         match &self.deltas[..] {
             [] => (Vec::new(), Vec::new()),
-            [delta] => (delta.keys.clone(), delta.changes.clone()),
+            [delta] => (delta.packed_coordinates.clone(), delta.changes.clone()),
             [first, rest @ ..] => rest.iter().fold(
-                (first.keys.clone(), first.changes.clone()),
-                |(keys, changes), delta| {
-                    merge_changes(&keys, &changes, &delta.keys, &delta.changes)
+                (first.packed_coordinates.clone(), first.changes.clone()),
+                |(packed_coordinates, changes), delta| {
+                    merge_changes(
+                        &packed_coordinates,
+                        &changes,
+                        &delta.packed_coordinates,
+                        &delta.changes,
+                    )
                 },
             ),
         }
     }
 
     pub fn delta_len(&self) -> usize {
-        self.deltas.iter().map(|delta| delta.keys.len()).sum()
+        self.deltas
+            .iter()
+            .map(|delta| delta.packed_coordinates.len())
+            .sum()
     }
 
     pub fn get(&self, coordinate: &[MemberIndex]) -> Result<Option<f64>, MeasureError> {
-        if coordinate.len() != self.axes.len() {
-            return Err(MeasureError::CoordinateLength {
-                expected: self.axes.len(),
-                found: coordinate.len(),
-            });
-        }
-        if self
-            .axes
-            .iter()
-            .zip(coordinate)
-            .any(|(axis, member)| member.0 >= axis.len)
-        {
-            return Ok(None);
-        }
-        let key = self.layout.pack(coordinate.iter().map(|member| member.0));
+        let packed = pack_checked(&self.axes, &self.packing, coordinate)?;
         for delta in self.deltas.iter().rev() {
-            if let Ok(change) = delta.keys.binary_search(&key) {
+            if let Ok(change) = delta.packed_coordinates.binary_search(&packed) {
                 return Ok(delta.changes[change]);
             }
         }
         Ok(self
-            .keys
-            .binary_search(&key)
+            .packed_coordinates
+            .binary_search(&packed)
             .ok()
             .map(|row| self.values[row]))
     }
@@ -465,43 +420,30 @@ impl Measure {
         Delta {
             measure: self.definition.ulid,
             axes: self.axes.clone(),
-            layout: self.layout.clone(),
-            keys: Vec::new(),
+            packing: self.packing.clone(),
+            packed_coordinates: Vec::new(),
             changes: Vec::new(),
         }
     }
 
-    pub fn delta_from_sorted(
+    pub fn delta_from_packed(
         &self,
-        keys: Vec<u64>,
+        packed_coordinates: Vec<u64>,
         changes: Vec<Option<f64>>,
     ) -> Result<Delta, MeasureError> {
-        assert_eq!(keys.len(), changes.len(), "one change per key");
-        if let Some(row) = first_unsorted(&keys) {
-            return Err(match keys[row - 1].cmp(&keys[row]) {
-                Ordering::Equal => MeasureError::DuplicateCoordinate(row),
-                _ => MeasureError::UnsortedCoordinate(row),
-            });
-        }
-        if let Some(row) = first_row(&keys, |&key| !self.layout.holds(key)) {
-            return Err(MeasureError::KeyMismatch(row));
-        }
-        for (position, axis) in self.axes.iter().enumerate() {
-            if let Some(row) =
-                first_row(&keys, |&key| self.layout.member(key, position) >= axis.len)
-            {
-                return Err(MeasureError::MemberOutOfRange {
-                    axis: axis.dimension,
-                    member: MemberIndex(self.layout.member(keys[row], position)),
-                });
-            }
-        }
+        assert_eq!(
+            packed_coordinates.len(),
+            changes.len(),
+            "one change per packed coordinate"
+        );
+        check_sorted(&packed_coordinates)?;
+        check_in_range(&self.axes, &self.packing, &packed_coordinates)?;
         Ok(Delta {
             changes: changes
                 .into_iter()
                 .map(|change| change.and_then(normalize))
                 .collect(),
-            keys,
+            packed_coordinates,
             ..self.delta()
         })
     }
@@ -514,11 +456,11 @@ impl Measure {
         if delta.axes != self.axes {
             return Err(MeasureError::DeltaAxesMismatch);
         }
-        if first_unsorted(&delta.keys).is_some() {
+        if first_unsorted(&delta.packed_coordinates).is_some() {
             Arc::make_mut(&mut delta).settle();
         }
         let mut measure = self.clone();
-        if !delta.keys.is_empty() {
+        if !delta.packed_coordinates.is_empty() {
             measure.deltas.push(delta);
         }
         Ok(measure)
@@ -528,10 +470,10 @@ impl Measure {
         if matches!(self.deltas[..], [] | [_]) {
             return self.clone();
         }
-        let (keys, changes) = self.merged_changes();
+        let (packed_coordinates, changes) = self.merged_changes();
         let mut measure = self.clone();
         measure.deltas = vec![Arc::new(Delta {
-            keys,
+            packed_coordinates,
             changes,
             ..self.delta()
         })];
@@ -542,31 +484,31 @@ impl Measure {
         if self.deltas.is_empty() {
             return self.clone();
         }
-        let (change_keys, changes) = self.merged_changes();
+        let (change_packed_coordinates, changes) = self.merged_changes();
         let capacity = self.values.len() + changes.len();
-        let mut keys = Vec::with_capacity(capacity);
+        let mut packed_coordinates = Vec::with_capacity(capacity);
         let mut values = Vec::with_capacity(capacity);
         let mut start = 0;
-        for (&key, &change) in change_keys.iter().zip(&changes) {
-            let (end, next) = match self.keys[start..].binary_search(&key) {
+        for (&packed, &change) in change_packed_coordinates.iter().zip(&changes) {
+            let (end, next) = match self.packed_coordinates[start..].binary_search(&packed) {
                 Ok(row) => (start + row, start + row + 1),
                 Err(row) => (start + row, start + row),
             };
-            keys.extend_from_slice(&self.keys[start..end]);
+            packed_coordinates.extend_from_slice(&self.packed_coordinates[start..end]);
             values.extend_from_slice(&self.values[start..end]);
             start = next;
             if let Some(value) = change {
-                keys.push(key);
+                packed_coordinates.push(packed);
                 values.push(value);
             }
         }
-        keys.extend_from_slice(&self.keys[start..]);
+        packed_coordinates.extend_from_slice(&self.packed_coordinates[start..]);
         values.extend_from_slice(&self.values[start..]);
         Measure {
             definition: self.definition.clone(),
             axes: self.axes.clone(),
-            layout: self.layout.clone(),
-            keys: keys.into(),
+            packing: self.packing.clone(),
+            packed_coordinates: packed_coordinates.into(),
             values: values.into(),
             deltas: Vec::new(),
         }
@@ -574,128 +516,147 @@ impl Measure {
 }
 
 fn merge_changes(
-    old_keys: &[u64],
+    old_packed_coordinates: &[u64],
     old_changes: &[Option<f64>],
-    new_keys: &[u64],
+    new_packed_coordinates: &[u64],
     new_changes: &[Option<f64>],
 ) -> (Vec<u64>, Vec<Option<f64>>) {
-    let mut keys = Vec::with_capacity(old_keys.len() + new_keys.len());
-    let mut changes = Vec::with_capacity(keys.capacity());
+    let mut packed_coordinates =
+        Vec::with_capacity(old_packed_coordinates.len() + new_packed_coordinates.len());
+    let mut changes = Vec::with_capacity(packed_coordinates.capacity());
     let (mut old, mut new) = (0, 0);
-    while old < old_keys.len() || new < new_keys.len() {
-        let take_new =
-            new < new_keys.len() && (old == old_keys.len() || new_keys[new] <= old_keys[old]);
+    while old < old_packed_coordinates.len() || new < new_packed_coordinates.len() {
+        let take_new = new < new_packed_coordinates.len()
+            && (old == old_packed_coordinates.len()
+                || new_packed_coordinates[new] <= old_packed_coordinates[old]);
         if take_new {
-            if old < old_keys.len() && old_keys[old] == new_keys[new] {
+            if old < old_packed_coordinates.len()
+                && old_packed_coordinates[old] == new_packed_coordinates[new]
+            {
                 old += 1;
             }
-            keys.push(new_keys[new]);
+            packed_coordinates.push(new_packed_coordinates[new]);
             changes.push(new_changes[new]);
             new += 1;
         } else {
-            keys.push(old_keys[old]);
+            packed_coordinates.push(old_packed_coordinates[old]);
             changes.push(old_changes[old]);
             old += 1;
         }
     }
-    (keys, changes)
+    (packed_coordinates, changes)
 }
 
 #[derive(Debug, Clone)]
 pub struct Delta {
     measure: MeasureGlobalId,
     axes: Vec<Axis>,
-    layout: KeyLayout,
-    // Not a hash table on coordinates: sorted keys merge with the measure's keys in one pass, with no allocation for each change.
-    keys: Vec<u64>,
+    packing: CoordinatePacking,
+    // Not a hash table on coordinates: sorted packed coordinates merge with the measure's packed coordinates in one pass, with no allocation for each change.
+    packed_coordinates: Vec<u64>,
     changes: Vec<Option<f64>>,
 }
 
 impl Delta {
     pub fn set(&mut self, coordinate: &[MemberIndex], value: f64) -> Result<(), MeasureError> {
-        self.check(coordinate)?;
-        self.write(coordinate, normalize(value));
-        Ok(())
+        self.write(coordinate, normalize(value))
     }
 
     pub fn delete(&mut self, coordinate: &[MemberIndex]) -> Result<(), MeasureError> {
-        self.check(coordinate)?;
-        self.write(coordinate, None);
-        Ok(())
+        self.write(coordinate, None)
     }
 
-    pub fn len(&mut self) -> usize {
+    pub fn packed_coordinates(&mut self) -> &[u64] {
         self.settle();
-        self.keys.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
-    }
-
-    pub fn keys(&mut self) -> &[u64] {
-        self.settle();
-        &self.keys
-    }
-
-    pub fn changes(
-        &mut self,
-    ) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
-        self.settle();
-        self.listed()
-    }
-
-    fn listed(&self) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
-        self.keys
-            .iter()
-            .zip(&self.changes)
-            .map(|(&key, &change)| (self.layout.members(key).map(MemberIndex).collect(), change))
-    }
-
-    fn check(&self, coordinate: &[MemberIndex]) -> Result<(), MeasureError> {
-        if coordinate.len() != self.axes.len() {
-            return Err(MeasureError::CoordinateLength {
-                expected: self.axes.len(),
-                found: coordinate.len(),
-            });
-        }
-        if let Some((axis, &member)) = self
-            .axes
-            .iter()
-            .zip(coordinate)
-            .find(|(axis, member)| member.0 >= axis.len)
-        {
-            return Err(MeasureError::MemberOutOfRange {
-                axis: axis.dimension,
-                member,
-            });
-        }
-        Ok(())
+        &self.packed_coordinates
     }
 
     // Not a sorted insert: a paste of a million cells in random order took 97 seconds.
-    fn write(&mut self, coordinate: &[MemberIndex], change: Option<f64>) {
-        self.keys
-            .push(self.layout.pack(coordinate.iter().map(|member| member.0)));
+    fn write(
+        &mut self,
+        coordinate: &[MemberIndex],
+        change: Option<f64>,
+    ) -> Result<(), MeasureError> {
+        let packed = pack_checked(&self.axes, &self.packing, coordinate)?;
+        self.packed_coordinates.push(packed);
         self.changes.push(change);
+        Ok(())
     }
 
     fn settle(&mut self) {
-        if first_unsorted(&self.keys).is_none() {
+        if first_unsorted(&self.packed_coordinates).is_none() {
             return;
         }
-        let mut writes: Vec<(u64, Option<f64>)> =
-            self.keys.drain(..).zip(self.changes.drain(..)).collect();
-        writes.sort_by_key(|&(key, _)| key);
-        for (key, change) in writes {
+        let mut writes: Vec<(u64, Option<f64>)> = self
+            .packed_coordinates
+            .drain(..)
+            .zip(self.changes.drain(..))
+            .collect();
+        writes.sort_by_key(|&(packed, _)| packed);
+        for (packed, change) in writes {
             match self.changes.last_mut() {
-                Some(last) if self.keys.last() == Some(&key) => *last = change,
+                Some(last) if self.packed_coordinates.last() == Some(&packed) => *last = change,
                 _ => {
-                    self.keys.push(key);
+                    self.packed_coordinates.push(packed);
                     self.changes.push(change);
                 }
             }
         }
+    }
+}
+
+fn pack_checked(
+    axes: &[Axis],
+    packing: &CoordinatePacking,
+    coordinate: &[MemberIndex],
+) -> Result<u64, MeasureError> {
+    if coordinate.len() != axes.len() {
+        return Err(MeasureError::CoordinateLength {
+            expected: axes.len(),
+            found: coordinate.len(),
+        });
+    }
+    if let Some((axis, &member)) = axes
+        .iter()
+        .zip(coordinate)
+        .find(|(axis, member)| member.0 >= axis.len)
+    {
+        return Err(MeasureError::MemberOutOfRange {
+            axis: axis.dimension,
+            member,
+        });
+    }
+    Ok(packing.pack(coordinate.iter().map(|member| member.0)))
+}
+
+fn check_in_range(
+    axes: &[Axis],
+    packing: &CoordinatePacking,
+    packed_coordinates: &[u64],
+) -> Result<(), MeasureError> {
+    if let Some(row) = first_row(packed_coordinates, |&packed| !packing.holds(packed)) {
+        return Err(MeasureError::BitsOutsidePacking(row));
+    }
+    for (position, axis) in axes.iter().enumerate() {
+        if let Some(row) = first_row(packed_coordinates, |&packed| {
+            packing.member(packed, position) >= axis.len
+        }) {
+            return Err(MeasureError::MemberOutOfRange {
+                axis: axis.dimension,
+                member: MemberIndex(packing.member(packed_coordinates[row], position)),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn check_sorted(packed_coordinates: &[u64]) -> Result<(), MeasureError> {
+    match first_unsorted(packed_coordinates) {
+        None => Ok(()),
+        Some(row) if packed_coordinates[row - 1] == packed_coordinates[row] => {
+            Err(MeasureError::DuplicateCoordinate(row))
+        }
+        Some(row) => Err(MeasureError::UnsortedCoordinate(row)),
     }
 }
 
@@ -714,14 +675,14 @@ pub fn first_row<T: Sync>(items: &[T], bad: impl Fn(&T) -> bool + Sync) -> Optio
         .min()
 }
 
-pub fn first_unsorted(keys: &[u64]) -> Option<usize> {
-    (1..keys.len())
+pub fn first_unsorted(packed_coordinates: &[u64]) -> Option<usize> {
+    (1..packed_coordinates.len())
         .step_by(CHECKED_ROWS)
         .collect::<Vec<usize>>()
         .into_par_iter()
         .filter_map(|start| {
-            let end = (start + CHECKED_ROWS).min(keys.len());
-            keys[start - 1..end]
+            let end = (start + CHECKED_ROWS).min(packed_coordinates.len());
+            packed_coordinates[start - 1..end]
                 .windows(2)
                 .position(|pair| pair[0] >= pair[1])
                 .map(|row| start + row)
@@ -735,14 +696,37 @@ mod parallel_check_tests {
 
     #[test]
     fn the_first_bad_row_is_found_across_the_border_of_two_pieces() {
-        let keys: Vec<u64> = (0..=CHECKED_ROWS as u64).chain([0]).collect();
+        let packed_coordinates: Vec<u64> = (0..=CHECKED_ROWS as u64).chain([0]).collect();
 
-        assert_eq!(first_unsorted(&keys), Some(CHECKED_ROWS + 1));
+        assert_eq!(first_unsorted(&packed_coordinates), Some(CHECKED_ROWS + 1));
         let last_of_the_first_piece: Vec<u64> = (0..CHECKED_ROWS as u64).chain([0]).collect();
         assert_eq!(first_unsorted(&last_of_the_first_piece), Some(CHECKED_ROWS));
         assert_eq!(
-            first_row(&keys, |&key| key == CHECKED_ROWS as u64),
+            first_row(&packed_coordinates, |&packed| packed == CHECKED_ROWS as u64),
             Some(CHECKED_ROWS)
+        );
+    }
+
+    #[test]
+    fn short_inputs_have_no_bad_row_unless_one_is_there() {
+        assert_eq!(first_unsorted(&[]), None);
+        assert_eq!(first_unsorted(&[7]), None);
+        assert_eq!(first_unsorted(&[7, 7]), Some(1));
+        assert_eq!(first_row(&[] as &[u64], |_| true), None);
+        assert_eq!(first_row(&[7u64], |&packed| packed == 7), Some(0));
+    }
+
+    #[test]
+    fn a_bad_row_at_the_end_of_two_full_pieces_is_found() {
+        let sorted: Vec<u64> = (0..2 * CHECKED_ROWS as u64).collect();
+        assert_eq!(first_unsorted(&sorted), None);
+
+        let mut last_repeated = sorted.clone();
+        last_repeated[2 * CHECKED_ROWS - 1] = last_repeated[2 * CHECKED_ROWS - 2];
+        assert_eq!(first_unsorted(&last_repeated), Some(2 * CHECKED_ROWS - 1));
+        assert_eq!(
+            first_row(&sorted, |&packed| packed + 1 == 2 * CHECKED_ROWS as u64),
+            Some(2 * CHECKED_ROWS - 1)
         );
     }
 }
