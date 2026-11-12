@@ -1,15 +1,19 @@
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use change_log::Epoch;
 use datagen::representative::{self, Size};
 use object_store::aws::AmazonS3Builder;
 use server::Settings;
+use server::http::Stopped;
+use tokio::signal::unix::{SignalKind, signal};
 
 // shortcut: the workspace definition is fixed in code because the log does not hold it, put it in the log when users define their own.
 const SIZE: Size = Size::TINY;
 const SEED: u64 = 7;
+// Not the 10 seconds of docker stop: SIGKILL comes then, and the process cannot report the missed deadline.
+const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
 
 struct Arguments {
     listen: String,
@@ -39,14 +43,24 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Not after the restore: as PID 1 in a container, the process ignores SIGTERM until it has a handler.
+    let mut interrupt = signal(SignalKind::interrupt()).expect("a handler for SIGINT");
+    let mut terminate = signal(SignalKind::terminate()).expect("a handler for SIGTERM");
+    let mut shutdown = Box::pin(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+    });
     let started = Instant::now();
-    let (engine, start) = server::restore(
-        store.as_ref(),
-        &arguments.workspace,
-        representative::generate(&SIZE, SEED),
-    )
-    .await
-    .expect("valid formulas");
+    let (engine, start) = tokio::select! {
+        restored = server::restore(
+            store.as_ref(),
+            &arguments.workspace,
+            representative::generate(&SIZE, SEED),
+        ) => restored.expect("valid formulas"),
+        () = &mut shutdown => return ExitCode::SUCCESS,
+    };
     eprintln!(
         "engine ready in {:?} from Commit Sequence {}",
         started.elapsed(),
@@ -71,17 +85,23 @@ async fn main() -> ExitCode {
         arguments.workspace,
         Epoch(arguments.epoch),
     );
-    // Not a restart in this process after an exit: the same epoch must not write again (ADR 0006).
-    tokio::select! {
-        exit = owner => {
+    match server::http::serve(listener, handle, owner, shutdown, SHUTDOWN_DEADLINE).await {
+        Stopped::Drained => ExitCode::SUCCESS,
+        Stopped::Deadline => {
+            eprintln!(
+                "the requests did not finish in {SHUTDOWN_DEADLINE:?} after the shutdown signal"
+            );
+            ExitCode::FAILURE
+        }
+        // Not a restart in this process after an exit: the same epoch must not write again (ADR 0006).
+        Stopped::Owner(exit) => {
             eprintln!("the owner stopped: {exit:?}");
             ExitCode::FAILURE
         }
-        served = axum::serve(listener, server::http::router(handle)) => {
-            eprintln!("the HTTP server stopped: {served:?}");
+        Stopped::Server(error) => {
+            eprintln!("the HTTP server stopped: {error}");
             ExitCode::FAILURE
         }
-        _ = tokio::signal::ctrl_c() => ExitCode::SUCCESS,
     }
 }
 

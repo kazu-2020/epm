@@ -36,7 +36,7 @@ cargo run --locked -- --listen 127.0.0.1:8080 --workspace demo
 - `--workspace`: the prefix of the change log in the bucket. The default is `demo`.
 - `--epoch`: the epoch of this process. The default is the current time in milliseconds. Each start must use a larger epoch than the last start.
 
-The workspace definition is fixed in the code (`src/main.rs`). When the owner stops, the process exits with code 1. Start a new process to continue. Ctrl-C exits with code 0.
+The workspace definition is fixed in the code (`src/main.rs`). When the owner stops, the process exits with code 1. Start a new process to continue. SIGINT (Ctrl-C) and SIGTERM stop the server. It finishes the requests in progress and exits with code 0. If the requests do not finish in 5 seconds, it exits with code 1.
 
 ## Run the demo
 
@@ -46,6 +46,7 @@ The workspace definition is fixed in the code (`src/main.rs`). When the owner st
 2. An edit to a calculated measure gets `invalid_argument` and a reason.
 3. A resend of the same Request ID gets the same Commit Sequence.
 4. After `kill -9`, a new process restores the values from the log.
+5. After `kill -TERM`, the server exits with code 0.
 
 ```bash
 ./demo.sh

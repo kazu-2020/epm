@@ -1,4 +1,7 @@
+use std::future::{Future, pending};
+use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
@@ -13,9 +16,11 @@ use measure::{MeasureError, MeasureGlobalId};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use ulid::Ulid;
 
-use crate::{Edit, Handle, Invalid, ReadError, Rejection, SubmitError};
+use crate::{Edit, Exit, Handle, Invalid, ReadError, Rejection, SubmitError};
 
 // Not only the body limit: the change log keeps every Request ID, and each new owner reads them all again.
 const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
@@ -58,6 +63,14 @@ struct Failure {
     message: String,
 }
 
+#[derive(Debug)]
+pub enum Stopped {
+    Drained,
+    Deadline,
+    Owner(Exit),
+    Server(io::Error),
+}
+
 pub fn router(handle: Handle) -> Router {
     Router::new()
         .route("/epm.v1.Workspace/SubmitEdit", post(submit_edit))
@@ -65,6 +78,35 @@ pub fn router(handle: Handle) -> Router {
         .route("/epm.v1.Workspace/ListDefinitions", post(list_definitions))
         .route("/epm.v1.Workspace/GetLag", post(get_lag))
         .with_state(handle)
+}
+
+pub async fn serve(
+    listener: TcpListener,
+    handle: Handle,
+    owner: impl Future<Output = Exit>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    deadline: Duration,
+) -> Stopped {
+    let (signalled, signal) = oneshot::channel();
+    let shutdown = async move {
+        shutdown.await;
+        let _ = signalled.send(());
+    };
+    let deadline = async move {
+        match signal.await {
+            Ok(()) => tokio::time::sleep(deadline).await,
+            // Not the deadline: the sender drops with no signal only when the HTTP server stops, and its own branch reports that.
+            Err(_) => pending().await,
+        }
+    };
+    tokio::select! {
+        exit = owner => Stopped::Owner(exit),
+        served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => match served {
+            Ok(()) => Stopped::Drained,
+            Err(error) => Stopped::Server(error),
+        },
+        () = deadline => Stopped::Deadline,
+    }
 }
 
 async fn submit_edit(
