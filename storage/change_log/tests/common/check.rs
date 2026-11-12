@@ -50,7 +50,7 @@ pub fn check(outcome: &Outcome) -> Violations {
     let mut written: BTreeMap<(Slot, Epoch), Bytes> = BTreeMap::new();
     let mut before_probe = None;
     let mut acknowledged: Vec<(usize, &String, u64, Sequence)> = Vec::new();
-    let mut passes_on: BTreeSet<u64> = BTreeSet::new();
+    let mut epochs_that_pass_on: BTreeSet<u64> = BTreeSet::new();
     let mut passed_on: BTreeMap<u64, Vec<(usize, &Commit)>> = BTreeMap::new();
     let mut recalculated: BTreeMap<u64, Vec<(usize, Sequence)>> = BTreeMap::new();
     let mut invalid: Vec<(usize, &String)> = Vec::new();
@@ -61,7 +61,7 @@ pub fn check(outcome: &Outcome) -> Violations {
                 passes_on: true,
                 ..
             } => {
-                passes_on.insert(*epoch);
+                epochs_that_pass_on.insert(*epoch);
             }
             Record::Sent { key, body } => {
                 let first = written
@@ -221,7 +221,7 @@ pub fn check(outcome: &Outcome) -> Violations {
                 format!("record {at_record}: {request} acknowledged as {sequence:?}"),
             );
         }
-        if passes_on.contains(&epoch)
+        if epochs_that_pass_on.contains(&epoch)
             && passed_on.get(&epoch).map_or(0, Vec::len) <= sequence.index()
         {
             violate(

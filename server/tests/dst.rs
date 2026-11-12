@@ -158,13 +158,13 @@ impl common::Server for Owners {
             .filter_map(std::future::ready)
             .flat_map(|handle| {
                 // Not only the changes: an owner from a snapshot starts with its commits recalculated.
-                let first = handle.published().borrow().recalculated();
+                let first = handle.engine_receiver().borrow().recalculated();
                 stream::once(std::future::ready(first)).chain(stream::unfold(
-                    handle.published(),
-                    |mut published| async move {
-                        published.changed().await.ok()?;
-                        let sequence = published.borrow_and_update().recalculated();
-                        Some((sequence, published))
+                    handle.engine_receiver(),
+                    |mut engine_receiver| async move {
+                        engine_receiver.changed().await.ok()?;
+                        let sequence = engine_receiver.borrow_and_update().recalculated();
+                        Some((sequence, engine_receiver))
                     },
                 ))
             })
@@ -190,7 +190,7 @@ impl common::Server for Owners {
         common::Started {
             exit: exit.boxed(),
             submit,
-            passed_on: None,
+            commit_receiver: None,
             recalculated: Some(recalculated.boxed()),
         }
     }

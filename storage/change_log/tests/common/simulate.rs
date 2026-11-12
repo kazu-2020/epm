@@ -48,8 +48,8 @@ pub enum Refusal {
 
 pub trait Server: Send + Sync {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> Started {
-        let (requests, receiver) = mpsc::channel(64);
-        let (committed, passed_on) = mpsc::unbounded_channel();
+        let (submission_sender, submission_receiver) = mpsc::channel(64);
+        let (commit_sender, commit_receiver) = mpsc::unbounded_channel();
         let exit = async move {
             Ok(serve(
                 store,
@@ -57,23 +57,23 @@ pub trait Server: Send + Sync {
                 Epoch(epoch),
                 Start::default(),
                 AdmitAll,
-                receiver,
-                committed,
+                submission_receiver,
+                commit_sender,
             )
             .await)
         };
         Started {
             exit: exit.boxed(),
             submit: Arc::new(move |request: Request| {
-                let requests = requests.clone();
+                let submission_sender = submission_sender.clone();
                 async move {
                     let (submission, ack) = Submission::new(request);
-                    requests.send(submission).await.ok()?;
+                    submission_sender.send(submission).await.ok()?;
                     Some(Ok(ack.await.ok()?.unwrap_or_else(|never| match never {})))
                 }
                 .boxed()
             }),
-            passed_on: Some(passed_on),
+            commit_receiver: Some(commit_receiver),
             recalculated: None,
         }
     }
@@ -86,7 +86,7 @@ pub trait Server: Send + Sync {
 pub struct Started {
     pub exit: BoxFuture<'static, Result<Exit, String>>,
     pub submit: Submit,
-    pub passed_on: Option<mpsc::UnboundedReceiver<(Slot, Commit)>>,
+    pub commit_receiver: Option<mpsc::UnboundedReceiver<(Slot, Commit)>>,
     pub recalculated: Option<BoxStream<'static, Sequence>>,
 }
 
@@ -429,7 +429,7 @@ impl Cluster {
         let Started {
             exit,
             submit,
-            passed_on,
+            commit_receiver,
             recalculated,
         } = self.server.start(store, self.workspace.clone(), epoch);
         record(
@@ -437,14 +437,14 @@ impl Cluster {
             Record::Granted {
                 server,
                 epoch,
-                passes_on: passed_on.is_some(),
+                passes_on: commit_receiver.is_some(),
                 recalculates: recalculated.is_some(),
             },
         );
-        if let Some(mut passed_on) = passed_on {
+        if let Some(mut commit_receiver) = commit_receiver {
             let history = Arc::clone(&self.history);
             self.recorders.push(tokio::spawn(async move {
-                while let Some((_, commit)) = passed_on.recv().await {
+                while let Some((_, commit)) = commit_receiver.recv().await {
                     record(&history, Record::PassedOn { epoch, commit });
                 }
             }));

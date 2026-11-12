@@ -75,7 +75,7 @@ fn cells() -> Vec<(MeasureGlobalId, Vec<MemberIndex>)> {
 }
 
 async fn submit_bytes(
-    requests: &mpsc::Sender<Submission<std::convert::Infallible>>,
+    submission_sender: &mpsc::Sender<Submission<std::convert::Infallible>>,
     name: &str,
     payload: Bytes,
 ) -> Option<Sequence> {
@@ -83,7 +83,7 @@ async fn submit_bytes(
         request_id: id(name),
         payload,
     });
-    requests
+    submission_sender
         .send(submission)
         .await
         .expect("the owner is running");
@@ -266,7 +266,7 @@ async fn a_new_owner_recalculates_the_whole_log_in_one_batch() {
     let started = Instant::now();
     let b = start(&store, 2, slow(1000));
     b.handle
-        .published()
+        .engine_receiver()
         .wait_for(|engine| engine.recalculated() == Some(Sequence(2)))
         .await
         .expect("B recalculates the log");
@@ -383,8 +383,8 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
 #[tokio::test(start_paused = true)]
 async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
     let store = store();
-    let (requests, receiver) = mpsc::channel(1);
-    let (commits, _received) = mpsc::unbounded_channel();
+    let (submission_sender, submission_receiver) = mpsc::channel(1);
+    let (commit_sender, _commit_receiver) = mpsc::unbounded_channel();
     let writer = Arc::clone(&store);
     let unchecked = tokio::spawn(async move {
         serve(
@@ -393,13 +393,13 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
             Epoch(1),
             Start::default(),
             AdmitAll,
-            receiver,
-            commits,
+            submission_receiver,
+            commit_sender,
         )
         .await
     });
     assert_eq!(
-        submit_bytes(&requests, "garbage", Bytes::from_static(b"\x09")).await,
+        submit_bytes(&submission_sender, "garbage", Bytes::from_static(b"\x09")).await,
         Some(Sequence(0))
     );
     unchecked.abort();

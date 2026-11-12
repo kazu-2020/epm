@@ -24,8 +24,8 @@ use tokio::task::JoinHandle;
 const WORKSPACE: &str = "ws";
 
 struct Owner {
-    requests: mpsc::Sender<Submission<Infallible>>,
-    committed: mpsc::UnboundedReceiver<(Slot, Commit)>,
+    submission_sender: mpsc::Sender<Submission<Infallible>>,
+    commit_receiver: mpsc::UnboundedReceiver<(Slot, Commit)>,
     exit: JoinHandle<Exit>,
 }
 
@@ -34,8 +34,8 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64) -> Owner {
 }
 
 fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Owner {
-    let (requests, receiver) = mpsc::channel(16);
-    let (sender, committed) = mpsc::unbounded_channel();
+    let (submission_sender, submission_receiver) = mpsc::channel(16);
+    let (commit_sender, commit_receiver) = mpsc::unbounded_channel();
     let store = Arc::clone(store);
     let exit = tokio::spawn(async move {
         serve(
@@ -44,37 +44,37 @@ fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Owner {
             Epoch(epoch),
             first,
             AdmitAll,
-            receiver,
-            sender,
+            submission_receiver,
+            commit_sender,
         )
         .await
     });
     Owner {
-        requests,
-        committed,
+        submission_sender,
+        commit_receiver,
         exit,
     }
 }
 
 impl Owner {
-    fn passed_on(&mut self) -> Vec<(String, Sequence)> {
-        let mut passed_on = Vec::new();
-        while let Ok((_, commit)) = self.committed.try_recv() {
-            passed_on.push((name(&commit.request_id), commit.sequence));
+    fn take_commits(&mut self) -> Vec<(String, Sequence)> {
+        let mut named_sequences = Vec::new();
+        while let Ok((_, commit)) = self.commit_receiver.try_recv() {
+            named_sequences.push((name(&commit.request_id), commit.sequence));
         }
-        passed_on
+        named_sequences
     }
 }
 
 async fn submit(
-    requests: &mpsc::Sender<Submission<Infallible>>,
+    submission_sender: &mpsc::Sender<Submission<Infallible>>,
     name: &str,
 ) -> Result<Sequence, oneshot::error::RecvError> {
     let (submission, ack) = Submission::new(Request {
         request_id: RequestId(Bytes::from(name.to_owned())),
         payload: Bytes::from_static(b"payload"),
     });
-    requests
+    submission_sender
         .send(submission)
         .await
         .expect("the owner is running");
@@ -123,22 +123,22 @@ async fn log(store: &Arc<dyn ObjectStore>) -> Vec<String> {
 async fn a_newer_owner_takes_over_and_the_old_owner_stops() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut a = start(&store, 1);
-    assert_eq!(submit(&a.requests, "r1").await, Ok(Sequence(0)));
-    assert_eq!(submit(&a.requests, "r2").await, Ok(Sequence(1)));
-    assert_eq!(a.passed_on(), named(&[("r1", 0), ("r2", 1)]));
+    assert_eq!(submit(&a.submission_sender, "r1").await, Ok(Sequence(0)));
+    assert_eq!(submit(&a.submission_sender, "r2").await, Ok(Sequence(1)));
+    assert_eq!(a.take_commits(), named(&[("r1", 0), ("r2", 1)]));
     let mut b = start(&store, 2);
     assert_eq!(
-        submit(&b.requests, "r1").await,
+        submit(&b.submission_sender, "r1").await,
         Ok(Sequence(0)),
         "B acknowledges r1 from its view"
     );
     assert!(
-        submit(&a.requests, "r3").await.is_err(),
+        submit(&a.submission_sender, "r3").await.is_err(),
         "A does not acknowledge r3"
     );
     assert_eq!(a.exit.await.expect("A ends"), Exit::Stopped);
-    assert_eq!(submit(&b.requests, "r3").await, Ok(Sequence(2)));
-    assert_eq!(b.passed_on(), named(&[("r1", 0), ("r2", 1), ("r3", 2)]));
+    assert_eq!(submit(&b.submission_sender, "r3").await, Ok(Sequence(2)));
+    assert_eq!(b.take_commits(), named(&[("r1", 0), ("r2", 1), ("r3", 2)]));
     assert_eq!(log(&store).await, ["r1", "r2", "r3"]);
 }
 
@@ -239,27 +239,31 @@ async fn a_crash_while_a_put_waits_for_its_reply_loses_no_acknowledged_request()
             listed_after: Duration::ZERO,
         });
         let mut a = start(&store, 1);
-        assert_eq!(submit(&a.requests, "r0").await, Ok(Sequence(0)));
-        let requests = a.requests.clone();
-        let r1 = tokio::spawn(async move { submit(&requests, "r1").await });
+        assert_eq!(submit(&a.submission_sender, "r0").await, Ok(Sequence(0)));
+        let submission_sender = a.submission_sender.clone();
+        let r1 = tokio::spawn(async move { submit(&submission_sender, "r1").await });
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         a.exit.abort();
         assert!(
             r1.await.expect("the client ends").is_err(),
             "{stall:?}: no ACK of r1"
         );
-        assert_eq!(a.passed_on(), named(&[("r0", 0)]), "{stall:?}: A passed on");
+        assert_eq!(
+            a.take_commits(),
+            named(&[("r0", 0)]),
+            "{stall:?}: A passed on"
+        );
         let expected: &[&str] = if written { &["r0", "r1"] } else { &["r0"] };
         assert_eq!(log(&store).await, expected, "{stall:?}: before the resend");
 
         let mut b = start(&store, 2);
         assert_eq!(
-            submit(&b.requests, "r1").await,
+            submit(&b.submission_sender, "r1").await,
             Ok(Sequence(1)),
             "{stall:?}: B acknowledges the resend"
         );
         assert_eq!(
-            b.passed_on(),
+            b.take_commits(),
             named(&[("r0", 0), ("r1", 1)]),
             "{stall:?}: B passed on"
         );
@@ -295,8 +299,8 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
         puts: AtomicUsize::new(0),
         listed_after: Duration::from_secs(1),
     });
-    let (requests, receiver) = mpsc::channel(16);
-    let (committed, _passed_on) = mpsc::unbounded_channel();
+    let (submission_sender, submission_receiver) = mpsc::channel(16);
+    let (commit_sender, _commit_receiver) = mpsc::unbounded_channel();
     let _owner = tokio::spawn(async move {
         serve(
             store,
@@ -304,8 +308,8 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
             Epoch(1),
             Start::default(),
             GoodOnly,
-            receiver,
-            committed,
+            submission_receiver,
+            commit_sender,
         )
         .await
     });
@@ -315,7 +319,7 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
             request_id: RequestId(Bytes::from_static(b"r1")),
             payload: Bytes::from_static(payload.as_bytes()),
         });
-        requests
+        submission_sender
             .send(submission)
             .await
             .expect("the owner is running");
@@ -335,7 +339,10 @@ async fn an_owner_from_a_start_reads_no_slot_before_it() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let a = start(&store, 1);
     for (sequence, name) in (0..).zip(["r1", "r2"]) {
-        assert_eq!(submit(&a.requests, name).await, Ok(Sequence(sequence)));
+        assert_eq!(
+            submit(&a.submission_sender, name).await,
+            Ok(Sequence(sequence))
+        );
     }
     a.exit.abort();
     let first_slot = Path::from(format!("{WORKSPACE}/log/{:020}", 0));
@@ -351,7 +358,7 @@ async fn an_owner_from_a_start_reads_no_slot_before_it() {
             .to_vec(),
     };
     let mut b = start_from(&store, 2, start);
-    assert_eq!(submit(&b.requests, "r1").await, Ok(Sequence(0)));
-    assert_eq!(submit(&b.requests, "r3").await, Ok(Sequence(2)));
-    assert_eq!(b.passed_on(), named(&[("r3", 2)]));
+    assert_eq!(submit(&b.submission_sender, "r1").await, Ok(Sequence(0)));
+    assert_eq!(submit(&b.submission_sender, "r3").await, Ok(Sequence(2)));
+    assert_eq!(b.take_commits(), named(&[("r3", 2)]));
 }

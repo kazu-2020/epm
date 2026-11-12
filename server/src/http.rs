@@ -151,7 +151,7 @@ async fn read_cells(
 }
 
 async fn list_definitions(State(handle): State<Handle>) -> Json<Value> {
-    let engine = Arc::clone(&handle.published().borrow());
+    let engine = Arc::clone(&handle.engine_receiver().borrow());
     let measures: Vec<Value> = engine
         .measures()
         .iter()

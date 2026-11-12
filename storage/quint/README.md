@@ -1,6 +1,6 @@
 # ストレージ層の Quint モデル
 
-変更ログの S3 への書き方が、担当の交代、クラッシュ、応答の消失、再送が重なっても壊れないかを確かめるモデル。変更ログは、`<ws>/log/<連番>` の位置に並ぶセグメントの列である。担当は次の位置に If-None-Match で PUT し、200 なら ACK する。
+変更ログの S3 への書き方が、担当の交代、クラッシュ、応答の消失、再送が重なっても壊れないかを確かめるモデル。変更ログは、`<ws>/log/<Slot>` に Slot の順に並ぶセグメントの列である。担当は次の Slot に If-None-Match で PUT し、200 なら ACK する。
 
 範囲は「ログとフェンシング」だけにした。スナップショット、GC、複数のワークスペースは入れていない。
 
@@ -9,7 +9,7 @@
 | ファイル | 中身 |
 | --- | --- |
 | `change_log.qnt` | 抽象の仕様。ワークスペースごとに追記だけの列が1本あり、1つの Request ID は高々1回だけ足され、ACK するのは列に入ったものだけ |
-| `seqlog.qnt` | 変更ログの書き方のモデル。担当、配置コントローラー(エポックを渡す)、位置、クライアントの再送。守りは `seqlog_design` の `allGuards` に、サーバー数などの上限は `seqlog` の `pure val` に置く |
+| `seqlog.qnt` | 変更ログの書き方のモデル。担当、配置コントローラー(エポックを渡す)、Slot、クライアントの再送。守りは `seqlog_design` の `allGuards` に、サーバー数などの上限は `seqlog` の `pure val` に置く |
 | `seqlog_mutations.qnt` | 守りを1つずつ外したモデル(`{ ...allGuards, deduplication: false }` など)。検査が実際に落ちることを示す。`check.sh` は、ここのモジュールがすべて `breaks` か `holds` に入っているかを確かめる |
 | `seqlog_replay.qnt` | Rust の実装に再生するトレースを作るための `replayStep`。`step` の一部の手順だけを許し、送信と停止にステップを使い切らないようにした |
 | `check.sh` | すべての検査をまとめて実行する |
@@ -37,24 +37,24 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 ## 担当の動き
 
-担当の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` に、その動きは `seqlog.qnt` の action にある。変更ログは位置 0 から最初の穴までを並べたものとして扱う。
+担当の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` に、その動きは `seqlog.qnt` の action にある。変更ログは Slot 0 から最初の穴までを並べたものとして扱う。
 
 ## 検査する性質
 
 | 名前 | 意味 |
 | --- | --- |
 | `refinesChangeLog` | ストアのどの1ステップも、抽象の仕様の1ステップか「何も起きない」に当たる。ACK したコミットが消える、同じ要求が2回入る、ACK したのに列にない、のどれも反例になる |
-| `segmentsNeverChange` | 一度書いた位置の中身は変わらない。同じ中身での上書きはログを変えないので、`refinesChangeLog` とは別に見る |
-| `staleEpochNeverCommits` | 位置の順にエポックが減らない。古いエポックの担当は、新しいエポックのあとに確定できない |
-| `slotsContiguous` | 最大の位置より下に穴がない |
+| `segmentsNeverChange` | 一度書いた Slot の中身は変わらない。同じ中身での上書きはログを変えないので、`refinesChangeLog` とは別に見る |
+| `staleEpochNeverCommits` | Slot の順にエポックが減らない。古いエポックの担当は、新しいエポックのあとに確定できない |
+| `slotsContiguous` | 最大の Slot より下に穴がない |
 | `newestOwnerSeesAcknowledged` | いちばん新しいエポックを持つ受け付け中の担当は、ACK 済みのコミットをすべて見ている。縛るのはこの担当だけで、交代を知らずに受け付けを続ける古い担当は縛らない。読み取りの操作もモデルにない |
-| `oneContentPerSlotPerEpoch` | 1つのエポックは1つの位置に1つの中身しか書かない |
+| `oneContentPerSlotPerEpoch` | 1つのエポックは1つの Slot に1つの中身しか書かない |
 | `dataWriteNeverSeesOlderEpoch` | データの書き込みが 412 のあとに自分より古いエポックを見ることはない |
 | `viewIsLogPrefix` | いちばん新しいエポックを持つ受け付け中の担当の `view`(Rust の `Effect::Committed` で渡した列)は、ログの先頭部分に一致する。ACK 済みの集合では見えない、順序の入れ替わりも反例になる |
 
-`witness` で始まる4つは、到達するはずの状態(2件の ACK、担当交代後の担当が書いた位置、自分の再送が先に通ったための 412、古い担当の停止)に本当に届くかの確認。届かないと、上の性質は何も調べずに通ってしまう。
+`witness` で始まる4つは、到達するはずの状態(2件の ACK、担当交代後の担当が書いた Slot、自分の再送が先に通ったための 412、古い担当の停止)に本当に届くかの確認。届かないと、上の性質は何も調べずに通ってしまう。
 
-固定の手順は3つある。`oldOwnerTakesSlotFirstTest` は、担当の交代の直後に古い担当の遅れた PUT が位置を先に取る場面。フェンスのやり直しで中身を読むのを省く誤りも捕まえる(省いても5万回のランダムシミュレーションでは届かなかった)。`ownResendAcknowledgedTest` は、自分の再送が 412 になり、読んで自分の書き込みと分かって ACK する場面。`pipelineAcknowledgesPastHoleTest` は下の `seqlog_two_in_flight` の場面。
+固定の手順は3つある。`oldOwnerTakesSlotFirstTest` は、担当の交代の直後に古い担当の遅れた PUT が Slot を先に取る場面。フェンスのやり直しで中身を読むのを省く誤りも捕まえる(省いても5万回のランダムシミュレーションでは届かなかった)。`ownResendAcknowledgedTest` は、自分の再送が 412 になり、読んで自分の書き込みと分かって ACK する場面。`pipelineAcknowledgesPastHoleTest` は下の `seqlog_two_in_flight` の場面。
 
 ## モデルが置く前提と出典
 
@@ -70,7 +70,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 どの変異でどの性質が破れるかは `check.sh` の `breaks` に、破れないものは `holds` にある。2つの守りには、コードから分からない理由がある。
 
-`seqlog_two_in_flight` は、位置の列に書くこの方式に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、位置 N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの位置に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。また、2つの応答が位置と逆の順に届くと、両方ともログに入っていても `view` の順がログと食い違う。これは `viewIsLogPrefix` だけが捕まえる。
+`seqlog_two_in_flight` は、Slot の列に書くこの方式に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、Slot N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの Slot に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。また、2つの応答が Slot と逆の順に届くと、両方ともログに入っていても `view` の順がログと食い違う。これは `viewIsLogPrefix` だけが捕まえる。
 
 `seqlog_rejected_as_fenced` は安全性を壊さない。412 で読まずに止まると、自分の書き込みが入っていても ACK しないだけで、ログは壊れない。412 のあとに読むのは、再送のたびに担当が止まらないためのもの(活性)で、安全性のためではない。止まった担当が確定済みのコミットを ACK しない場面は、固定の手順 `ownResendRejectedTest` で確かめる。
 

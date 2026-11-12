@@ -49,8 +49,8 @@ pub async fn serve<A: Admit>(
     epoch: Epoch,
     start: Start,
     admit: A,
-    mut requests: mpsc::Receiver<Submission<A::Rejection>>,
-    commits: mpsc::UnboundedSender<(Slot, Commit)>,
+    mut submission_receiver: mpsc::Receiver<Submission<A::Rejection>>,
+    commit_sender: mpsc::UnboundedSender<(Slot, Commit)>,
 ) -> Exit {
     let log = Path::from(workspace).join("log");
     let first = start.slot;
@@ -66,7 +66,7 @@ pub async fn serve<A: Admit>(
                 Ok(event) => event,
                 Err(alarm) => return Exit::Alarm(alarm),
             },
-            submission = requests.recv() => match submission {
+            submission = submission_receiver.recv() => match submission {
                 Some(Submission { request, acknowledged }) => {
                     waiters.entry(request.request_id.clone()).or_default().push(acknowledged);
                     Event::Request(request)
@@ -89,7 +89,7 @@ pub async fn serve<A: Admit>(
                     io.push(read_back(Arc::clone(&store), key(&log, slot), slot).boxed());
                 }
                 Effect::Committed { slot, commit } => {
-                    if commits.send((slot, commit)).is_err() {
+                    if commit_sender.send((slot, commit)).is_err() {
                         return Exit::Closed;
                     }
                 }
