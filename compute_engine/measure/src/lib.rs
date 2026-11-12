@@ -369,17 +369,19 @@ impl Measure {
     }
 
     pub fn to_record_batch(&self) -> RecordBatch {
-        let mut columns: Vec<ArrayRef> = (0..self.axes.len())
+        let measure = self.compact();
+        let mut columns: Vec<ArrayRef> = (0..measure.axes.len())
             .map(|axis| {
                 Arc::new(UInt32Array::from_iter_values(
-                    self.packed_coordinates
+                    measure
+                        .packed_coordinates
                         .iter()
-                        .map(|&packed| self.packing.member(packed, axis)),
+                        .map(|&packed| measure.packing.member(packed, axis)),
                 )) as ArrayRef
             })
             .collect();
-        columns.push(Arc::new(Float64Array::new(self.values.clone(), None)));
-        RecordBatch::try_new(Arc::new(self.definition.schema()), columns)
+        columns.push(Arc::new(Float64Array::new(measure.values.clone(), None)));
+        RecordBatch::try_new(Arc::new(measure.definition.schema()), columns)
             .expect("the unpacked columns follow the measure schema")
     }
 

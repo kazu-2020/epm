@@ -50,7 +50,7 @@ impl Oracle {
             columns.push("value DOUBLE NOT NULL".into());
             connection.execute_batch(&format!("CREATE TABLE {table} ({})", columns.join(", ")))?;
             let mut appender = connection.appender(&table)?;
-            appender.append_record_batch(measure.compact().to_record_batch())?;
+            appender.append_record_batch(measure.to_record_batch())?;
             appender.flush()?;
         }
         Ok(Oracle {

@@ -459,6 +459,11 @@ fn folding_deltas_leaves_one_layer_over_the_same_base() {
     assert_eq!(measure.delta_len(), 4);
     assert_eq!(folded.delta_len(), 2);
     assert_eq!(rows(&folded), rows(&measure));
+    assert_eq!(
+        folded.base_packed_coordinates(),
+        measure.base_packed_coordinates()
+    );
+    assert_eq!(folded.base_values(), measure.base_values());
     assert_eq!(folded.get(&coordinate(0, 0)).unwrap(), Some(12.0));
     assert_eq!(folded.get(&coordinate(1, 1)).unwrap(), None);
     assert_eq!(folded.get(&coordinate(0, 1)).unwrap(), Some(20.0));
@@ -747,6 +752,32 @@ fn a_measure_gives_the_lengths_of_its_axes_in_order() {
 }
 
 #[test]
+fn base_functions_skip_the_pending_deltas_and_the_others_include_them() {
+    let measure = sales();
+    let mut delta = measure.delta();
+    delta.set(&coordinate(1, 1), 5.0).unwrap();
+    delta.delete(&coordinate(0, 0)).unwrap();
+    let measure = measure.apply(delta).unwrap();
+
+    assert_eq!(measure.base_values().to_vec(), vec![10.0, 20.0, 30.0]);
+    assert_eq!(measure.base_packed_coordinates().len(), 3);
+    assert_eq!(measure.get(&coordinate(0, 0)).unwrap(), None);
+    assert_eq!(measure.get(&coordinate(1, 1)).unwrap(), Some(5.0));
+    assert_eq!(
+        rows(&measure),
+        vec![(0, 1, 20.0), (1, 1, 5.0), (2, 0, 30.0)]
+    );
+    assert_eq!(
+        measure.cells().collect::<Vec<_>>(),
+        vec![
+            (coordinate(0, 1).to_vec(), 20.0),
+            (coordinate(1, 1).to_vec(), 5.0),
+            (coordinate(2, 0).to_vec(), 30.0),
+        ]
+    );
+}
+
+#[test]
 fn an_empty_delta_adds_no_layer_and_a_delta_that_changes_nothing_keeps_the_cells() {
     let measure = sales();
 
@@ -774,8 +805,8 @@ fn a_shared_unsorted_delta_gives_the_same_cells_to_every_measure_it_is_applied_t
     let second = measure.apply(Arc::clone(&shared)).unwrap();
 
     let expected = vec![(0, 0, 10.0), (0, 1, 2.0), (2, 0, 30.0), (2, 1, 3.0)];
-    assert_eq!(rows(&first.compact()), expected);
-    assert_eq!(rows(&second.compact()), expected);
+    assert_eq!(rows(&first), expected);
+    assert_eq!(rows(&second), expected);
     assert_eq!(first.delta_len(), 2);
 }
 
