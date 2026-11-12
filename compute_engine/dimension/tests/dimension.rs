@@ -164,29 +164,35 @@ fn member_is_found_by_member_index_ulid_and_natural_key() {
 fn other_text_attributes_may_repeat_be_empty_or_be_null() {
     let definition = definition(vec![name_attribute()]);
     let columns = vec![
-        ulids(&[Some(1), Some(2), Some(3)]),
-        strings(&[Some("4110"), Some("5110"), Some("6110")]),
-        strings(&[Some("その他"), Some("その他"), Some("")]),
+        ulids(&[Some(1), Some(2), Some(3), Some(4)]),
+        strings(&[Some("4110"), Some("5110"), Some("6110"), Some("7110")]),
+        strings(&[Some("その他"), Some("その他"), Some(""), None]),
     ];
     let dimension =
         Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap();
     assert_eq!(dimension.definition(), &definition);
-    assert_eq!(definition.name(), "部門");
-    assert_eq!(
-        definition.attributes(),
-        [natural_key_attribute(), name_attribute()]
-    );
     let member = dimension.member_by_natural_key("5110").unwrap();
     assert_eq!(member.id(), MemberIndex(1));
     let name = dimension.text_attribute("名前").unwrap();
     assert_eq!(name.value(member.id()), Some("その他"));
     assert_eq!(name.value(MemberIndex(2)), Some(""));
     assert_eq!(name.value(MemberIndex(3)), None);
+    assert_eq!(name.value(MemberIndex(4)), None);
     assert_eq!(dimension.natural_key_attribute().name(), "ID");
     assert_eq!(dimension.natural_key_attribute().ulid(), NATURAL_KEY);
     let schema = definition.schema();
     assert!(!schema.field(1).is_nullable());
     assert!(schema.field(2).is_nullable());
+}
+
+#[test]
+fn definition_keeps_its_name_and_attributes_in_order() {
+    let definition = definition(vec![name_attribute()]);
+    assert_eq!(definition.name(), "部門");
+    assert_eq!(
+        definition.attributes(),
+        [natural_key_attribute(), name_attribute()]
+    );
 }
 
 #[test]

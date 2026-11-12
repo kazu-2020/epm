@@ -171,7 +171,7 @@ struct UniqueIndex {
 }
 
 impl UniqueIndex {
-    fn new<K: Hash + Eq>(rows: usize, key: impl Fn(usize) -> K) -> Result<Self, MemberIndex> {
+    fn new<K: Hash + Eq>(rows: usize, key: impl Fn(usize) -> K) -> Result<Self, K> {
         let hasher = RandomState::new();
         let mut index = HashTable::with_capacity(rows);
         for row in 0..rows {
@@ -181,7 +181,7 @@ impl UniqueIndex {
                 |other: &MemberIndex| key(other.0 as usize) == value,
                 |other: &MemberIndex| hasher.hash_one(key(other.0 as usize)),
             ) {
-                Entry::Occupied(_) => return Err(MemberIndex(row as u32)),
+                Entry::Occupied(_) => return Err(value),
                 Entry::Vacant(slot) => {
                     slot.insert(MemberIndex(row as u32));
                 }
@@ -293,13 +293,10 @@ impl Dimension {
                 return Err(DimensionError::EmptyNaturalKey(member));
             }
         }
-        let by_ulid = UniqueIndex::new(rows, |row| ulid_at(ulids, row)).map_err(|member| {
-            DimensionError::DuplicateUlid(MemberGlobalId(ulid_at(ulids, member.0 as usize)))
-        })?;
-        let by_natural_key =
-            UniqueIndex::new(rows, |row| natural_keys.value(row)).map_err(|member| {
-                DimensionError::DuplicateNaturalKey(natural_keys.value(member.0 as usize).into())
-            })?;
+        let by_ulid = UniqueIndex::new(rows, |row| ulid_at(ulids, row))
+            .map_err(|ulid| DimensionError::DuplicateUlid(MemberGlobalId(ulid)))?;
+        let by_natural_key = UniqueIndex::new(rows, |row| natural_keys.value(row))
+            .map_err(|natural_key| DimensionError::DuplicateNaturalKey(natural_key.into()))?;
         Ok(Self {
             definition,
             members,
