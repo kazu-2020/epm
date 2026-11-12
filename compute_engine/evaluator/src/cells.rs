@@ -57,19 +57,24 @@ fn join(left: &Cells, right: &Cells, apply: fn(f64, f64) -> f64) -> Vec<(Vec<Mem
         .collect();
     let mut by_shared: HashMap<Vec<MemberIndex>, Vec<(&Vec<MemberIndex>, f64)>> = HashMap::new();
     for (coordinate, &value) in &right.values {
-        let key = shared
+        let shared_coordinate = shared
             .iter()
             .map(|&(_, position)| coordinate[position])
             .collect();
-        by_shared.entry(key).or_default().push((coordinate, value));
+        by_shared
+            .entry(shared_coordinate)
+            .or_default()
+            .push((coordinate, value));
     }
     let mut joined = Vec::new();
     for (left_coordinate, &left_value) in &left.values {
-        let key: Vec<MemberIndex> = shared
+        let shared_coordinate: Vec<MemberIndex> = shared
             .iter()
             .map(|&(position, _)| left_coordinate[position])
             .collect();
-        for &(right_coordinate, right_value) in by_shared.get(&key).into_iter().flatten() {
+        for &(right_coordinate, right_value) in
+            by_shared.get(&shared_coordinate).into_iter().flatten()
+        {
             let mut coordinate = left_coordinate.clone();
             coordinate.extend(extra.iter().map(|&position| right_coordinate[position]));
             joined.push((coordinate, apply(left_value, right_value)));
@@ -143,11 +148,11 @@ impl Cells {
         let values = normalized(coordinates.into_iter().map(|coordinate| {
             let mut total = 0.0;
             for ((sign, term), positions) in terms.iter().zip(&positions) {
-                let key: Vec<MemberIndex> = positions
+                let term_coordinate: Vec<MemberIndex> = positions
                     .iter()
                     .map(|&position| coordinate[position])
                     .collect();
-                let value = term.values.get(&key).copied().unwrap_or(0.0);
+                let value = term.values.get(&term_coordinate).copied().unwrap_or(0.0);
                 match sign {
                     Sign::Plus => total += value,
                     Sign::Minus => total -= value,

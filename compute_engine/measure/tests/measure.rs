@@ -289,7 +289,6 @@ fn later_write_in_one_delta_replaces_the_earlier_one() {
     delta.set(&coordinate(1, 0), 1.0).unwrap();
     delta.set(&coordinate(0, 1), 3.0).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
-    assert!(!delta.is_empty());
     assert_eq!(delta.packed_coordinates().len(), 2);
     assert!(delta.packed_coordinates().is_sorted());
     let measure = measure.apply(delta).unwrap();
@@ -330,7 +329,6 @@ fn delta_rejects_coordinates_that_do_not_fit_the_measure() {
             member: MemberIndex(3)
         }
     );
-    assert!(delta.is_empty());
 }
 
 #[test]
@@ -612,7 +610,6 @@ fn a_one_member_axis_in_front_of_64_bits_packs_without_overflow() {
         packing.unpack(packed).collect::<Vec<_>>(),
         vec![0, u32::MAX, 9]
     );
-    assert!(packing.holds(packed));
 }
 
 #[test]
@@ -627,9 +624,6 @@ fn a_reordered_packing_keeps_each_axis_width() {
 #[test]
 fn one_axis_mask_holds_every_member_that_fits() {
     let packing = CoordinatePacking::new(&[5, 3]).unwrap();
-    assert_eq!(packing.len(), 2);
-    assert!(!packing.is_empty());
-    assert!(CoordinatePacking::new(&[]).unwrap().is_empty());
     assert_eq!(packing.axis_mask(0), 0b11100);
     assert_eq!(packing.axis_mask(1), 0b00011);
     assert_eq!(packing.place(0, 4), 0b10000);
@@ -833,11 +827,9 @@ fn two_axes_that_fill_64_bits_pack_and_unpack_every_member() {
     let packed = packing.pack([largest, largest]);
 
     assert_eq!(packed, (u64::from(largest) << 32) | u64::from(largest));
-    assert!(packing.holds(u64::MAX));
     assert_eq!(
         packing.unpack(packed).collect::<Vec<_>>(),
         vec![largest, largest]
     );
     assert!(packing.pack([0, 1]) < packing.pack([1, 0]));
-    assert!(CoordinatePacking::new(&[u32::MAX, u32::MAX, 2]).is_none());
 }

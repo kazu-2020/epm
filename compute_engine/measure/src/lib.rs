@@ -88,14 +88,6 @@ impl CoordinatePacking {
         })
     }
 
-    pub fn len(&self) -> usize {
-        self.shifts.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.shifts.is_empty()
-    }
-
     pub fn pack(&self, members: impl IntoIterator<Item = u32>) -> u64 {
         self.shifts.iter().zip(&self.masks).zip(members).fold(
             0,
@@ -123,12 +115,12 @@ impl CoordinatePacking {
         ((packed >> self.shifts[axis]) & self.masks[axis]) as u32
     }
 
-    pub fn holds(&self, packed: u64) -> bool {
+    fn holds(&self, packed: u64) -> bool {
         packed.checked_shr(self.width).unwrap_or(0) == 0
     }
 
     pub fn unpack(&self, packed: u64) -> impl Iterator<Item = u32> + '_ {
-        (0..self.len()).map(move |axis| self.member(packed, axis))
+        (0..self.shifts.len()).map(move |axis| self.member(packed, axis))
     }
 }
 
@@ -572,10 +564,6 @@ impl Delta {
 
     pub fn delete(&mut self, coordinate: &[MemberIndex]) -> Result<(), MeasureError> {
         self.write(coordinate, None)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.packed_coordinates.is_empty()
     }
 
     pub fn packed_coordinates(&mut self) -> &[u64] {
