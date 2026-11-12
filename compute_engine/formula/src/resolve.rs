@@ -158,22 +158,19 @@ impl<'a> Resolver<'a> {
         Ok(match &axis.attribute {
             None => ResolvedAxisKind::Dimension(dimension.ulid),
             Some(name) => {
-                let Some((attribute, target)) =
-                    dimension
-                        .attributes
-                        .iter()
-                        .find_map(|attribute| match attribute.kind {
-                            AttributeKind::Reference(target) if attribute.name == *name => {
-                                Some((attribute.ulid, target))
-                            }
-                            _ => None,
-                        })
+                let Some(attribute) = dimension
+                    .attributes
+                    .iter()
+                    .find(|attribute| attribute.name == *name)
                 else {
                     return Err(ResolveErrorKind::UnknownAttribute);
                 };
+                let AttributeKind::Reference(target) = attribute.kind else {
+                    return Err(ResolveErrorKind::TextAttributeAsAxis);
+                };
                 ResolvedAxisKind::Attribute {
                     dimension: dimension.ulid,
-                    attribute,
+                    attribute: attribute.ulid,
                     target,
                 }
             }
