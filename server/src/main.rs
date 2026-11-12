@@ -8,6 +8,7 @@ use object_store::aws::AmazonS3Builder;
 use server::Settings;
 use server::http::Stopped;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::oneshot;
 
 // shortcut: the workspace definition is fixed in code because the log does not hold it, put it in the log when users define their own.
 const SIZE: Size = Size::TINY;
@@ -46,11 +47,22 @@ async fn main() -> ExitCode {
     // Not after the restore: as PID 1 in a container, the process ignores SIGTERM until it has a handler.
     let mut interrupt = signal(SignalKind::interrupt()).expect("a handler for SIGINT");
     let mut terminate = signal(SignalKind::terminate()).expect("a handler for SIGTERM");
-    let mut shutdown = Box::pin(async move {
+    let (first_signal, signalled) = oneshot::channel();
+    tokio::spawn(async move {
         tokio::select! {
             _ = interrupt.recv() => {}
             _ = terminate.recv() => {}
         }
+        let _ = first_signal.send(());
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+        eprintln!("stopped by a second signal before the requests finished");
+        std::process::exit(1);
+    });
+    let mut shutdown = Box::pin(async move {
+        let _ = signalled.await;
     });
     let started = Instant::now();
     let (engine, start) = tokio::select! {
@@ -59,7 +71,10 @@ async fn main() -> ExitCode {
             &arguments.workspace,
             representative::generate(&SIZE, SEED),
         ) => restored.expect("valid formulas"),
-        () = &mut shutdown => return ExitCode::SUCCESS,
+        () = &mut shutdown => {
+            eprintln!("stopped by a signal during the restore");
+            return ExitCode::SUCCESS;
+        }
     };
     eprintln!(
         "engine ready in {:?} from Commit Sequence {}",

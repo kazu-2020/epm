@@ -87,13 +87,13 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
     deadline: Duration,
 ) -> Stopped {
-    let (signalled, signal) = oneshot::channel();
+    let (signal_sender, signal_receiver) = oneshot::channel();
     let shutdown = async move {
         shutdown.await;
-        let _ = signalled.send(());
+        let _ = signal_sender.send(());
     };
-    let deadline = async move {
-        match signal.await {
+    let deadline_passed = async move {
+        match signal_receiver.await {
             Ok(()) => tokio::time::sleep(deadline).await,
             // Not the deadline: the sender drops with no signal only when the HTTP server stops, and its own branch reports that.
             Err(_) => pending().await,
@@ -105,7 +105,7 @@ pub async fn serve(
             Ok(()) => Stopped::Drained,
             Err(error) => Stopped::Server(error),
         },
-        () = deadline => Stopped::Deadline,
+        () = deadline_passed => Stopped::Deadline,
     }
 }
 

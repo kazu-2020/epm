@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use change_log::{Epoch, Start};
 use datagen::representative::{self, Size};
 use futures_util::stream::BoxStream;
+use measure::MeasureGlobalId;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
@@ -20,6 +21,9 @@ use server::{Engine, Settings};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, oneshot};
+use ulid::Ulid;
+
+const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 
 #[derive(Debug, Default)]
 struct Gate {
@@ -134,7 +138,7 @@ async fn run(deadline: Duration) -> Running {
 async fn send_submit_edit(address: SocketAddr) -> TcpStream {
     let body = json!({
         "request_id": "r1",
-        "measure": ulid::Ulid(100).to_string(),
+        "measure": QUANTITY.0.to_string(),
         "coordinate": [0, 1, 1, 0, 1],
         "value": 3.0,
     })
