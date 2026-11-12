@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::fmt;
-use std::hash::{BuildHasher, RandomState};
+use std::hash::{BuildHasher, Hash, RandomState};
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt32Type;
-use arrow_array::{Array, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
+use arrow_array::{Array, ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
@@ -47,21 +47,100 @@ pub enum AttributeKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DimensionDefinition {
-    pub ulid: DimensionGlobalId,
-    pub name: String,
-    pub kind: DimensionKind,
-    pub natural_key_attribute: AttributeGlobalId,
-    pub attributes: Vec<AttributeDefinition>,
+    ulid: DimensionGlobalId,
+    name: String,
+    kind: DimensionKind,
+    attributes: Vec<AttributeDefinition>,
+    natural_key_position: usize,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum DefinitionError {
+    DuplicateAttributeName(String),
+    DuplicateAttributeUlid(AttributeGlobalId),
+    AttributeTargetsItself(String),
+    MissingNaturalKey(AttributeGlobalId),
+    NaturalKeyIsNotATextAttribute(AttributeGlobalId),
+}
+
+impl fmt::Display for DefinitionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for DefinitionError {}
+
 impl DimensionDefinition {
+    pub fn try_new(
+        ulid: DimensionGlobalId,
+        name: String,
+        kind: DimensionKind,
+        natural_key_attribute: AttributeGlobalId,
+        attributes: Vec<AttributeDefinition>,
+    ) -> Result<Self, DefinitionError> {
+        let mut attribute_names = HashSet::new();
+        let mut attribute_ulids = HashSet::new();
+        for attribute in &attributes {
+            if !attribute_names.insert(attribute.name.as_str()) {
+                return Err(DefinitionError::DuplicateAttributeName(
+                    attribute.name.clone(),
+                ));
+            }
+            if !attribute_ulids.insert(attribute.ulid) {
+                return Err(DefinitionError::DuplicateAttributeUlid(attribute.ulid));
+            }
+            if attribute.kind == AttributeKind::Reference(ulid) {
+                return Err(DefinitionError::AttributeTargetsItself(
+                    attribute.name.clone(),
+                ));
+            }
+        }
+        let natural_key_position = attributes
+            .iter()
+            .position(|attribute| attribute.ulid == natural_key_attribute)
+            .ok_or(DefinitionError::MissingNaturalKey(natural_key_attribute))?;
+        if attributes[natural_key_position].kind != AttributeKind::Text {
+            return Err(DefinitionError::NaturalKeyIsNotATextAttribute(
+                natural_key_attribute,
+            ));
+        }
+        Ok(Self {
+            ulid,
+            name,
+            kind,
+            attributes,
+            natural_key_position,
+        })
+    }
+
+    pub fn ulid(&self) -> DimensionGlobalId {
+        self.ulid
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> DimensionKind {
+        self.kind
+    }
+
+    pub fn attributes(&self) -> &[AttributeDefinition] {
+        &self.attributes
+    }
+
+    pub fn natural_key_attribute(&self) -> &AttributeDefinition {
+        &self.attributes[self.natural_key_position]
+    }
+
     pub fn schema(&self) -> Schema {
         let mut fields = vec![Field::new(
             ULID_COLUMN,
             DataType::FixedSizeBinary(16),
             false,
         )];
-        for attribute in &self.attributes {
+        for (position, attribute) in self.attributes.iter().enumerate() {
             let data_type = match attribute.kind {
                 AttributeKind::Text => DataType::Utf8,
                 AttributeKind::Reference(_) => DataType::UInt32,
@@ -69,7 +148,7 @@ impl DimensionDefinition {
             fields.push(Field::new(
                 attribute.ulid.0.to_string(),
                 data_type,
-                attribute.ulid != self.natural_key_attribute,
+                position != self.natural_key_position,
             ));
         }
         Schema::new(fields)
@@ -80,30 +159,52 @@ impl DimensionDefinition {
 pub struct Dimension {
     definition: DimensionDefinition,
     members: RecordBatch,
-    ulids: FixedSizeBinaryArray,
-    natural_key_position: usize,
-    natural_keys: StringArray,
-    attribute_values: Vec<AttributeValues>,
-    hasher: RandomState,
-    // Not HashMap<Ulid, MemberIndex>: the ULID and Natural Key bytes already live in the Arrow arrays.
-    by_ulid: HashTable<MemberIndex>,
-    by_natural_key: HashTable<MemberIndex>,
+    by_ulid: UniqueIndex,
+    by_natural_key: UniqueIndex,
 }
 
-#[derive(Debug)]
-enum AttributeValues {
-    Text(StringArray),
-    Reference(UInt32Array),
+// Not HashMap<Ulid, MemberIndex>: the ULID and Natural Key bytes already live in the Arrow arrays.
+#[derive(Debug, Default)]
+struct UniqueIndex {
+    hasher: RandomState,
+    rows: HashTable<MemberIndex>,
+}
+
+impl UniqueIndex {
+    fn new<K: Hash + Eq>(rows: usize, key: impl Fn(usize) -> K) -> Result<Self, MemberIndex> {
+        let hasher = RandomState::new();
+        let mut index = HashTable::with_capacity(rows);
+        for row in 0..rows {
+            let value = key(row);
+            match index.entry(
+                hasher.hash_one(&value),
+                |other: &MemberIndex| key(other.0 as usize) == value,
+                |other: &MemberIndex| hasher.hash_one(key(other.0 as usize)),
+            ) {
+                Entry::Occupied(_) => return Err(MemberIndex(row as u32)),
+                Entry::Vacant(slot) => {
+                    slot.insert(MemberIndex(row as u32));
+                }
+            }
+        }
+        Ok(Self {
+            hasher,
+            rows: index,
+        })
+    }
+
+    fn find<K: Hash + Eq>(&self, wanted: K, key: impl Fn(usize) -> K) -> Option<MemberIndex> {
+        self.rows
+            .find(self.hasher.hash_one(&wanted), |row| {
+                key(row.0 as usize) == wanted
+            })
+            .copied()
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub enum DimensionError {
     TooManyMembers(usize),
-    DuplicateAttributeName(String),
-    DuplicateAttributeUlid(AttributeGlobalId),
-    AttributeTargetsItself(String),
-    MissingNaturalKey(AttributeGlobalId),
-    NaturalKeyIsNotATextAttribute(AttributeGlobalId),
     SchemaMismatch {
         expected: SchemaRef,
         found: SchemaRef,
@@ -111,6 +212,7 @@ pub enum DimensionError {
     NullUlid(MemberIndex),
     DuplicateUlid(MemberGlobalId),
     NullNaturalKey(MemberIndex),
+    EmptyNaturalKey(MemberIndex),
     DuplicateNaturalKey(String),
     MissingTarget {
         attribute: String,
@@ -137,39 +239,8 @@ impl Dimension {
         members: RecordBatch,
         targets: &[&Dimension],
     ) -> Result<Self, DimensionError> {
-        u32::try_from(members.num_rows())
-            .map_err(|_| DimensionError::TooManyMembers(members.num_rows()))?;
-        let mut attribute_names = HashSet::new();
-        let mut attribute_ulids = HashSet::new();
-        for attribute in &definition.attributes {
-            if !attribute_names.insert(attribute.name.as_str()) {
-                return Err(DimensionError::DuplicateAttributeName(
-                    attribute.name.clone(),
-                ));
-            }
-            if !attribute_ulids.insert(attribute.ulid) {
-                return Err(DimensionError::DuplicateAttributeUlid(attribute.ulid));
-            }
-            if attribute.kind == AttributeKind::Reference(definition.ulid) {
-                return Err(DimensionError::AttributeTargetsItself(
-                    attribute.name.clone(),
-                ));
-            }
-        }
-        let Some(natural_key_position) = definition
-            .attributes
-            .iter()
-            .position(|attribute| attribute.ulid == definition.natural_key_attribute)
-        else {
-            return Err(DimensionError::MissingNaturalKey(
-                definition.natural_key_attribute,
-            ));
-        };
-        if definition.attributes[natural_key_position].kind != AttributeKind::Text {
-            return Err(DimensionError::NaturalKeyIsNotATextAttribute(
-                definition.natural_key_attribute,
-            ));
-        }
+        let rows = members.num_rows();
+        u32::try_from(rows).map_err(|_| DimensionError::TooManyMembers(rows))?;
         let expected = definition.schema();
         let found = members.schema();
         let same_shape =
@@ -186,40 +257,27 @@ impl Dimension {
                 found,
             });
         }
+        let mut dimension = Self {
+            definition,
+            members,
+            by_ulid: UniqueIndex::default(),
+            by_natural_key: UniqueIndex::default(),
+        };
 
-        let columns = members.columns();
-        let ulids = columns[0].as_fixed_size_binary().clone();
-        let attribute_values: Vec<AttributeValues> = definition
-            .attributes
-            .iter()
-            .zip(&columns[1..])
-            .map(|(attribute, column)| match attribute.kind {
-                AttributeKind::Text => AttributeValues::Text(column.as_string::<i32>().clone()),
-                AttributeKind::Reference(_) => {
-                    AttributeValues::Reference(column.as_primitive::<UInt32Type>().clone())
-                }
-            })
-            .collect();
-        let natural_keys = columns[1 + natural_key_position].as_string::<i32>().clone();
-        for (attribute, values) in definition.attributes.iter().zip(&attribute_values) {
-            let (AttributeKind::Reference(target), AttributeValues::Reference(values)) =
-                (attribute.kind, values)
-            else {
-                continue;
-            };
+        for attribute in dimension.reference_attributes() {
             let target_dimension = targets
                 .iter()
-                .find(|dimension| dimension.ulid() == target)
+                .find(|candidate| candidate.ulid() == attribute.target)
                 .ok_or_else(|| DimensionError::MissingTarget {
-                    attribute: attribute.name.clone(),
-                    target,
+                    attribute: attribute.name().into(),
+                    target: attribute.target,
                 })?;
-            for (row, value) in values.iter().enumerate() {
+            for (row, value) in attribute.values.iter().enumerate() {
                 if let Some(value) = value
                     && value >= target_dimension.len()
                 {
                     return Err(DimensionError::DanglingTarget {
-                        attribute: attribute.name.clone(),
+                        attribute: attribute.name().into(),
                         member: MemberIndex(row as u32),
                         target: MemberIndex(value),
                     });
@@ -227,10 +285,8 @@ impl Dimension {
             }
         }
 
-        let hasher = RandomState::new();
-        let rows = members.num_rows();
-        let mut by_ulid = HashTable::with_capacity(rows);
-        let mut by_natural_key = HashTable::with_capacity(rows);
+        let ulids = dimension.ulids();
+        let natural_keys = dimension.natural_keys();
         for row in 0..rows {
             let member = MemberIndex(row as u32);
             if ulids.is_null(row) {
@@ -239,45 +295,20 @@ impl Dimension {
             if natural_keys.is_null(row) {
                 return Err(DimensionError::NullNaturalKey(member));
             }
-            let ulid = ulid_at(&ulids, row);
-            match by_ulid.entry(
-                hasher.hash_one(ulid),
-                |other: &MemberIndex| ulid_at(&ulids, other.0 as usize) == ulid,
-                |other: &MemberIndex| hasher.hash_one(ulid_at(&ulids, other.0 as usize)),
-            ) {
-                Entry::Occupied(_) => {
-                    return Err(DimensionError::DuplicateUlid(MemberGlobalId(ulid)));
-                }
-                Entry::Vacant(slot) => {
-                    slot.insert(member);
-                }
-            }
-            let natural_key = natural_keys.value(row);
-            match by_natural_key.entry(
-                hasher.hash_one(natural_key),
-                |other: &MemberIndex| natural_keys.value(other.0 as usize) == natural_key,
-                |other: &MemberIndex| hasher.hash_one(natural_keys.value(other.0 as usize)),
-            ) {
-                Entry::Occupied(_) => {
-                    return Err(DimensionError::DuplicateNaturalKey(natural_key.into()));
-                }
-                Entry::Vacant(slot) => {
-                    slot.insert(member);
-                }
+            if natural_keys.value(row).is_empty() {
+                return Err(DimensionError::EmptyNaturalKey(member));
             }
         }
-
-        Ok(Self {
-            definition,
-            members,
-            ulids,
-            natural_key_position,
-            natural_keys,
-            attribute_values,
-            hasher,
-            by_ulid,
-            by_natural_key,
-        })
+        let by_ulid = UniqueIndex::new(rows, |row| ulid_at(ulids, row)).map_err(|member| {
+            DimensionError::DuplicateUlid(MemberGlobalId(ulid_at(ulids, member.0 as usize)))
+        })?;
+        let by_natural_key =
+            UniqueIndex::new(rows, |row| natural_keys.value(row)).map_err(|member| {
+                DimensionError::DuplicateNaturalKey(natural_keys.value(member.0 as usize).into())
+            })?;
+        dimension.by_ulid = by_ulid;
+        dimension.by_natural_key = by_natural_key;
+        Ok(dimension)
     }
 
     pub fn definition(&self) -> &DimensionDefinition {
@@ -317,27 +348,23 @@ impl Dimension {
     }
 
     pub fn member_by_ulid(&self, ulid: MemberGlobalId) -> Option<Member<'_>> {
-        let id = *self
+        let id = self
             .by_ulid
-            .find(self.hasher.hash_one(ulid.0), |id: &MemberIndex| {
-                ulid_at(&self.ulids, id.0 as usize) == ulid.0
-            })?;
+            .find(ulid.0, |row| ulid_at(self.ulids(), row))?;
         self.member(id)
     }
 
     pub fn member_by_natural_key(&self, natural_key: &str) -> Option<Member<'_>> {
-        let id = *self
+        let id = self
             .by_natural_key
-            .find(self.hasher.hash_one(natural_key), |id: &MemberIndex| {
-                self.natural_keys.value(id.0 as usize) == natural_key
-            })?;
+            .find(natural_key, |row| self.natural_keys().value(row))?;
         self.member(id)
     }
 
     pub fn natural_key_attribute(&self) -> TextAttribute<'_> {
         TextAttribute {
-            definition: &self.definition.attributes[self.natural_key_position],
-            values: &self.natural_keys,
+            definition: self.definition.natural_key_attribute(),
+            values: self.natural_keys(),
         }
     }
 
@@ -347,13 +374,13 @@ impl Dimension {
     }
 
     pub fn text_attributes(&self) -> impl Iterator<Item = TextAttribute<'_>> {
-        self.definition
-            .attributes
-            .iter()
-            .zip(&self.attribute_values)
-            .filter_map(|(definition, values)| match values {
-                AttributeValues::Text(values) => Some(TextAttribute { definition, values }),
-                AttributeValues::Reference(_) => None,
+        self.attribute_columns()
+            .filter_map(|(definition, column)| match definition.kind {
+                AttributeKind::Text => Some(TextAttribute {
+                    definition,
+                    values: column.as_string::<i32>(),
+                }),
+                AttributeKind::Reference(_) => None,
             })
     }
 
@@ -363,20 +390,32 @@ impl Dimension {
     }
 
     pub fn reference_attributes(&self) -> impl Iterator<Item = ReferenceAttribute<'_>> {
+        self.attribute_columns()
+            .filter_map(|(definition, column)| match definition.kind {
+                AttributeKind::Reference(target) => Some(ReferenceAttribute {
+                    definition,
+                    target,
+                    values: column.as_primitive::<UInt32Type>(),
+                }),
+                AttributeKind::Text => None,
+            })
+    }
+
+    fn attribute_columns(&self) -> impl Iterator<Item = (&AttributeDefinition, &ArrayRef)> {
         self.definition
             .attributes
             .iter()
-            .zip(&self.attribute_values)
-            .filter_map(|(definition, values)| match (definition.kind, values) {
-                (AttributeKind::Reference(target), AttributeValues::Reference(values)) => {
-                    Some(ReferenceAttribute {
-                        definition,
-                        target,
-                        values,
-                    })
-                }
-                _ => None,
-            })
+            .zip(&self.members.columns()[1..])
+    }
+
+    fn ulids(&self) -> &FixedSizeBinaryArray {
+        self.members.column(0).as_fixed_size_binary()
+    }
+
+    fn natural_keys(&self) -> &StringArray {
+        self.members
+            .column(1 + self.definition.natural_key_position)
+            .as_string::<i32>()
     }
 }
 
@@ -392,11 +431,11 @@ impl<'d> Member<'d> {
     }
 
     pub fn ulid(self) -> MemberGlobalId {
-        MemberGlobalId(ulid_at(&self.dimension.ulids, self.id.0 as usize))
+        MemberGlobalId(ulid_at(self.dimension.ulids(), self.id.0 as usize))
     }
 
     pub fn natural_key(self) -> &'d str {
-        self.dimension.natural_keys.value(self.id.0 as usize)
+        self.dimension.natural_keys().value(self.id.0 as usize)
     }
 }
 
@@ -445,10 +484,6 @@ impl<'d> ReferenceAttribute<'d> {
         let row = member.0 as usize;
         (row < self.values.len() && self.values.is_valid(row))
             .then(|| MemberIndex(self.values.value(row)))
-    }
-
-    pub fn values(self) -> &'d UInt32Array {
-        self.values
     }
 }
 

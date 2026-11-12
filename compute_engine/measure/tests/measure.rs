@@ -19,17 +19,18 @@ const COST: MeasureGlobalId = MeasureGlobalId(Ulid(400));
 
 fn dimension(ulid: DimensionGlobalId, names: &[&str]) -> Dimension {
     let natural_key_attribute = AttributeGlobalId(ulid.0);
-    let definition = DimensionDefinition {
+    let definition = DimensionDefinition::try_new(
         ulid,
-        name: "ディメンション".into(),
-        kind: DimensionKind::Ordinary,
+        "ディメンション".into(),
+        DimensionKind::Ordinary,
         natural_key_attribute,
-        attributes: vec![AttributeDefinition {
+        vec![AttributeDefinition {
             ulid: natural_key_attribute,
             name: "ID".into(),
             kind: AttributeKind::Text,
         }],
-    };
+    )
+    .unwrap();
     let ulids = FixedSizeBinaryArray::try_from_iter(
         (0..names.len()).map(|row| Ulid(ulid.0.0 + row as u128 + 1).to_bytes()),
     )

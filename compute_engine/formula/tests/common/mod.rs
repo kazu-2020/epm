@@ -21,13 +21,14 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
             name: "ID".into(),
             kind: AttributeKind::Text,
         };
-        DimensionDefinition {
+        DimensionDefinition::try_new(
             ulid,
-            name: name.into(),
-            kind: DimensionKind::Ordinary,
-            natural_key_attribute: natural_key_attribute.ulid,
-            attributes: [vec![natural_key_attribute], attributes].concat(),
-        }
+            name.into(),
+            DimensionKind::Ordinary,
+            natural_key_attribute.ulid,
+            [vec![natural_key_attribute], attributes].concat(),
+        )
+        .unwrap()
     };
     vec![
         dimension(PERIOD, "期間", vec![]),
@@ -48,19 +49,19 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
 pub fn dimensions_with_members() -> Vec<Dimension> {
     let mut loaded: Vec<Dimension> = Vec::new();
     for definition in dimensions() {
-        let (names, divisions): (&[&str], &[u32]) = match definition.name.as_str() {
+        let (names, divisions): (&[&str], &[u32]) = match definition.name() {
             "期間" => (&["1月", "2月"], &[]),
             "部門" => (&["営業", "開発"], &[0, 0]),
             "事業部" => (&["第一"], &[]),
             _ => (&["実績", "予算", "見込"], &[]),
         };
         let ulids = FixedSizeBinaryArray::try_from_iter(
-            (0..names.len()).map(|row| Ulid(definition.ulid.0.0 * 100 + row as u128).to_bytes()),
+            (0..names.len()).map(|row| Ulid(definition.ulid().0.0 * 100 + row as u128).to_bytes()),
         )
         .unwrap();
         let mut columns: Vec<ArrayRef> =
             vec![Arc::new(ulids), Arc::new(StringArray::from(names.to_vec()))];
-        if definition.attributes.len() > 1 {
+        if definition.attributes().len() > 1 {
             columns.push(Arc::new(UInt32Array::from(divisions.to_vec())));
         }
         let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
@@ -91,9 +92,10 @@ pub fn measures() -> Vec<MeasureDefinition> {
 pub fn dimension_name(ulid: DimensionGlobalId) -> String {
     dimensions()
         .into_iter()
-        .find(|dimension| dimension.ulid == ulid)
+        .find(|dimension| dimension.ulid() == ulid)
         .expect("the fixture defines every dimension it refers to")
-        .name
+        .name()
+        .into()
 }
 
 pub fn span(source: &str, part: &str) -> Range<usize> {
