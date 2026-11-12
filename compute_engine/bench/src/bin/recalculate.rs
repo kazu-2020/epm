@@ -84,7 +84,7 @@ fn main() -> std::io::Result<()> {
                 0
             }
         };
-        let keys = fresh(measure.base_packed_coordinates().inner());
+        let packed_coordinates = fresh(measure.base_packed_coordinates().inner());
         let values = fresh(measure.base_values().inner());
         let hash = if hash {
             let mut hasher = std::hash::DefaultHasher::new();
@@ -97,7 +97,7 @@ fn main() -> std::io::Result<()> {
             String::new()
         };
         eprintln!(
-            "unique\t{}\t{}\tkeys {keys}\tvalues {values}{hash}",
+            "unique\t{}\t{}\tpacked_coordinates {packed_coordinates}\tvalues {values}{hash}",
             measure.definition().name,
             measure.base_values().len(),
         );

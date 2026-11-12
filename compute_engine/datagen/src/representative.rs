@@ -537,8 +537,8 @@ impl Representative {
         let values: Vec<f64> = values.into_iter().flatten().collect();
         debug_assert!(packed.is_sorted());
         let mut columns = vec![Vec::with_capacity(packed.len()); axes.len()];
-        for &key in &packed {
-            for (column, member) in columns.iter_mut().zip(unpack(key, &lengths)) {
+        for &packed_coordinate in &packed {
+            for (column, member) in columns.iter_mut().zip(unpack(packed_coordinate, &lengths)) {
                 column.push(member);
             }
         }
