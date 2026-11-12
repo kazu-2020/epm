@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
@@ -13,9 +15,11 @@ use measure::{MeasureError, MeasureGlobalId};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use ulid::Ulid;
 
-use crate::{Edit, Handle, Invalid, ReadError, Rejection, SubmitError};
+use crate::{Edit, Exit, Handle, Invalid, ReadError, Rejection, SubmitError};
 
 // Not only the body limit: the change log keeps every Request ID, and each new owner reads them all again.
 const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
@@ -58,6 +62,13 @@ struct Failure {
     message: String,
 }
 
+#[derive(Debug)]
+pub enum Stopped {
+    Drained,
+    Deadline,
+    Owner(Exit),
+}
+
 pub fn router(handle: Handle) -> Router {
     Router::new()
         .route("/epm.v1.Workspace/SubmitEdit", post(submit_edit))
@@ -65,6 +76,32 @@ pub fn router(handle: Handle) -> Router {
         .route("/epm.v1.Workspace/ListDefinitions", post(list_definitions))
         .route("/epm.v1.Workspace/GetLag", post(get_lag))
         .with_state(handle)
+}
+
+pub async fn serve(
+    listener: TcpListener,
+    handle: Handle,
+    owner: impl Future<Output = Exit>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    deadline: Duration,
+) -> Stopped {
+    let (signal_sender, signal_receiver) = oneshot::channel();
+    let shutdown = async move {
+        shutdown.await;
+        let _ = signal_sender.send(());
+    };
+    let deadline_passed = async move {
+        let _ = signal_receiver.await;
+        tokio::time::sleep(deadline).await;
+    };
+    tokio::select! {
+        exit = owner => Stopped::Owner(exit),
+        served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => {
+            served.expect("the graceful serve of axum 0.8 returns only Ok");
+            Stopped::Drained
+        }
+        () = deadline_passed => Stopped::Deadline,
+    }
 }
 
 async fn submit_edit(

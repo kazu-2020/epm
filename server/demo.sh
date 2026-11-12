@@ -118,4 +118,11 @@ check "$(status_of "$restored")" 200 "ReadCells at sequence $second returns 200"
 echo "  < $(body_of "$restored")"
 check "$(body_of "$restored" | jq -c '.values')" "$after_second" "the values are the same as before the kill"
 
+echo "== 5. After kill -TERM, the server stops with code 0"
+kill -TERM "$server_pid"
+code=0
+wait "$server_pid" || code=$?
+server_pid=""
+check "$code" 0 "the server exits with code 0"
+
 echo "== All checks passed"
