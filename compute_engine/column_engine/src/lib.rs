@@ -4,7 +4,7 @@ mod region;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
-use dimension::{Attribute, Dimension, MemberIndex};
+use dimension::{Dimension, MemberIndex, ReferenceAttribute};
 use evaluator::EvaluateError;
 use formula::{CheckedAxis, CheckedExpression, CheckedNode};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
@@ -241,9 +241,9 @@ fn find_attribute<'d>(
     dimensions: &[&'d Dimension],
     dimension: dimension::DimensionGlobalId,
     attribute: dimension::AttributeGlobalId,
-) -> Result<Attribute<'d>, EvaluateError> {
+) -> Result<ReferenceAttribute<'d>, EvaluateError> {
     find_dimension(dimensions, dimension)?
-        .attributes()
+        .reference_attributes()
         .find(|candidate| candidate.ulid() == attribute)
         .ok_or(EvaluateError::MissingAttribute(attribute))
 }

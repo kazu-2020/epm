@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use dimension::{Attribute, Dimension, DimensionGlobalId, MemberIndex};
+use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
 use formula::{ProductOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
@@ -14,7 +14,7 @@ pub(crate) struct Cells {
 pub(crate) struct ByAxis<'d> {
     pub(crate) output: DimensionGlobalId,
     pub(crate) source: usize,
-    pub(crate) attribute: Option<Attribute<'d>>,
+    pub(crate) attribute: Option<ReferenceAttribute<'d>>,
 }
 
 enum Source {

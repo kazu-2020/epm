@@ -6,7 +6,8 @@ use arrow_array::{
 };
 use arrow_schema::{Field, Schema};
 use dimension::{
-    Dimension, DimensionDefinition, DimensionGlobalId, DimensionKind, KeyKind, MemberIndex,
+    AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
+    DimensionGlobalId, DimensionKind, MemberIndex,
 };
 use measure::{KeyLayout, Measure, MeasureDefinition, MeasureError, MeasureGlobalId, normalize};
 use ulid::Ulid;
@@ -17,12 +18,17 @@ const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(300));
 const COST: MeasureGlobalId = MeasureGlobalId(Ulid(400));
 
 fn dimension(ulid: DimensionGlobalId, names: &[&str]) -> Dimension {
+    let natural_key_attribute = AttributeGlobalId(ulid.0);
     let definition = DimensionDefinition {
         ulid,
         name: "ディメンション".into(),
         kind: DimensionKind::Ordinary,
-        key_kind: KeyKind::Name,
-        attributes: Vec::new(),
+        natural_key_attribute,
+        attributes: vec![AttributeDefinition {
+            ulid: natural_key_attribute,
+            name: "ID".into(),
+            kind: AttributeKind::Text,
+        }],
     };
     let ulids = FixedSizeBinaryArray::try_from_iter(
         (0..names.len()).map(|row| Ulid(ulid.0.0 + row as u128 + 1).to_bytes()),

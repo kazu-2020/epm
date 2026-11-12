@@ -178,7 +178,7 @@ impl Formulas<'_, '_, '_> {
             let member = filtered
                 .member(MemberIndex(member as u32))
                 .expect("the sample is within the dimension");
-            quote(member.key())
+            quote(member.natural_key())
         })
         .collect();
         let mut axes = value.axes;
@@ -207,7 +207,7 @@ impl Formulas<'_, '_, '_> {
             if allowed.contains(&axis) {
                 options.push((axis, quote(source.name())));
             }
-            for attribute in source.attributes() {
+            for attribute in source.reference_attributes() {
                 if allowed.contains(&attribute.target()) {
                     options.push((
                         attribute.target(),

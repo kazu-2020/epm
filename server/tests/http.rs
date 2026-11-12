@@ -291,5 +291,5 @@ async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions()
         .find(|dimension| &dimension["ulid"] == first_axis)
         .expect("the axis is a listed dimension");
     assert_eq!(dimension["members"][0]["id"], 0);
-    assert!(dimension["members"][0]["key"].is_string());
+    assert!(dimension["members"][0]["natural_key"].is_string());
 }

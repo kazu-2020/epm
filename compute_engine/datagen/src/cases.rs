@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use crate::natural_key_attribute;
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionGlobalId,
-    DimensionKind, KeyKind, MemberIndex,
+    AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
+    DimensionGlobalId, DimensionKind, MemberIndex,
 };
 use formula::{CheckedExpression, ResolvedExpression};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
@@ -251,7 +252,7 @@ impl Default for Fixture {
             vec![AttributeDefinition {
                 ulid: AttributeGlobalId(Ulid(21)),
                 name: "事業部".into(),
-                target: DIVISION,
+                kind: AttributeKind::Reference(DIVISION),
             }],
             &[Some(0), Some(0), None],
             &[&divisions],
@@ -381,8 +382,8 @@ fn dimension(
         } else {
             DimensionKind::Ordinary
         },
-        key_kind: KeyKind::Name,
-        attributes,
+        natural_key_attribute: natural_key_attribute(ulid).ulid,
+        attributes: [vec![natural_key_attribute(ulid)], attributes].concat(),
     };
     let ulids = FixedSizeBinaryArray::try_from_iter(
         (0..names.len()).map(|row| Ulid(ulid.0.0 * 100 + row as u128).to_bytes()),
@@ -390,7 +391,7 @@ fn dimension(
     .unwrap();
     let mut columns: Vec<ArrayRef> =
         vec![Arc::new(ulids), Arc::new(StringArray::from(names.to_vec()))];
-    if !definition.attributes.is_empty() {
+    if definition.attributes.len() > 1 {
         columns.push(Arc::new(UInt32Array::from(attribute_values.to_vec())));
     }
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();

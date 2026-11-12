@@ -1,7 +1,7 @@
 profile = "mutants"
 exclude_re = [
     "<impl fmt::Display for DimensionError>::fmt",
-    "<impl fmt::Debug for Attribute",
+    "<impl fmt::Debug for (Text|Reference)Attribute",
     "<impl fmt::Display for MeasureError>::fmt",
     "<impl fmt::Display for EvaluateError>::fmt",
     # Not tested: these keep a cursor at 0, so the merge loop never ends and grows its key buffer until the CI runner runs out of memory.

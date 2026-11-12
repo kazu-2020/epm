@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use dimension::{Dimension, MemberIndex};
+use dimension::{AttributeKind, Dimension, MemberIndex};
 use measure::MeasureDefinition;
 
 use crate::expression::{Axis, Expression, ExpressionKind, QuotedName};
@@ -105,7 +105,7 @@ impl<'a> Resolver<'a> {
         let mut ids: Vec<MemberIndex> = Vec::with_capacity(members.len());
         let mut known = true;
         for member in members {
-            match found.member_by_key(&member.name) {
+            match found.member_by_natural_key(&member.name) {
                 Some(found_member) => ids.push(found_member.id()),
                 None => {
                     self.error(ResolveErrorKind::UnknownMember, &member.span);
@@ -158,17 +158,23 @@ impl<'a> Resolver<'a> {
         Ok(match &axis.attribute {
             None => ResolvedAxisKind::Dimension(dimension.ulid),
             Some(name) => {
-                let Some(attribute) = dimension
-                    .attributes
-                    .iter()
-                    .find(|attribute| attribute.name == *name)
+                let Some((attribute, target)) =
+                    dimension
+                        .attributes
+                        .iter()
+                        .find_map(|attribute| match attribute.kind {
+                            AttributeKind::Reference(target) if attribute.name == *name => {
+                                Some((attribute.ulid, target))
+                            }
+                            _ => None,
+                        })
                 else {
                     return Err(ResolveErrorKind::UnknownAttribute);
                 };
                 ResolvedAxisKind::Attribute {
                     dimension: dimension.ulid,
-                    attribute: attribute.ulid,
-                    target: attribute.target,
+                    attribute,
+                    target,
                 }
             }
         })

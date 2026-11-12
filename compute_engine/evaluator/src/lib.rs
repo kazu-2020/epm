@@ -111,7 +111,7 @@ impl<'a> Evaluator<'a> {
                 source: position(dimension),
                 attribute: Some(
                     find_dimension(self.dimensions, dimension)?
-                        .attributes()
+                        .reference_attributes()
                         .find(|candidate| candidate.ulid() == attribute)
                         .ok_or(EvaluateError::MissingAttribute(attribute))?,
                 ),

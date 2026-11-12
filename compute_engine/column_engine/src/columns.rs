@@ -3,7 +3,7 @@ use std::iter;
 use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
-use dimension::{Attribute, Dimension, DimensionGlobalId, MemberIndex};
+use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
 use evaluator::EvaluateError;
 use formula::{ProductOperator, Sign};
 use measure::{
@@ -34,7 +34,7 @@ pub(crate) struct Columns {
 pub(crate) struct ByAxis<'d> {
     pub(crate) output: DimensionGlobalId,
     pub(crate) source: usize,
-    pub(crate) attribute: Option<Attribute<'d>>,
+    pub(crate) attribute: Option<ReferenceAttribute<'d>>,
 }
 
 enum Source<'c> {
