@@ -84,9 +84,9 @@ impl Model {
             .expect("the representative model has the dimension")
     }
 
-    fn member(&self, dimension: DimensionGlobalId, key: &str) -> u32 {
+    fn member(&self, dimension: DimensionGlobalId, natural_key: &str) -> u32 {
         self.dimension(dimension)
-            .member_by_key(key)
+            .member_by_natural_key(natural_key)
             .expect("the member exists")
             .id()
             .0
@@ -244,7 +244,7 @@ fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
     let account = (0..accounts.len())
         .find(|&account| {
             accounts
-                .attributes()
+                .reference_attributes()
                 .next()
                 .expect("an account has a group")
                 .value(MemberIndex(account))
@@ -252,7 +252,7 @@ fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
         })
         .expect("some account has a group");
     let group = accounts
-        .attributes()
+        .reference_attributes()
         .next()
         .expect("an account has a group")
         .value(MemberIndex(account))

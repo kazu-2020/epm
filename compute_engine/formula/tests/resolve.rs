@@ -238,6 +238,21 @@ fn a_by_attribute_must_belong_to_its_dimension() {
 }
 
 #[test]
+fn a_by_attribute_must_be_a_reference_attribute() {
+    let source = "SUM('売上', BY '部門'.'ID', '期間')";
+    assert_eq!(
+        resolve(source),
+        (
+            "(Sum '売上'{部門,期間} BY [UNRESOLVED '期間'])".into(),
+            vec![(
+                ResolveErrorKind::TextAttributeAsAxis,
+                common::span(source, "'部門'.'ID'")
+            )]
+        )
+    );
+}
+
+#[test]
 fn errors_from_every_part_of_the_expression_are_returned_in_source_order() {
     let source = "'売り上げ' + SUM('期間', BY '部署')";
     assert_eq!(

@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::natural_key_attribute;
 use arrow_array::{
     ArrayRef, FixedSizeBinaryArray, Float64Array, RecordBatch, StringArray, UInt32Array,
 };
 use dimension::{
-    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionGlobalId,
-    DimensionKind, KeyKind,
+    AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
+    DimensionGlobalId, DimensionKind,
 };
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
@@ -236,7 +237,7 @@ fn attribute(ulid: u128, name: &str, target: DimensionGlobalId) -> AttributeDefi
     AttributeDefinition {
         ulid: AttributeGlobalId(Ulid(ulid)),
         name: name.into(),
-        target,
+        kind: AttributeKind::Reference(target),
     }
 }
 
@@ -256,8 +257,10 @@ fn dimension(
             VERSION => DimensionKind::Version,
             _ => DimensionKind::Ordinary,
         },
-        key_kind: KeyKind::Name,
-        attributes: attributes.into_iter().collect(),
+        natural_key_attribute: natural_key_attribute(ulid).ulid,
+        attributes: std::iter::once(natural_key_attribute(ulid))
+            .chain(attributes)
+            .collect(),
     };
     let first_member = ulid.0.0 << 32;
     let ulids = FixedSizeBinaryArray::try_from_iter(
@@ -564,17 +567,20 @@ impl Representative {
             .find(|dimension| dimension.ulid() == CATEGORY)
             .expect("the categories are generated");
         let group_of = accounts
-            .attribute("グループ")
+            .reference_attribute("グループ")
             .expect("accounts have a group");
         let category_of = groups
-            .attribute("カテゴリ")
+            .reference_attribute("カテゴリ")
             .expect("groups have a category");
         let mut pairs = Vec::new();
         for account in 0..accounts.len() {
             let group = group_of
                 .value(dimension::MemberIndex(account))
                 .expect("every account has a group");
-            let group_name = groups.member(group).expect("the group exists").name();
+            let group_name = groups
+                .member(group)
+                .expect("the group exists")
+                .natural_key();
             if FROM_QUANTITY_GROUPS.contains(&group_name) {
                 continue;
             }
@@ -584,7 +590,7 @@ impl Representative {
             let category_name = categories
                 .member(category)
                 .expect("the category exists")
-                .name();
+                .natural_key();
             for department in 0..self.departments() {
                 let kind = self.department_kind(department);
                 let books = if MANUFACTURING_GROUPS.contains(&group_name) {

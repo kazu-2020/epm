@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionGlobalId,
-    DimensionKind, KeyKind, MemberIndex,
+    AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
+    DimensionGlobalId, DimensionKind, MemberIndex,
 };
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
@@ -90,13 +90,14 @@ impl Generator<'_> {
             .random_range(1..=self.configuration.members_per_dimension);
         let parent = (!earlier.is_empty() && self.random.random_bool(0.75))
             .then(|| &earlier[self.random.random_range(0..earlier.len())]);
-        let attributes: Vec<AttributeDefinition> = parent
-            .map(|parent| AttributeDefinition {
+        let natural_key = natural_key_attribute(ulid);
+        let natural_key_ulid = natural_key.ulid;
+        let attributes: Vec<AttributeDefinition> = std::iter::once(natural_key)
+            .chain(parent.map(|parent| AttributeDefinition {
                 ulid: AttributeGlobalId(self.ulid()),
                 name: "親".into(),
-                target: parent.ulid(),
-            })
-            .into_iter()
+                kind: AttributeKind::Reference(parent.ulid()),
+            }))
             .collect();
         let definition = DimensionDefinition {
             ulid,
@@ -107,7 +108,7 @@ impl Generator<'_> {
                 2 => DimensionKind::Version,
                 _ => DimensionKind::Ordinary,
             },
-            key_kind: KeyKind::Name,
+            natural_key_attribute: natural_key_ulid,
             attributes,
         };
         let ulids = FixedSizeBinaryArray::try_from_iter((0..len).map(|_| self.ulid().to_bytes()))
@@ -172,4 +173,13 @@ fn dimension(dimensions: &[Dimension], ulid: DimensionGlobalId) -> &Dimension {
         .iter()
         .find(|dimension| dimension.ulid() == ulid)
         .expect("generated axes are generated dimensions")
+}
+
+// Not a random ULID: drawing one more would change every model that an existing seed generates.
+pub(crate) fn natural_key_attribute(dimension: DimensionGlobalId) -> AttributeDefinition {
+    AttributeDefinition {
+        ulid: AttributeGlobalId(dimension.0),
+        name: "ID".into(),
+        kind: AttributeKind::Text,
+    }
 }

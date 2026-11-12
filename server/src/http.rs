@@ -139,7 +139,7 @@ async fn list_definitions(State(handle): State<Handle>) -> Json<Value> {
         .map(|dimension| {
             let members: Vec<Value> = (0..dimension.len())
                 .filter_map(|id| dimension.member(MemberIndex(id)))
-                .map(|member| json!({ "id": member.id().0, "key": member.key(), "name": member.name() }))
+                .map(|member| json!({ "id": member.id().0, "natural_key": member.natural_key() }))
                 .collect();
             json!({
                 "ulid": dimension.ulid().0.to_string(),

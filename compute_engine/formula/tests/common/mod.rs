@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
-    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionGlobalId,
-    DimensionKind, KeyKind,
+    AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
+    DimensionGlobalId, DimensionKind,
 };
 use measure::{MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
@@ -15,12 +15,19 @@ const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(3));
 const VERSION: DimensionGlobalId = DimensionGlobalId(Ulid(4));
 
 pub fn dimensions() -> Vec<DimensionDefinition> {
-    let dimension = |ulid, name: &str, attributes| DimensionDefinition {
-        ulid,
-        name: name.into(),
-        kind: DimensionKind::Ordinary,
-        key_kind: KeyKind::Name,
-        attributes,
+    let dimension = |ulid: DimensionGlobalId, name: &str, attributes: Vec<AttributeDefinition>| {
+        let natural_key_attribute = AttributeDefinition {
+            ulid: AttributeGlobalId(Ulid(ulid.0.0 * 1000)),
+            name: "ID".into(),
+            kind: AttributeKind::Text,
+        };
+        DimensionDefinition {
+            ulid,
+            name: name.into(),
+            kind: DimensionKind::Ordinary,
+            natural_key_attribute: natural_key_attribute.ulid,
+            attributes: [vec![natural_key_attribute], attributes].concat(),
+        }
     };
     vec![
         dimension(PERIOD, "期間", vec![]),
@@ -31,7 +38,7 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
             vec![AttributeDefinition {
                 ulid: AttributeGlobalId(Ulid(21)),
                 name: "事業部".into(),
-                target: DIVISION,
+                kind: AttributeKind::Reference(DIVISION),
             }],
         ),
         dimension(VERSION, "バージョン", vec![]),
@@ -53,7 +60,7 @@ pub fn dimensions_with_members() -> Vec<Dimension> {
         .unwrap();
         let mut columns: Vec<ArrayRef> =
             vec![Arc::new(ulids), Arc::new(StringArray::from(names.to_vec()))];
-        if !definition.attributes.is_empty() {
+        if definition.attributes.len() > 1 {
             columns.push(Arc::new(UInt32Array::from(divisions.to_vec())));
         }
         let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();

@@ -5,22 +5,32 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use dimension::{
-    AttributeDefinition, AttributeGlobalId, Dimension, DimensionDefinition, DimensionError,
-    DimensionGlobalId, DimensionKind, KeyKind, MemberGlobalId, MemberIndex,
+    AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
+    DimensionError, DimensionGlobalId, DimensionKind, MemberGlobalId, MemberIndex,
 };
 use ulid::Ulid;
 
 const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(100));
 const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(200));
 const DIVISION_ATTRIBUTE: AttributeGlobalId = AttributeGlobalId(Ulid(300));
+const NATURAL_KEY: AttributeGlobalId = AttributeGlobalId(Ulid(400));
+const NAME_ATTRIBUTE: AttributeGlobalId = AttributeGlobalId(Ulid(500));
 
-fn definition(key_kind: KeyKind, attributes: Vec<AttributeDefinition>) -> DimensionDefinition {
+fn natural_key_attribute() -> AttributeDefinition {
+    AttributeDefinition {
+        ulid: NATURAL_KEY,
+        name: "ID".into(),
+        kind: AttributeKind::Text,
+    }
+}
+
+fn definition(attributes: Vec<AttributeDefinition>) -> DimensionDefinition {
     DimensionDefinition {
         ulid: DEPARTMENT,
         name: "部門".into(),
         kind: DimensionKind::Ordinary,
-        key_kind,
-        attributes,
+        natural_key_attribute: NATURAL_KEY,
+        attributes: [vec![natural_key_attribute()], attributes].concat(),
     }
 }
 
@@ -28,7 +38,15 @@ fn division_attribute(target: DimensionGlobalId) -> AttributeDefinition {
     AttributeDefinition {
         ulid: DIVISION_ATTRIBUTE,
         name: "事業部".into(),
-        target,
+        kind: AttributeKind::Reference(target),
+    }
+}
+
+fn name_attribute() -> AttributeDefinition {
+    AttributeDefinition {
+        ulid: NAME_ATTRIBUTE,
+        name: "名前".into(),
+        kind: AttributeKind::Text,
     }
 }
 
@@ -63,7 +81,7 @@ fn nullable_batch(definition: &DimensionDefinition, columns: Vec<ArrayRef>) -> R
 }
 
 fn departments() -> Dimension {
-    let definition = definition(KeyKind::Name, vec![division_attribute(DIVISION)]);
+    let definition = definition(vec![division_attribute(DIVISION)]);
     let columns = vec![
         ulids(&[Some(1), Some(2), Some(3)]),
         strings(&[Some("営業部"), Some("開発部"), Some("総務部")]),
@@ -82,8 +100,8 @@ fn definition_without_attributes(ulid: DimensionGlobalId) -> DimensionDefinition
         ulid,
         name: "事業部".into(),
         kind: DimensionKind::Ordinary,
-        key_kind: KeyKind::Name,
-        attributes: vec![],
+        natural_key_attribute: NATURAL_KEY,
+        attributes: vec![natural_key_attribute()],
     }
 }
 
@@ -97,21 +115,24 @@ fn divisions() -> Dimension {
 }
 
 #[test]
-fn member_is_found_by_member_id_ulid_and_key() {
+fn member_is_found_by_member_index_ulid_and_natural_key() {
     let dimension = departments();
-    let sales = dimension.member_by_key("営業部").unwrap();
+    let sales = dimension.member_by_natural_key("営業部").unwrap();
     assert_eq!(sales.id(), MemberIndex(0));
     assert_eq!(sales.ulid(), MemberGlobalId(Ulid(1)));
     assert_eq!(
         dimension
             .member_by_ulid(MemberGlobalId(Ulid(2)))
             .unwrap()
-            .name(),
+            .natural_key(),
         "開発部"
     );
-    assert_eq!(dimension.member(MemberIndex(2)).unwrap().key(), "総務部");
+    assert_eq!(
+        dimension.member(MemberIndex(2)).unwrap().natural_key(),
+        "総務部"
+    );
     assert!(dimension.member(MemberIndex(3)).is_none());
-    assert!(dimension.member_by_key("経理部").is_none());
+    assert!(dimension.member_by_natural_key("経理部").is_none());
     assert!(dimension.member_by_ulid(MemberGlobalId(Ulid(9))).is_none());
     assert_eq!(dimension.name(), "部門");
     assert_eq!(dimension.len(), 3);
@@ -119,35 +140,86 @@ fn member_is_found_by_member_id_ulid_and_key() {
 }
 
 #[test]
-fn code_key_lets_names_repeat() {
-    let definition = definition(KeyKind::Code, vec![]);
+fn other_text_attributes_may_repeat_or_be_null() {
+    let definition = definition(vec![name_attribute()]);
     let columns = vec![
-        ulids(&[Some(1), Some(2)]),
-        strings(&[Some("その他"), Some("その他")]),
-        strings(&[Some("4110"), Some("5110")]),
+        ulids(&[Some(1), Some(2), Some(3)]),
+        strings(&[Some("4110"), Some("5110"), Some("6110")]),
+        strings(&[Some("その他"), Some("その他"), None]),
     ];
     let dimension =
         Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap();
     assert_eq!(dimension.definition(), &definition);
-    let member = dimension.member_by_key("5110").unwrap();
+    let member = dimension.member_by_natural_key("5110").unwrap();
     assert_eq!(member.id(), MemberIndex(1));
-    assert_eq!(member.name(), "その他");
+    let name = dimension.text_attribute("名前").unwrap();
+    assert_eq!(name.value(member.id()), Some("その他"));
+    assert_eq!(name.value(MemberIndex(2)), None);
+    assert_eq!(name.value(MemberIndex(3)), None);
+    assert_eq!(dimension.natural_key_attribute().name(), "ID");
+    assert_eq!(dimension.natural_key_attribute().ulid(), NATURAL_KEY);
+    let schema = definition.schema();
+    assert!(!schema.field(1).is_nullable());
+    assert!(schema.field(2).is_nullable());
+}
+
+#[test]
+fn natural_key_may_come_after_other_attributes() {
+    let mut definition = definition(vec![name_attribute()]);
+    definition.attributes.reverse();
+    let columns = vec![
+        ulids(&[Some(1)]),
+        strings(&[Some("その他")]),
+        strings(&[Some("4110")]),
+    ];
+    let dimension =
+        Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap();
+    assert_eq!(
+        dimension.member_by_natural_key("4110").unwrap().id(),
+        MemberIndex(0)
+    );
+    assert_eq!(dimension.natural_key_attribute().name(), "ID");
+}
+
+#[test]
+fn natural_key_that_is_missing_or_not_a_text_attribute_is_rejected() {
+    let mut reference = definition(vec![division_attribute(DIVISION)]);
+    reference.natural_key_attribute = DIVISION_ATTRIBUTE;
+    let columns = vec![
+        ulids(&[]),
+        strings(&[]),
+        Arc::new(UInt32Array::from(Vec::<u32>::new())) as ArrayRef,
+    ];
+    let reference_batch = nullable_batch(&reference, columns);
+    assert_eq!(
+        Dimension::try_new(reference, reference_batch, &[&divisions()]).unwrap_err(),
+        DimensionError::NaturalKeyIsNotATextAttribute(DIVISION_ATTRIBUTE)
+    );
+
+    let mut missing = definition(vec![]);
+    missing.natural_key_attribute = NAME_ATTRIBUTE;
+    let missing_batch = nullable_batch(&missing, vec![ulids(&[]), strings(&[])]);
+    assert_eq!(
+        Dimension::try_new(missing, missing_batch, &[]).unwrap_err(),
+        DimensionError::MissingNaturalKey(NAME_ATTRIBUTE)
+    );
 }
 
 #[test]
 fn attribute_value_is_a_member_of_the_target_dimension_or_none() {
     let dimension = departments();
-    let attribute = dimension.attribute("事業部").unwrap();
+    let attribute = dimension.reference_attribute("事業部").unwrap();
     assert_eq!(attribute.target(), DIVISION);
     assert_eq!(attribute.value(MemberIndex(1)), Some(MemberIndex(1)));
     assert_eq!(attribute.value(MemberIndex(2)), None);
     assert_eq!(attribute.value(MemberIndex(3)), None);
-    assert!(dimension.attribute("地域").is_none());
+    assert!(dimension.reference_attribute("地域").is_none());
+    assert!(dimension.reference_attribute("ID").is_none());
 }
 
 #[test]
 fn attribute_without_its_target_dimension_is_rejected() {
-    let definition = definition(KeyKind::Name, vec![division_attribute(DIVISION)]);
+    let definition = definition(vec![division_attribute(DIVISION)]);
     let columns = vec![
         ulids(&[Some(1)]),
         strings(&[Some("営業部")]),
@@ -170,7 +242,7 @@ fn attribute_without_its_target_dimension_is_rejected() {
 
 #[test]
 fn attribute_value_outside_the_target_dimension_is_rejected() {
-    let definition = definition(KeyKind::Name, vec![division_attribute(DIVISION)]);
+    let definition = definition(vec![division_attribute(DIVISION)]);
     let columns = vec![
         ulids(&[Some(1)]),
         strings(&[Some("営業部")]),
@@ -194,7 +266,7 @@ fn attribute_value_outside_the_target_dimension_is_rejected() {
 
 #[test]
 fn attribute_pointing_at_its_own_dimension_is_rejected() {
-    let definition = definition(KeyKind::Name, vec![division_attribute(DEPARTMENT)]);
+    let definition = definition(vec![division_attribute(DEPARTMENT)]);
     let columns = vec![
         ulids(&[Some(1)]),
         strings(&[Some("営業部")]),
@@ -208,7 +280,7 @@ fn attribute_pointing_at_its_own_dimension_is_rejected() {
 fn repeated_attribute_name_is_rejected() {
     let mut second = division_attribute(DIVISION);
     second.ulid = AttributeGlobalId(Ulid(301));
-    let definition = definition(KeyKind::Name, vec![division_attribute(DIVISION), second]);
+    let definition = definition(vec![division_attribute(DIVISION), second]);
     let columns = vec![
         ulids(&[Some(1)]),
         strings(&[Some("営業部")]),
@@ -223,7 +295,7 @@ fn repeated_attribute_name_is_rejected() {
 fn repeated_attribute_ulid_is_rejected() {
     let mut second = division_attribute(DIVISION);
     second.name = "本部".into();
-    let definition = definition(KeyKind::Name, vec![division_attribute(DIVISION), second]);
+    let definition = definition(vec![division_attribute(DIVISION), second]);
     let columns = vec![
         ulids(&[Some(1)]),
         strings(&[Some("営業部")]),
@@ -239,8 +311,8 @@ fn repeated_attribute_ulid_is_rejected() {
 
 #[test]
 fn batch_not_matching_the_definition_is_rejected() {
-    let with_attribute = definition(KeyKind::Name, vec![division_attribute(DIVISION)]);
-    let without_attribute = definition(KeyKind::Name, vec![]);
+    let with_attribute = definition(vec![division_attribute(DIVISION)]);
+    let without_attribute = definition(vec![]);
     let columns = vec![ulids(&[Some(1)]), strings(&[Some("営業部")])];
     let err =
         Dimension::try_new(with_attribute, batch(&without_attribute, columns), &[]).unwrap_err();
@@ -249,7 +321,7 @@ fn batch_not_matching_the_definition_is_rejected() {
 
 #[test]
 fn null_ulid_is_rejected() {
-    let definition = definition(KeyKind::Name, vec![]);
+    let definition = definition(vec![]);
     let null = nullable_batch(
         &definition,
         vec![ulids(&[None]), strings(&[Some("営業部")])],
@@ -262,7 +334,7 @@ fn null_ulid_is_rejected() {
 
 #[test]
 fn repeated_ulid_is_rejected() {
-    let definition = definition(KeyKind::Name, vec![]);
+    let definition = definition(vec![]);
     let repeated = batch(
         &definition,
         vec![
@@ -277,18 +349,18 @@ fn repeated_ulid_is_rejected() {
 }
 
 #[test]
-fn null_name_is_rejected() {
-    let definition = definition(KeyKind::Name, vec![]);
+fn null_natural_key_is_rejected() {
+    let definition = definition(vec![]);
     let null = nullable_batch(&definition, vec![ulids(&[Some(1)]), strings(&[None])]);
     assert_eq!(
         Dimension::try_new(definition, null, &[]).unwrap_err(),
-        DimensionError::NullName(MemberIndex(0))
+        DimensionError::NullNaturalKey(MemberIndex(0))
     );
 }
 
 #[test]
-fn repeated_key_is_rejected() {
-    let definition = definition(KeyKind::Name, vec![]);
+fn repeated_natural_key_is_rejected() {
+    let definition = definition(vec![]);
     let repeated = batch(
         &definition,
         vec![
@@ -298,33 +370,16 @@ fn repeated_key_is_rejected() {
     );
     assert_eq!(
         Dimension::try_new(definition, repeated, &[]).unwrap_err(),
-        DimensionError::DuplicateKey("営業部".into())
+        DimensionError::DuplicateNaturalKey("営業部".into())
     );
 }
 
 #[test]
 fn values_array_is_shared_for_vectorized_by() {
     let dimension = departments();
-    let values = dimension.attribute("事業部").unwrap().values();
+    let values = dimension.reference_attribute("事業部").unwrap().values();
     assert_eq!(values.len(), 3);
     assert!(values.is_null(2));
-}
-
-#[test]
-fn null_code_is_rejected() {
-    let definition = definition(KeyKind::Code, vec![]);
-    let null = nullable_batch(
-        &definition,
-        vec![
-            ulids(&[Some(1)]),
-            strings(&[Some("その他")]),
-            strings(&[None]),
-        ],
-    );
-    assert_eq!(
-        Dimension::try_new(definition, null, &[]).unwrap_err(),
-        DimensionError::NullKey(MemberIndex(0))
-    );
 }
 
 #[test]
@@ -337,15 +392,16 @@ fn debug_output_names_the_member_not_the_whole_dimension() {
 
 #[test]
 fn renaming_an_attribute_keeps_its_column_name() {
-    let before = definition(KeyKind::Name, vec![division_attribute(DIVISION)]);
+    let before = definition(vec![division_attribute(DIVISION)]);
     let mut after = before.clone();
-    after.attributes[0].name = "本部".into();
+    after.attributes[0].name = "コード".into();
+    after.attributes[1].name = "本部".into();
     assert_eq!(before.schema(), after.schema());
 }
 
 #[test]
 fn dimension_without_members_is_empty() {
-    let definition = definition(KeyKind::Name, vec![]);
+    let definition = definition(vec![]);
     let dimension = Dimension::try_new(
         definition.clone(),
         batch(&definition, vec![ulids(&[]), strings(&[])]),
@@ -357,10 +413,10 @@ fn dimension_without_members_is_empty() {
 
 #[test]
 fn column_with_the_right_name_but_wrong_type_is_rejected() {
-    let definition = definition(KeyKind::Name, vec![]);
+    let definition = definition(vec![]);
     let fields = vec![
         Field::new("ulid", DataType::FixedSizeBinary(16), false),
-        Field::new("name", DataType::LargeUtf8, false),
+        Field::new(NATURAL_KEY.0.to_string(), DataType::LargeUtf8, false),
     ];
     let columns: Vec<ArrayRef> = vec![
         ulids(&[Some(1)]),

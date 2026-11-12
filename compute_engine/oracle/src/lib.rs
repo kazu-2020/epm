@@ -26,7 +26,7 @@ impl Oracle {
                 member_table(dimension.ulid()),
                 dimension.len()
             ))?;
-            for attribute in dimension.attributes() {
+            for attribute in dimension.reference_attributes() {
                 let table = attribute_table(attribute.ulid());
                 connection.execute_batch(&format!(
                     "CREATE TABLE {table} (member UINTEGER NOT NULL, target UINTEGER)"
