@@ -70,7 +70,7 @@ curl -X POST "$api/GetLag" -d '{}'
 
 - `SubmitEdit` returns `{"sequence": N}`. A `null` value clears the cell. If you send the same `request_id` again, you get the same sequence.
 - `ReadCells` returns `{"recalculated": N, "values": [...]}`. The values include all commits up to `at_least` or later. If you leave out `at_least`, you get the values that are published now.
-- A value is `null` if the cell is empty or if a member of the coordinate is not in its dimension.
+- A value is `null` if the cell is empty. A member that is not in its dimension is an error, the same as in an edit.
 - `GetLag` returns the last committed and the last recalculated sequence.
 - `recalculated` and `committed` are `null` until the first commit is recalculated or committed.
 
@@ -80,7 +80,7 @@ The errors in this table have the body `{"code": ..., "message": ...}` with a Co
 
 | Error | Code | HTTP status |
 | --- | --- | --- |
-| Malformed JSON, wrong content type, bad ULID, edit to a calculated measure, coordinate of the wrong length, member out of range in an edit | `invalid_argument` | 400 |
+| Malformed JSON, wrong content type, bad ULID, edit to a calculated measure, coordinate of the wrong length, member out of range | `invalid_argument` | 400 |
 | Unknown measure in a read | `not_found` | 404 |
 | The engine is too far behind | `resource_exhausted` | 429 |
 | The sequence is not committed yet | `unavailable` | 503 |

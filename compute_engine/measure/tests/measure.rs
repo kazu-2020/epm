@@ -113,6 +113,21 @@ fn cell_is_read_by_its_member_ids_and_missing_cells_are_empty() {
 }
 
 #[test]
+fn reading_a_member_outside_the_dimension_is_an_error_like_writing_it() {
+    let measure = sales();
+    let outside = MeasureError::MemberOutOfRange {
+        axis: DEPARTMENT,
+        member: MemberIndex(2),
+    };
+
+    assert_eq!(measure.get(&coordinate(0, 2)).unwrap_err(), outside);
+    assert_eq!(
+        measure.delta().set(&coordinate(0, 2), 1.0).unwrap_err(),
+        outside
+    );
+}
+
+#[test]
 fn measure_without_cells_is_valid() {
     let measure = try_sales(&[]).unwrap();
     assert_eq!(

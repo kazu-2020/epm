@@ -411,21 +411,7 @@ impl Measure {
     }
 
     pub fn get(&self, coordinate: &[MemberIndex]) -> Result<Option<f64>, MeasureError> {
-        if coordinate.len() != self.axes.len() {
-            return Err(MeasureError::CoordinateLength {
-                expected: self.axes.len(),
-                found: coordinate.len(),
-            });
-        }
-        if self
-            .axes
-            .iter()
-            .zip(coordinate)
-            .any(|(axis, member)| member.0 >= axis.len)
-        {
-            return Ok(None);
-        }
-        let packed = self.packing.pack(coordinate.iter().map(|member| member.0));
+        let packed = pack_checked(&self.axes, &self.packing, coordinate)?;
         for delta in self.deltas.iter().rev() {
             if let Ok(change) = delta.packed_coordinates.binary_search(&packed) {
                 return Ok(delta.changes[change]);
