@@ -229,6 +229,14 @@ fn normalize_turns_non_finite_into_empty_and_negative_zero_into_zero() {
     assert_eq!(normalize(1.5), Some(1.5));
 }
 
+fn merged_changes(measure: &Measure) -> Vec<(Vec<MemberIndex>, Option<f64>)> {
+    let (keys, changes) = measure.merged_changes();
+    keys.iter()
+        .map(|&key| measure.layout().members(key).map(MemberIndex).collect())
+        .zip(changes)
+        .collect()
+}
+
 #[test]
 fn delta_overrides_base_and_newer_delta_wins() {
     let measure = sales();
@@ -246,16 +254,11 @@ fn delta_overrides_base_and_newer_delta_wins() {
     assert_eq!(measure.get(&coordinate(1, 1)).unwrap(), Some(6.0));
     assert_eq!(measure.get(&coordinate(2, 0)).unwrap(), Some(30.0));
     assert_eq!(measure.delta_len(), 4);
-    let changes: Vec<(Vec<MemberIndex>, Option<f64>)> = measure
-        .changes()
-        .map(|(coordinate, value)| (coordinate.to_vec(), value))
-        .collect();
     assert_eq!(
-        changes,
+        merged_changes(&measure),
         [
             (coordinate(0, 0).to_vec(), Some(11.0)),
             (coordinate(0, 1).to_vec(), None),
-            (coordinate(1, 1).to_vec(), Some(5.0)),
             (coordinate(1, 1).to_vec(), Some(6.0)),
         ]
     );
@@ -269,7 +272,6 @@ fn later_write_in_one_delta_replaces_the_earlier_one() {
     delta.set(&coordinate(0, 1), 3.0).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
     assert!(!delta.is_empty());
-    assert_eq!(delta.len(), 2);
     assert_eq!(delta.keys().len(), 2);
     assert!(delta.keys().is_sorted());
     let measure = measure.apply(delta).unwrap();
@@ -428,12 +430,8 @@ fn delta_lists_each_coordinate_with_its_latest_change() {
     delta.set(&coordinate(1, 0), 1.0).unwrap();
     delta.delete(&coordinate(0, 1)).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
-    let changes: Vec<(Vec<MemberIndex>, Option<f64>)> = delta
-        .changes()
-        .map(|(coordinate, change)| (coordinate.to_vec(), change))
-        .collect();
     assert_eq!(
-        changes,
+        merged_changes(&measure.apply(delta).unwrap()),
         vec![
             (coordinate(0, 1).to_vec(), None),
             (coordinate(1, 0).to_vec(), Some(2.0))
@@ -481,8 +479,7 @@ fn folding_deltas_keeps_the_cells_that_only_one_delta_changes() {
             measure = measure.apply(delta).unwrap();
         }
 
-        let changes: Vec<(Vec<MemberIndex>, Option<f64>)> =
-            measure.fold_deltas().changes().collect();
+        let changes = merged_changes(&measure.fold_deltas());
 
         let mut expected: Vec<(Vec<MemberIndex>, Option<f64>)> = older
             .iter()
@@ -676,8 +673,7 @@ fn values_that_fill_their_buffer_are_kept_without_a_copy() {
     let measure = Measure::try_new(definition, batch, &[&periods(), &departments()]).unwrap();
     assert!(measure.values().inner().ptr_eq(given.inner()));
     assert_eq!(measure.values().to_vec(), vec![1.0, 3.0]);
-    assert_eq!(measure.len(), 2);
-    assert!(!measure.is_empty());
+
     let batch =
         RecordBatch::try_new(Arc::new(measure.definition().schema()), crate::columns(&[])).unwrap();
     let empty = Measure::try_new(
@@ -686,7 +682,7 @@ fn values_that_fill_their_buffer_are_kept_without_a_copy() {
         &[&periods(), &departments()],
     )
     .unwrap();
-    assert!(empty.is_empty());
+    assert!(empty.values().is_empty());
 }
 
 #[test]

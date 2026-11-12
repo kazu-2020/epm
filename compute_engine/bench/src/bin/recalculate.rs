@@ -23,12 +23,12 @@ fn main() -> std::io::Result<()> {
         .map(|measure| measure.definition().clone())
         .chain(formulas.iter().map(|formula| formula.result.clone()))
         .collect();
-    let mut cells: usize = measures.iter().map(|measure| measure.len()).sum();
+    let mut cells: usize = measures.iter().map(|measure| measure.values().len()).sum();
     for measure in &measures {
         eprintln!(
             "{}\t{}\tinput\t{} axes\t{} bytes",
             measure.definition().name,
-            measure.len(),
+            measure.values().len(),
             measure.definition().axes.len(),
             measure.keys().inner().capacity() + measure.values().inner().capacity()
         );
@@ -52,13 +52,13 @@ fn main() -> std::io::Result<()> {
         eprintln!(
             "{}\t{}\t{:.3}s\t{} axes\t{} bytes\t{}",
             formula.result.name,
-            result.len(),
+            result.values().len(),
             step.elapsed().as_secs_f64(),
             result.definition().axes.len(),
             result.keys().inner().capacity() + result.values().inner().capacity(),
             memory()
         );
-        cells += result.len();
+        cells += result.values().len();
         measures.push(result);
     }
     println!(
@@ -94,7 +94,7 @@ fn main() -> std::io::Result<()> {
         eprintln!(
             "unique\t{}\t{}\tkeys {keys}\tvalues {values}{hash}",
             measure.definition().name,
-            measure.len(),
+            measure.values().len(),
         );
     }
     Ok(())

@@ -169,5 +169,5 @@ fn the_quantity_has_exactly_the_requested_cells_when_they_do_not_divide_evenly()
         .iter()
         .find(|input| input.definition().name == "数量")
         .expect("the quantity is an input");
-    assert_eq!(quantity.len(), size.quantity_cells);
+    assert_eq!(quantity.cells().len(), size.quantity_cells);
 }

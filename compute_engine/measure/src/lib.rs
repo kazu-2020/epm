@@ -354,17 +354,16 @@ impl Measure {
 
     pub fn cells(&self) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, f64)> {
         let measure = self.compact();
-        (0..measure.values.len()).map(move |row| measure.cell(row))
-    }
-
-    pub fn cell(&self, row: usize) -> (Vec<MemberIndex>, f64) {
-        (
-            self.layout
-                .members(self.keys[row])
-                .map(MemberIndex)
-                .collect(),
-            self.values[row],
-        )
+        (0..measure.values.len()).map(move |row| {
+            (
+                measure
+                    .layout
+                    .members(measure.keys[row])
+                    .map(MemberIndex)
+                    .collect(),
+                measure.values[row],
+            )
+        })
     }
 
     pub fn definition(&self) -> &MeasureDefinition {
@@ -373,14 +372,6 @@ impl Measure {
 
     pub fn ulid(&self) -> MeasureGlobalId {
         self.definition.ulid
-    }
-
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
     }
 
     pub fn layout(&self) -> &KeyLayout {
@@ -410,10 +401,6 @@ impl Measure {
         columns.push(Arc::new(Float64Array::new(self.values.clone(), None)));
         RecordBatch::try_new(Arc::new(self.definition.schema()), columns)
             .expect("the unpacked columns follow the measure schema")
-    }
-
-    pub fn changes(&self) -> impl Iterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
-        self.deltas.iter().flat_map(|delta| delta.listed())
     }
 
     pub fn merged_changes(&self) -> (Vec<u64>, Vec<Option<f64>>) {
@@ -624,11 +611,6 @@ impl Delta {
         Ok(())
     }
 
-    pub fn len(&mut self) -> usize {
-        self.settle();
-        self.keys.len()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
@@ -636,20 +618,6 @@ impl Delta {
     pub fn keys(&mut self) -> &[u64] {
         self.settle();
         &self.keys
-    }
-
-    pub fn changes(
-        &mut self,
-    ) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
-        self.settle();
-        self.listed()
-    }
-
-    fn listed(&self) -> impl ExactSizeIterator<Item = (Vec<MemberIndex>, Option<f64>)> + '_ {
-        self.keys
-            .iter()
-            .zip(&self.changes)
-            .map(|(&key, &change)| (self.layout.members(key).map(MemberIndex).collect(), change))
     }
 
     fn check(&self, coordinate: &[MemberIndex]) -> Result<(), MeasureError> {
