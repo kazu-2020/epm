@@ -107,8 +107,8 @@ async fn run(
     wait: Duration,
 ) -> (Option<Exit>, Vec<String>) {
     let (endpoint, seen) = fake_s3(statuses);
-    let (_requests, receiver) = mpsc::channel(1);
-    let (committed, _passed_on) = mpsc::unbounded_channel();
+    let (_submission_sender, submission_receiver) = mpsc::channel(1);
+    let (commit_sender, _commit_receiver) = mpsc::unbounded_channel();
     let exit = tokio::time::timeout(
         wait,
         serve(
@@ -117,8 +117,8 @@ async fn run(
             Epoch(1),
             Start::default(),
             AdmitAll,
-            receiver,
-            committed,
+            submission_receiver,
+            commit_sender,
         ),
     )
     .await

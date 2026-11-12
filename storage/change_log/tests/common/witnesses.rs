@@ -13,7 +13,7 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let mut applied: BTreeSet<(u64, Sequence)> = BTreeSet::new();
     let history = &outcome.history;
     let (segments, _) = replay(&outcome.store);
-    let passes_on: BTreeSet<u64> = history
+    let epochs_that_pass_on: BTreeSet<u64> = history
         .iter()
         .filter_map(|record| match record {
             Record::Granted {
@@ -30,7 +30,7 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
             Record::PassedOn { epoch, commit } => Some((*epoch, commit.sequence)),
             Record::Acked {
                 epoch, sequence, ..
-            } if !passes_on.contains(epoch) => Some((*epoch, *sequence)),
+            } if !epochs_that_pass_on.contains(epoch) => Some((*epoch, *sequence)),
             _ => None,
         })
         .collect();

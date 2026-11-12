@@ -230,7 +230,7 @@ struct Replay {
     writes_in_flight: BTreeMap<Write, Segment>,
     replies: BTreeSet<Reply>,
     acknowledged: BTreeSet<String>,
-    passed_on: BTreeMap<String, Sequence>,
+    next_to_pass_on: BTreeMap<String, Sequence>,
 }
 
 impl Driver for Replay {
@@ -243,11 +243,11 @@ impl Driver for Replay {
             grant(server: String) => {
                 self.granted_epoch += 1;
                 self.owners.insert(server.clone(), Owner::new(Epoch(self.granted_epoch), AdmitAll));
-                self.passed_on.insert(server, Sequence(0));
+                self.next_to_pass_on.insert(server, Sequence(0));
             },
             crash(server: String) => {
                 self.owners.remove(&server);
-                self.passed_on.remove(&server);
+                self.next_to_pass_on.remove(&server);
             },
             load(server: String) => {
                 let slots = self.slots.clone();
@@ -310,14 +310,14 @@ impl Replay {
                 }
                 Effect::Committed { commit, .. } => {
                     let logged = self.log().get(commit.sequence.index()) == Some(&&commit);
-                    let passed_on = self
-                        .passed_on
+                    let next_to_pass_on = self
+                        .next_to_pass_on
                         .get_mut(server)
                         .context("a granted owner counts its commits")?;
-                    if commit.sequence != *passed_on || !logged {
-                        bail!("{server} passed on {commit:?} when {passed_on:?} was next");
+                    if commit.sequence != *next_to_pass_on || !logged {
+                        bail!("{server} passed on {commit:?} when {next_to_pass_on:?} was next");
                     }
-                    *passed_on = passed_on.next();
+                    *next_to_pass_on = next_to_pass_on.next();
                 }
                 Effect::Ack {
                     request_id,
@@ -327,10 +327,14 @@ impl Replay {
                         .log()
                         .get(sequence.index())
                         .map(|commit| &commit.request_id);
-                    let passed_on = self.passed_on.get(server).copied().unwrap_or_default();
-                    if logged != Some(&request_id) || sequence >= passed_on {
+                    let next_to_pass_on = self
+                        .next_to_pass_on
+                        .get(server)
+                        .copied()
+                        .unwrap_or_default();
+                    if logged != Some(&request_id) || sequence >= next_to_pass_on {
                         bail!(
-                            "{server} acknowledged {request_id:?} as {sequence:?} when {passed_on:?} was next"
+                            "{server} acknowledged {request_id:?} as {sequence:?} when {next_to_pass_on:?} was next"
                         );
                     }
                     self.acknowledged.insert(name(&request_id));
