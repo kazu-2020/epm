@@ -249,19 +249,20 @@ fn dimension(
     earlier: &[Dimension],
 ) -> Dimension {
     let (attributes, targets) = attribute.unzip();
-    let definition = DimensionDefinition {
+    let definition = DimensionDefinition::try_new(
         ulid,
-        name: name.into(),
-        kind: match ulid {
+        name.into(),
+        match ulid {
             PERIOD => DimensionKind::Calendar,
             VERSION => DimensionKind::Version,
             _ => DimensionKind::Ordinary,
         },
-        natural_key_attribute: natural_key_attribute(ulid).ulid,
-        attributes: std::iter::once(natural_key_attribute(ulid))
+        natural_key_attribute(ulid).ulid,
+        std::iter::once(natural_key_attribute(ulid))
             .chain(attributes)
             .collect(),
-    };
+    )
+    .expect("the representative dimension definitions are valid");
     let first_member = ulid.0.0 << 32;
     let ulids = FixedSizeBinaryArray::try_from_iter(
         (0..names.len()).map(|row| Ulid(first_member + row as u128).to_bytes()),

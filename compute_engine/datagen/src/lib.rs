@@ -99,18 +99,19 @@ impl Generator<'_> {
                 kind: AttributeKind::Reference(parent.ulid()),
             }))
             .collect();
-        let definition = DimensionDefinition {
+        let definition = DimensionDefinition::try_new(
             ulid,
-            name: format!("D{index}"),
+            format!("D{index}"),
             // Not the ULID order: the last dimensions lead the cell key, so the tests meet keys in the other order.
-            kind: match self.configuration.dimension_count - index {
+            match self.configuration.dimension_count - index {
                 1 => DimensionKind::Calendar,
                 2 => DimensionKind::Version,
                 _ => DimensionKind::Ordinary,
             },
-            natural_key_attribute: natural_key_ulid,
+            natural_key_ulid,
             attributes,
-        };
+        )
+        .expect("generated attributes have unique names and ULIDs");
         let ulids = FixedSizeBinaryArray::try_from_iter((0..len).map(|_| self.ulid().to_bytes()))
             .expect("every member ULID is 16 bytes");
         let names = StringArray::from_iter_values((0..len).map(|member| format!("m{member}")));

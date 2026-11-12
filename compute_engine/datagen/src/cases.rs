@@ -374,24 +374,25 @@ fn dimension(
     attribute_values: &[Option<u32>],
     targets: &[&Dimension],
 ) -> Dimension {
-    let definition = DimensionDefinition {
+    let definition = DimensionDefinition::try_new(
         ulid,
-        name: name.into(),
-        kind: if ulid == PERIOD {
+        name.into(),
+        if ulid == PERIOD {
             DimensionKind::Calendar
         } else {
             DimensionKind::Ordinary
         },
-        natural_key_attribute: natural_key_attribute(ulid).ulid,
-        attributes: [vec![natural_key_attribute(ulid)], attributes].concat(),
-    };
+        natural_key_attribute(ulid).ulid,
+        [vec![natural_key_attribute(ulid)], attributes].concat(),
+    )
+    .unwrap();
     let ulids = FixedSizeBinaryArray::try_from_iter(
         (0..names.len()).map(|row| Ulid(ulid.0.0 * 100 + row as u128).to_bytes()),
     )
     .unwrap();
     let mut columns: Vec<ArrayRef> =
         vec![Arc::new(ulids), Arc::new(StringArray::from(names.to_vec()))];
-    if definition.attributes.len() > 1 {
+    if definition.attributes().len() > 1 {
         columns.push(Arc::new(UInt32Array::from(attribute_values.to_vec())));
     }
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();

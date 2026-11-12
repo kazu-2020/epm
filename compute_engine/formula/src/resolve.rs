@@ -156,10 +156,10 @@ impl<'a> Resolver<'a> {
         };
         let dimension = dimension.definition();
         Ok(match &axis.attribute {
-            None => ResolvedAxisKind::Dimension(dimension.ulid),
+            None => ResolvedAxisKind::Dimension(dimension.ulid()),
             Some(name) => {
                 let Some(attribute) = dimension
-                    .attributes
+                    .attributes()
                     .iter()
                     .find(|attribute| attribute.name == *name)
                 else {
@@ -169,7 +169,7 @@ impl<'a> Resolver<'a> {
                     return Err(ResolveErrorKind::TextAttributeAsAxis);
                 };
                 ResolvedAxisKind::Attribute {
-                    dimension: dimension.ulid,
+                    dimension: dimension.ulid(),
                     attribute: attribute.ulid,
                     target,
                 }

@@ -63,7 +63,7 @@ fn render_axis(axis: &ResolvedAxis) -> String {
         } => {
             let attribute = common::dimensions()
                 .into_iter()
-                .flat_map(|dimension| dimension.attributes)
+                .flat_map(|dimension| dimension.attributes().to_vec())
                 .find(|candidate| candidate.ulid == attribute)
                 .expect("resolution points at a fixture attribute");
             format!(
