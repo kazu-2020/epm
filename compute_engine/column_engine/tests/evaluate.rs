@@ -129,7 +129,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &[&one_period, departments, divisions]
         )
         .unwrap_err(),
-        EvaluateError::MeasureLayoutChanged(fixture.definition("売上").ulid)
+        EvaluateError::MeasurePackingChanged(fixture.definition("売上").ulid)
     );
     let without_axes = MeasureDefinition {
         ulid: MeasureGlobalId(Ulid(99)),

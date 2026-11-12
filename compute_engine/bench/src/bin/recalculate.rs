@@ -23,14 +23,18 @@ fn main() -> std::io::Result<()> {
         .map(|measure| measure.definition().clone())
         .chain(formulas.iter().map(|formula| formula.result.clone()))
         .collect();
-    let mut cells: usize = measures.iter().map(|measure| measure.values().len()).sum();
+    let mut cells: usize = measures
+        .iter()
+        .map(|measure| measure.base_values().len())
+        .sum();
     for measure in &measures {
         eprintln!(
             "{}\t{}\tinput\t{} axes\t{} bytes",
             measure.definition().name,
-            measure.values().len(),
+            measure.base_values().len(),
             measure.definition().axes.len(),
-            measure.keys().inner().capacity() + measure.values().inner().capacity()
+            measure.base_packed_coordinates().inner().capacity()
+                + measure.base_values().inner().capacity()
         );
     }
     eprintln!("after read\t{}", memory());
@@ -52,13 +56,14 @@ fn main() -> std::io::Result<()> {
         eprintln!(
             "{}\t{}\t{:.3}s\t{} axes\t{} bytes\t{}",
             formula.result.name,
-            result.values().len(),
+            result.base_values().len(),
             step.elapsed().as_secs_f64(),
             result.definition().axes.len(),
-            result.keys().inner().capacity() + result.values().inner().capacity(),
+            result.base_packed_coordinates().inner().capacity()
+                + result.base_values().inner().capacity(),
             memory()
         );
-        cells += result.values().len();
+        cells += result.base_values().len();
         measures.push(result);
     }
     println!(
@@ -79,12 +84,12 @@ fn main() -> std::io::Result<()> {
                 0
             }
         };
-        let keys = fresh(measure.keys().inner());
-        let values = fresh(measure.values().inner());
+        let keys = fresh(measure.base_packed_coordinates().inner());
+        let values = fresh(measure.base_values().inner());
         let hash = if hash {
             let mut hasher = std::hash::DefaultHasher::new();
-            std::hash::Hash::hash_slice(measure.keys(), &mut hasher);
-            for value in measure.values().iter() {
+            std::hash::Hash::hash_slice(measure.base_packed_coordinates(), &mut hasher);
+            for value in measure.base_values().iter() {
                 std::hash::Hash::hash(&value.to_bits(), &mut hasher);
             }
             format!("\thash {:016x}", std::hash::Hasher::finish(&hasher))
@@ -94,7 +99,7 @@ fn main() -> std::io::Result<()> {
         eprintln!(
             "unique\t{}\t{}\tkeys {keys}\tvalues {values}{hash}",
             measure.definition().name,
-            measure.values().len(),
+            measure.base_values().len(),
         );
     }
     Ok(())

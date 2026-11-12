@@ -317,8 +317,8 @@ impl Dimension {
         &self.definition.name
     }
 
-    // Not the ULID alone: with the calendar and the version first, one period or version is one range of sorted keys.
-    pub fn key_order(&self) -> (DimensionKind, DimensionGlobalId) {
+    // Not the ULID alone: with the calendar and the version first, one period or version is one range of sorted packed coordinates.
+    pub fn packing_order(&self) -> (DimensionKind, DimensionGlobalId) {
         (self.definition.kind, self.definition.ulid)
     }
 

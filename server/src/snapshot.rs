@@ -87,17 +87,17 @@ fn encode_in_chunks(
     for input in &snapshot.inputs {
         let compact = input.compact();
         let mut chunks = Vec::new();
-        let keys = compact.keys().chunks(cells_per_chunk);
-        let values = compact.values().chunks(cells_per_chunk);
-        for (index, (keys, values)) in keys.zip(values).enumerate() {
-            let mut out = BytesMut::with_capacity(keys.len() * 9);
+        let packed_coordinates = compact.base_packed_coordinates().chunks(cells_per_chunk);
+        let values = compact.base_values().chunks(cells_per_chunk);
+        for (index, (packed_coordinates, values)) in packed_coordinates.zip(values).enumerate() {
+            let mut out = BytesMut::with_capacity(packed_coordinates.len() * 9);
             let mut previous = 0;
-            for (&key, &value) in keys.iter().zip(values) {
-                put_varint(&mut out, key - previous);
+            for (&packed, &value) in packed_coordinates.iter().zip(values) {
+                put_varint(&mut out, packed - previous);
                 out.put_f64_le(value);
-                previous = key;
+                previous = packed;
             }
-            let (chunk, bytes) = compress(keys.len(), &out);
+            let (chunk, bytes) = compress(packed_coordinates.len(), &out);
             chunks.push(chunk);
             objects.push(Object {
                 path: measure_path(compact.ulid(), index),
@@ -189,7 +189,7 @@ impl Manifest {
                 .find(|definition| definition.ulid == entry.ulid)
                 .filter(|definition| axes(definition, dimensions).as_ref() == Some(&entry.axes))
                 .ok_or(SnapshotError::Definitions(entry.ulid))?;
-            let mut keys = Vec::new();
+            let mut packed_coordinates = Vec::new();
             let mut values = Vec::new();
             for chunk in &entry.chunks {
                 let (path, bytes) = objects.next().expect("one object per path");
@@ -197,12 +197,16 @@ impl Manifest {
                     rest: decompress(*chunk, &bytes, &path)?,
                 };
                 reader
-                    .cells(chunk.count, &mut keys, &mut values)
+                    .cells(chunk.count, &mut packed_coordinates, &mut values)
                     .map_err(|_| SnapshotError::Corrupt { path })?;
             }
-            let measure =
-                Measure::try_from_keys(definition.clone(), keys.into(), values.into(), dimensions)
-                    .map_err(|error| SnapshotError::Measure(entry.ulid, error))?;
+            let measure = Measure::try_from_packed(
+                definition.clone(),
+                packed_coordinates.into(),
+                values.into(),
+                dimensions,
+            )
+            .map_err(|error| SnapshotError::Measure(entry.ulid, error))?;
             inputs.push(measure);
         }
         if let Some(unmatched) = definitions.iter().find(|definition| {
@@ -376,7 +380,7 @@ impl Reader {
     fn cells(
         &mut self,
         count: u32,
-        keys: &mut Vec<u64>,
+        packed_coordinates: &mut Vec<u64>,
         values: &mut Vec<f64>,
     ) -> Result<(), SnapshotError> {
         let bytes = &self.rest[..];
@@ -390,7 +394,7 @@ impl Reader {
                 .ok_or(SnapshotError::Truncated)?;
             let value = bytes.get(at..at + 8).ok_or(SnapshotError::Truncated)?;
             at += 8;
-            keys.push(previous);
+            packed_coordinates.push(previous);
             values.push(f64::from_le_bytes(value.try_into().expect("8 bytes")));
         }
         self.rest.advance(at);
@@ -466,9 +470,9 @@ mod tests {
             .map(|measure| {
                 (
                     measure.definition().clone(),
-                    measure.keys().to_vec(),
+                    measure.base_packed_coordinates().to_vec(),
                     measure
-                        .values()
+                        .base_values()
                         .iter()
                         .map(|value| value.to_bits())
                         .collect(),

@@ -21,29 +21,29 @@ pub(super) fn gather<T: Copy + Send + Sync>(rows: &[usize], from: &[T]) -> Vec<T
 }
 
 pub(super) fn copy_rows<Rows: Iterator<Item = usize>>(
-    from_keys: &[u64],
+    from_packed: &[u64],
     from_values: &[f64],
     counts: &[usize],
     piece_rows: impl Fn(usize) -> Rows + Sync,
 ) -> (Vec<u64>, Vec<f64>) {
     let total = counts.iter().sum();
-    let mut keys = vec![0; total];
+    let mut packed_coordinates = vec![0; total];
     let mut values = vec![0.0; total];
-    split_by_counts(&mut keys, counts)
+    split_by_counts(&mut packed_coordinates, counts)
         .into_par_iter()
         .zip(split_by_counts(&mut values, counts))
         .enumerate()
-        .for_each(|(piece, (piece_keys, piece_values))| {
-            let cells = piece_keys
+        .for_each(|(piece, (piece_packed, piece_values))| {
+            let cells = piece_packed
                 .iter_mut()
                 .zip(piece_values)
                 .zip(piece_rows(piece));
-            for ((key, value), row) in cells {
-                *key = from_keys[row];
+            for ((packed, value), row) in cells {
+                *packed = from_packed[row];
                 *value = from_values[row];
             }
         });
-    (keys, values)
+    (packed_coordinates, values)
 }
 
 fn split_by_counts<'b, T>(mut buffer: &'b mut [T], counts: &[usize]) -> Vec<&'b mut [T]> {
@@ -73,7 +73,7 @@ pub(super) fn union(left: ScalarBuffer<u64>, right: &ScalarBuffer<u64>) -> Scala
                 .map(|longer_bound| {
                     (
                         longer_bound,
-                        shorter.partition_point(|&key| key < longer[longer_bound]),
+                        shorter.partition_point(|&packed| packed < longer[longer_bound]),
                     )
                 }),
         )
@@ -97,40 +97,40 @@ pub(super) fn union(left: ScalarBuffer<u64>, right: &ScalarBuffer<u64>) -> Scala
             count
         })
         .collect();
-    let mut keys = vec![0; counts.iter().sum()];
-    split_by_counts(&mut keys, &counts)
+    let mut packed_coordinates = vec![0; counts.iter().sum()];
+    split_by_counts(&mut packed_coordinates, &counts)
         .into_par_iter()
         .zip(&ranges)
         .for_each(|(part, &(longer_range, shorter_range))| {
             let mut written = 0;
-            merge(longer_range, shorter_range, |key| {
-                part[written] = key;
+            merge(longer_range, shorter_range, |packed| {
+                part[written] = packed;
                 written += 1;
             });
         });
-    keys.into()
+    packed_coordinates.into()
 }
 
 fn merge(left: &[u64], right: &[u64], mut emit: impl FnMut(u64)) {
     let (mut left_position, mut right_position) = (0, 0);
     while left_position < left.len() || right_position < right.len() {
         let next = match (left.get(left_position), right.get(right_position)) {
-            (Some(&left_key), Some(&right_key)) if left_key == right_key => {
+            (Some(&left_packed), Some(&right_packed)) if left_packed == right_packed => {
                 left_position += 1;
                 right_position += 1;
-                left_key
+                left_packed
             }
-            (Some(&left_key), Some(&right_key)) if left_key < right_key => {
+            (Some(&left_packed), Some(&right_packed)) if left_packed < right_packed => {
                 left_position += 1;
-                left_key
+                left_packed
             }
-            (Some(&left_key), None) => {
+            (Some(&left_packed), None) => {
                 left_position += 1;
-                left_key
+                left_packed
             }
-            (_, Some(&right_key)) => {
+            (_, Some(&right_packed)) => {
                 right_position += 1;
-                right_key
+                right_packed
             }
             (None, None) => unreachable!("the loop stops when both are done"),
         };

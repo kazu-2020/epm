@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dimension::{DimensionGlobalId, MemberIndex};
-use measure::KeyLayout;
+use measure::CoordinatePacking;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Region {
@@ -28,16 +28,16 @@ impl Region {
         region.non_empty()
     }
 
-    pub(crate) fn of_keys(
+    pub(crate) fn of_packed(
         axes: &[DimensionGlobalId],
-        layout: &KeyLayout,
-        keys: &[u64],
+        packing: &CoordinatePacking,
+        packed_coordinates: &[u64],
     ) -> Option<Region> {
-        // Not BTreeSet::insert for each key: a change of hundreds of thousands of cells paid a tree insert per axis per cell.
+        // Not BTreeSet::insert for each packed coordinate: a change of hundreds of thousands of cells paid a tree insert per axis per cell.
         let mut seen: Vec<Vec<bool>> = vec![Vec::new(); axes.len()];
-        for &key in keys {
+        for &packed in packed_coordinates {
             for (axis, members) in seen.iter_mut().enumerate() {
-                let member = layout.member(key, axis) as usize;
+                let member = packing.member(packed, axis) as usize;
                 if member >= members.len() {
                     members.resize(member + 1, false);
                 }
@@ -99,22 +99,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_region_of_keys_holds_only_the_members_that_changed() {
+    fn the_region_of_packed_coordinates_holds_only_the_members_that_changed() {
         let axes = [
             DimensionGlobalId(ulid::Ulid(1)),
             DimensionGlobalId(ulid::Ulid(2)),
         ];
-        let layout = KeyLayout::new(&[8, 8]).expect("6 bits fit in a key");
+        let packing = CoordinatePacking::new(&[8, 8]).expect("6 bits fit in a packed coordinate");
         let coordinates = [
             [MemberIndex(1), MemberIndex(5)],
             [MemberIndex(3), MemberIndex(5)],
         ];
-        let keys: Vec<u64> = coordinates
+        let packed_coordinates: Vec<u64> = coordinates
             .iter()
-            .map(|coordinate| layout.pack(coordinate.iter().map(|member| member.0)))
+            .map(|coordinate| packing.pack(coordinate.iter().map(|member| member.0)))
             .collect();
 
-        let region = Region::of_keys(&axes, &layout, &keys);
+        let region = Region::of_packed(&axes, &packing, &packed_coordinates);
 
         assert_eq!(
             region,

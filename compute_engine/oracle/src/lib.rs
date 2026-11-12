@@ -7,10 +7,10 @@ use measure::{Measure, MeasureGlobalId};
 
 pub struct Oracle {
     connection: Connection,
-    key_orders: KeyOrders,
+    packing_orders: PackingOrders,
 }
 
-type KeyOrders = HashMap<DimensionGlobalId, (DimensionKind, DimensionGlobalId)>;
+type PackingOrders = HashMap<DimensionGlobalId, (DimensionKind, DimensionGlobalId)>;
 
 struct Query {
     sql: String,
@@ -55,9 +55,9 @@ impl Oracle {
         }
         Ok(Oracle {
             connection,
-            key_orders: dimensions
+            packing_orders: dimensions
                 .iter()
-                .map(|dimension| (dimension.ulid(), dimension.key_order()))
+                .map(|dimension| (dimension.ulid(), dimension.packing_order()))
                 .collect(),
         })
     }
@@ -71,7 +71,7 @@ impl Oracle {
         self.connection.execute_batch(&format!(
             "CREATE TABLE {table} AS {}",
             expanded(
-                &query(expression.root(), &self.key_orders),
+                &query(expression.root(), &self.packing_orders),
                 expression.result_axes()
             )
         ))?;
@@ -105,7 +105,7 @@ fn column(dimension: DimensionGlobalId) -> String {
     format!("axis_{}", dimension.0.0)
 }
 
-fn query(node: &CheckedNode, key_orders: &KeyOrders) -> Query {
+fn query(node: &CheckedNode, packing_orders: &PackingOrders) -> Query {
     let query = match node {
         CheckedNode::Number(value) => Query {
             sql: format!("SELECT CAST('{value:?}' AS DOUBLE) AS value"),
@@ -119,23 +119,28 @@ fn query(node: &CheckedNode, key_orders: &KeyOrders) -> Query {
                 axes: axes.iter().copied().collect(),
             }
         }
-        CheckedNode::Terms(terms) => sum_of_terms(terms, key_orders),
+        CheckedNode::Terms(terms) => sum_of_terms(terms, packing_orders),
         CheckedNode::Product {
             operator,
             left,
             right,
         } => product(
             *operator,
-            &query(left, key_orders),
-            &query(right, key_orders),
+            &query(left, packing_orders),
+            &query(right, packing_orders),
         ),
-        CheckedNode::Sum { value, by } => sum(&query(value, key_orders), by, key_orders),
+        CheckedNode::Sum { value, by } => sum(&query(value, packing_orders), by, packing_orders),
         CheckedNode::Filter {
             value,
             dimension,
             members,
             keeps_axis,
-        } => filter(&query(value, key_orders), *dimension, members, *keeps_axis),
+        } => filter(
+            &query(value, packing_orders),
+            *dimension,
+            members,
+            *keeps_axis,
+        ),
     };
     let mut items: Vec<String> = query.axes.iter().map(|&axis| column(axis)).collect();
     items.push("CASE WHEN node.value = 0 THEN 0::DOUBLE ELSE node.value END AS value".into());
@@ -169,10 +174,10 @@ fn expanded(query: &Query, axes: &[DimensionGlobalId]) -> String {
     )
 }
 
-fn sum_of_terms(terms: &[Term], key_orders: &KeyOrders) -> Query {
+fn sum_of_terms(terms: &[Term], packing_orders: &PackingOrders) -> Query {
     let terms: Vec<(Sign, Query)> = terms
         .iter()
-        .map(|term| (term.sign, query(&term.node, key_orders)))
+        .map(|term| (term.sign, query(&term.node, packing_orders)))
         .collect();
     let axes: BTreeSet<DimensionGlobalId> = terms
         .iter()
@@ -291,7 +296,7 @@ fn filter(
     }
 }
 
-fn sum(value: &Query, by: &[CheckedAxis], key_orders: &KeyOrders) -> Query {
+fn sum(value: &Query, by: &[CheckedAxis], packing_orders: &PackingOrders) -> Query {
     let mut axes = BTreeSet::new();
     let mut groups = Vec::new();
     let mut items = Vec::new();
@@ -321,7 +326,7 @@ fn sum(value: &Query, by: &[CheckedAxis], key_orders: &KeyOrders) -> Query {
         }
     }
     let mut ordered: Vec<DimensionGlobalId> = value.axes.iter().copied().collect();
-    ordered.sort_by_key(|axis| key_orders[axis]);
+    ordered.sort_by_key(|axis| packing_orders[axis]);
     let order: Vec<String> = ordered
         .iter()
         .map(|&axis| format!("node.{}", column(axis)))

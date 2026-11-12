@@ -102,7 +102,7 @@ impl Generator<'_> {
         let definition = DimensionDefinition::try_new(
             ulid,
             format!("D{index}"),
-            // Not the ULID order: the last dimensions lead the cell key, so the tests meet keys in the other order.
+            // Not the ULID order: the last dimensions lead the packed coordinate, so the tests meet packed coordinates in the other order.
             match self.configuration.dimension_count - index {
                 1 => DimensionKind::Calendar,
                 2 => DimensionKind::Version,

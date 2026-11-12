@@ -196,7 +196,7 @@ impl Cells {
         let orders = self
             .axes
             .iter()
-            .map(|&axis| Ok(find_dimension(dimensions, axis)?.key_order()))
+            .map(|&axis| Ok(find_dimension(dimensions, axis)?.packing_order()))
             .collect::<Result<Vec<_>, EvaluateError>>()?;
         let mut order: Vec<usize> = (0..self.axes.len()).collect();
         order.sort_by_key(|&axis| orders[axis]);
