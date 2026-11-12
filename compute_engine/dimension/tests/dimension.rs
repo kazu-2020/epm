@@ -25,13 +25,23 @@ fn natural_key_attribute() -> AttributeDefinition {
     }
 }
 
-fn try_definition(
+fn department(
+    natural_key: AttributeGlobalId,
     attributes: Vec<AttributeDefinition>,
 ) -> Result<DimensionDefinition, DefinitionError> {
     DimensionDefinition::try_new(
         DEPARTMENT,
         "部門".into(),
         DimensionKind::Ordinary,
+        natural_key,
+        attributes,
+    )
+}
+
+fn try_definition(
+    attributes: Vec<AttributeDefinition>,
+) -> Result<DimensionDefinition, DefinitionError> {
+    department(
         NATURAL_KEY,
         [vec![natural_key_attribute()], attributes].concat(),
     )
@@ -151,12 +161,12 @@ fn member_is_found_by_member_index_ulid_and_natural_key() {
 }
 
 #[test]
-fn other_text_attributes_may_repeat_or_be_null() {
+fn other_text_attributes_may_repeat_be_empty_or_be_null() {
     let definition = definition(vec![name_attribute()]);
     let columns = vec![
         ulids(&[Some(1), Some(2), Some(3)]),
         strings(&[Some("4110"), Some("5110"), Some("6110")]),
-        strings(&[Some("その他"), Some("その他"), None]),
+        strings(&[Some("その他"), Some("その他"), Some("")]),
     ];
     let dimension =
         Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap();
@@ -170,7 +180,7 @@ fn other_text_attributes_may_repeat_or_be_null() {
     assert_eq!(member.id(), MemberIndex(1));
     let name = dimension.text_attribute("名前").unwrap();
     assert_eq!(name.value(member.id()), Some("その他"));
-    assert_eq!(name.value(MemberIndex(2)), None);
+    assert_eq!(name.value(MemberIndex(2)), Some(""));
     assert_eq!(name.value(MemberIndex(3)), None);
     assert_eq!(dimension.natural_key_attribute().name(), "ID");
     assert_eq!(dimension.natural_key_attribute().ulid(), NATURAL_KEY);
@@ -181,14 +191,8 @@ fn other_text_attributes_may_repeat_or_be_null() {
 
 #[test]
 fn natural_key_may_come_after_other_attributes() {
-    let definition = DimensionDefinition::try_new(
-        DEPARTMENT,
-        "部門".into(),
-        DimensionKind::Ordinary,
-        NATURAL_KEY,
-        vec![name_attribute(), natural_key_attribute()],
-    )
-    .unwrap();
+    let definition =
+        department(NATURAL_KEY, vec![name_attribute(), natural_key_attribute()]).unwrap();
     let columns = vec![
         ulids(&[Some(1)]),
         strings(&[Some("その他")]),
@@ -206,10 +210,7 @@ fn natural_key_may_come_after_other_attributes() {
 #[test]
 fn natural_key_that_is_missing_or_not_a_text_attribute_is_rejected() {
     let natural_key_definition = |natural_key| {
-        DimensionDefinition::try_new(
-            DEPARTMENT,
-            "部門".into(),
-            DimensionKind::Ordinary,
+        department(
             natural_key,
             vec![natural_key_attribute(), division_attribute(DIVISION)],
         )
@@ -398,7 +399,7 @@ fn sliced_batch_is_read_from_its_offset() {
             Some("開発部"),
             Some("総務部"),
         ]),
-        Arc::new(UInt32Array::from(vec![Some(1), Some(0), Some(1), None])),
+        Arc::new(UInt32Array::from(vec![Some(9), Some(0), Some(1), None])),
     ];
     let sliced = batch(&definition, columns).slice(1, 3);
 
@@ -432,10 +433,7 @@ fn debug_output_names_the_member_not_the_whole_dimension() {
 #[test]
 fn renaming_an_attribute_keeps_its_column_name() {
     let before = definition(vec![division_attribute(DIVISION)]);
-    let after = DimensionDefinition::try_new(
-        DEPARTMENT,
-        "部門".into(),
-        DimensionKind::Ordinary,
+    let after = department(
         NATURAL_KEY,
         vec![
             AttributeDefinition {

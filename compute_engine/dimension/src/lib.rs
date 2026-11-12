@@ -164,7 +164,7 @@ pub struct Dimension {
 }
 
 // Not HashMap<Ulid, MemberIndex>: the ULID and Natural Key bytes already live in the Arrow arrays.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct UniqueIndex {
     hasher: RandomState,
     rows: HashTable<MemberIndex>,
@@ -257,14 +257,8 @@ impl Dimension {
                 found,
             });
         }
-        let mut dimension = Self {
-            definition,
-            members,
-            by_ulid: UniqueIndex::default(),
-            by_natural_key: UniqueIndex::default(),
-        };
 
-        for attribute in dimension.reference_attributes() {
+        for attribute in reference_attributes(&definition, &members) {
             let target_dimension = targets
                 .iter()
                 .find(|candidate| candidate.ulid() == attribute.target)
@@ -285,8 +279,8 @@ impl Dimension {
             }
         }
 
-        let ulids = dimension.ulids();
-        let natural_keys = dimension.natural_keys();
+        let ulids = ulid_column(&members);
+        let natural_keys = natural_key_column(&definition, &members);
         for row in 0..rows {
             let member = MemberIndex(row as u32);
             if ulids.is_null(row) {
@@ -306,9 +300,12 @@ impl Dimension {
             UniqueIndex::new(rows, |row| natural_keys.value(row)).map_err(|member| {
                 DimensionError::DuplicateNaturalKey(natural_keys.value(member.0 as usize).into())
             })?;
-        dimension.by_ulid = by_ulid;
-        dimension.by_natural_key = by_natural_key;
-        Ok(dimension)
+        Ok(Self {
+            definition,
+            members,
+            by_ulid,
+            by_natural_key,
+        })
     }
 
     pub fn definition(&self) -> &DimensionDefinition {
@@ -348,23 +345,23 @@ impl Dimension {
     }
 
     pub fn member_by_ulid(&self, ulid: MemberGlobalId) -> Option<Member<'_>> {
-        let id = self
-            .by_ulid
-            .find(ulid.0, |row| ulid_at(self.ulids(), row))?;
+        let ulids = ulid_column(&self.members);
+        let id = self.by_ulid.find(ulid.0, |row| ulid_at(ulids, row))?;
         self.member(id)
     }
 
     pub fn member_by_natural_key(&self, natural_key: &str) -> Option<Member<'_>> {
+        let natural_keys = natural_key_column(&self.definition, &self.members);
         let id = self
             .by_natural_key
-            .find(natural_key, |row| self.natural_keys().value(row))?;
+            .find(natural_key, |row| natural_keys.value(row))?;
         self.member(id)
     }
 
     pub fn natural_key_attribute(&self) -> TextAttribute<'_> {
         TextAttribute {
             definition: self.definition.natural_key_attribute(),
-            values: self.natural_keys(),
+            values: natural_key_column(&self.definition, &self.members),
         }
     }
 
@@ -374,14 +371,15 @@ impl Dimension {
     }
 
     pub fn text_attributes(&self) -> impl Iterator<Item = TextAttribute<'_>> {
-        self.attribute_columns()
-            .filter_map(|(definition, column)| match definition.kind {
+        attribute_columns(&self.definition, &self.members).filter_map(|(definition, column)| {
+            match definition.kind {
                 AttributeKind::Text => Some(TextAttribute {
                     definition,
                     values: column.as_string::<i32>(),
                 }),
                 AttributeKind::Reference(_) => None,
-            })
+            }
+        })
     }
 
     pub fn reference_attribute(&self, name: &str) -> Option<ReferenceAttribute<'_>> {
@@ -390,33 +388,44 @@ impl Dimension {
     }
 
     pub fn reference_attributes(&self) -> impl Iterator<Item = ReferenceAttribute<'_>> {
-        self.attribute_columns()
-            .filter_map(|(definition, column)| match definition.kind {
-                AttributeKind::Reference(target) => Some(ReferenceAttribute {
-                    definition,
-                    target,
-                    values: column.as_primitive::<UInt32Type>(),
-                }),
-                AttributeKind::Text => None,
-            })
+        reference_attributes(&self.definition, &self.members)
     }
+}
 
-    fn attribute_columns(&self) -> impl Iterator<Item = (&AttributeDefinition, &ArrayRef)> {
-        self.definition
-            .attributes
-            .iter()
-            .zip(&self.members.columns()[1..])
-    }
+fn reference_attributes<'d>(
+    definition: &'d DimensionDefinition,
+    members: &'d RecordBatch,
+) -> impl Iterator<Item = ReferenceAttribute<'d>> {
+    attribute_columns(definition, members).filter_map(|(definition, column)| {
+        match definition.kind {
+            AttributeKind::Reference(target) => Some(ReferenceAttribute {
+                definition,
+                target,
+                values: column.as_primitive::<UInt32Type>(),
+            }),
+            AttributeKind::Text => None,
+        }
+    })
+}
 
-    fn ulids(&self) -> &FixedSizeBinaryArray {
-        self.members.column(0).as_fixed_size_binary()
-    }
+fn attribute_columns<'d>(
+    definition: &'d DimensionDefinition,
+    members: &'d RecordBatch,
+) -> impl Iterator<Item = (&'d AttributeDefinition, &'d ArrayRef)> {
+    definition.attributes.iter().zip(&members.columns()[1..])
+}
 
-    fn natural_keys(&self) -> &StringArray {
-        self.members
-            .column(1 + self.definition.natural_key_position)
-            .as_string::<i32>()
-    }
+fn ulid_column(members: &RecordBatch) -> &FixedSizeBinaryArray {
+    members.column(0).as_fixed_size_binary()
+}
+
+fn natural_key_column<'d>(
+    definition: &DimensionDefinition,
+    members: &'d RecordBatch,
+) -> &'d StringArray {
+    members
+        .column(1 + definition.natural_key_position)
+        .as_string::<i32>()
 }
 
 #[derive(Clone, Copy)]
@@ -431,11 +440,15 @@ impl<'d> Member<'d> {
     }
 
     pub fn ulid(self) -> MemberGlobalId {
-        MemberGlobalId(ulid_at(self.dimension.ulids(), self.id.0 as usize))
+        MemberGlobalId(ulid_at(
+            ulid_column(&self.dimension.members),
+            self.id.0 as usize,
+        ))
     }
 
     pub fn natural_key(self) -> &'d str {
-        self.dimension.natural_keys().value(self.id.0 as usize)
+        natural_key_column(&self.dimension.definition, &self.dimension.members)
+            .value(self.id.0 as usize)
     }
 }
 
