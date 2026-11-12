@@ -1,5 +1,4 @@
-use std::future::{Future, pending};
-use std::io;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -68,7 +67,6 @@ pub enum Stopped {
     Drained,
     Deadline,
     Owner(Exit),
-    Server(io::Error),
 }
 
 pub fn router(handle: Handle) -> Router {
@@ -93,18 +91,15 @@ pub async fn serve(
         let _ = signal_sender.send(());
     };
     let deadline_passed = async move {
-        match signal_receiver.await {
-            Ok(()) => tokio::time::sleep(deadline).await,
-            // Not the deadline: the sender drops with no signal only when the HTTP server stops, and its own branch reports that.
-            Err(_) => pending().await,
-        }
+        let _ = signal_receiver.await;
+        tokio::time::sleep(deadline).await;
     };
     tokio::select! {
         exit = owner => Stopped::Owner(exit),
-        served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => match served {
-            Ok(()) => Stopped::Drained,
-            Err(error) => Stopped::Server(error),
-        },
+        served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => {
+            served.expect("the graceful serve of axum 0.8 returns only Ok");
+            Stopped::Drained
+        }
         () = deadline_passed => Stopped::Deadline,
     }
 }

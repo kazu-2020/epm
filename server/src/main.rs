@@ -113,10 +113,6 @@ async fn main() -> ExitCode {
             eprintln!("the owner stopped: {exit:?}");
             ExitCode::FAILURE
         }
-        Stopped::Server(error) => {
-            eprintln!("the HTTP server stopped: {error}");
-            ExitCode::FAILURE
-        }
     }
 }
 
