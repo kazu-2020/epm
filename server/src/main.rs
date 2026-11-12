@@ -64,28 +64,35 @@ async fn main() -> ExitCode {
     let mut shutdown = Box::pin(async move {
         let _ = signalled.await;
     });
-    let started = Instant::now();
-    let (engine, start) = tokio::select! {
-        restored = server::restore(
+    let starting = async {
+        let started = Instant::now();
+        let (engine, start) = server::restore(
             store.as_ref(),
             &arguments.workspace,
             representative::generate(&SIZE, SEED),
-        ) => restored.expect("valid formulas"),
-        () = &mut shutdown => {
-            eprintln!("stopped by a signal during the restore");
-            return ExitCode::SUCCESS;
-        }
+        )
+        .await
+        .expect("valid formulas");
+        eprintln!(
+            "engine ready in {:?} from Commit Sequence {}",
+            started.elapsed(),
+            start.request_ids.len()
+        );
+        tokio::net::TcpListener::bind(&arguments.listen)
+            .await
+            .map(|listener| (engine, start, listener))
     };
-    eprintln!(
-        "engine ready in {:?} from Commit Sequence {}",
-        started.elapsed(),
-        start.request_ids.len()
-    );
-    let listener = match tokio::net::TcpListener::bind(&arguments.listen).await {
-        Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("listen on {}: {error}", arguments.listen);
-            return ExitCode::FAILURE;
+    let (engine, start, listener) = tokio::select! {
+        started = starting => match started {
+            Ok(started) => started,
+            Err(error) => {
+                eprintln!("listen on {}: {error}", arguments.listen);
+                return ExitCode::FAILURE;
+            }
+        },
+        () = &mut shutdown => {
+            eprintln!("stopped by a signal during the start");
+            return ExitCode::SUCCESS;
         }
     };
     eprintln!(

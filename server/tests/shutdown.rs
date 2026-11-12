@@ -157,7 +157,7 @@ async fn send_submit_edit(address: SocketAddr) -> TcpStream {
 
 #[tokio::test]
 async fn a_shutdown_waits_for_the_edit_in_flight_and_then_stops_with_success() {
-    let running = run(Duration::from_secs(5)).await;
+    let running = run(Duration::from_secs(60)).await;
     let mut stream = send_submit_edit(running.address).await;
     running.store.started.notified().await;
     running
