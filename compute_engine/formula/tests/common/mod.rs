@@ -49,18 +49,21 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
 pub fn dimensions_with_members() -> Vec<Dimension> {
     let mut loaded: Vec<Dimension> = Vec::new();
     for definition in dimensions() {
-        let (names, divisions): (&[&str], &[u32]) = match definition.name() {
+        let (natural_keys, divisions): (&[&str], &[u32]) = match definition.name() {
             "期間" => (&["1月", "2月"], &[]),
             "部門" => (&["営業", "開発"], &[0, 0]),
             "事業部" => (&["第一"], &[]),
             _ => (&["実績", "予算", "見込"], &[]),
         };
         let ulids = FixedSizeBinaryArray::try_from_iter(
-            (0..names.len()).map(|row| Ulid(definition.ulid().0.0 * 100 + row as u128).to_bytes()),
+            (0..natural_keys.len())
+                .map(|row| Ulid(definition.ulid().0.0 * 100 + row as u128).to_bytes()),
         )
         .unwrap();
-        let mut columns: Vec<ArrayRef> =
-            vec![Arc::new(ulids), Arc::new(StringArray::from(names.to_vec()))];
+        let mut columns: Vec<ArrayRef> = vec![
+            Arc::new(ulids),
+            Arc::new(StringArray::from(natural_keys.to_vec())),
+        ];
         if definition.attributes().len() > 1 {
             columns.push(Arc::new(UInt32Array::from(divisions.to_vec())));
         }
