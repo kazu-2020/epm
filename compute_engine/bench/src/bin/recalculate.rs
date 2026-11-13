@@ -40,10 +40,7 @@ fn main() -> std::io::Result<()> {
     eprintln!("after read\t{}", memory());
     let started = Instant::now();
     for formula in &formulas {
-        let parsed = formula::parse(&formula.text);
-        let resolved = formula::resolve(&parsed.expression, &definitions, &dimensions);
-        let checked = formula::check_axes(&resolved.expression, &formula.result.axes)
-            .checked
+        let checked = workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
             .expect("the representative formulas pass the check");
         let step = Instant::now();
         let result = evaluate(

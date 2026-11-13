@@ -19,7 +19,6 @@ snapshot_ahead = []
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 bytes = "1.12.1"
 change_log = { path = "../storage/change_log" }
-column_engine = { path = "../compute_engine/column_engine" }
 datagen = { path = "../compute_engine/datagen" }
 dimension = { path = "../compute_engine/dimension" }
 formula = { path = "../compute_engine/formula" }
@@ -35,6 +34,7 @@ zstd = "0.14.3"
 
 [dev-dependencies]
 async-trait = "0.1.92"
+column_engine = { path = "../compute_engine/column_engine" }
 futures-util = "0.3.34"
 oracle = { path = "../compute_engine/oracle" }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }

@@ -16,7 +16,7 @@ use rand::seq::SliceRandom;
 use rand::{RngExt, SeedableRng};
 use rand_distr::Zipf;
 use ulid::Ulid;
-use workspace::Workspace;
+use workspace::UncheckedWorkspace;
 
 const LARGEST_MAGNITUDE_IN_CENTS: u32 = 1_000_000;
 
@@ -32,7 +32,7 @@ pub struct Configuration {
     pub maximum_depth: usize,
 }
 
-pub fn generate(configuration: &Configuration) -> Workspace {
+pub fn generate(configuration: &Configuration) -> UncheckedWorkspace {
     assert!(
         configuration.dimension_count > 0 && configuration.members_per_dimension > 0,
         "a workspace needs a dimension with a member"
@@ -51,7 +51,7 @@ pub fn generate(configuration: &Configuration) -> Workspace {
         .map(|index| generator.input(index, &dimensions))
         .collect();
     let formulas = generator.formulas(&dimensions, &inputs);
-    Workspace {
+    UncheckedWorkspace {
         dimensions,
         inputs,
         formulas,

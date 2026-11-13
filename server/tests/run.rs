@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use ulid::Ulid;
+use workspace::Workspace;
 
 const WORKSPACE: &str = "ws~";
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
@@ -31,7 +32,10 @@ struct Running {
 }
 
 fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Running {
-    let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
+    let engine = Engine::new(
+        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
+    )
+    .expect("valid formulas");
     let (handle, owner) = server::start(
         engine,
         Start::default(),
@@ -437,7 +441,7 @@ async fn restored(store: &Arc<dyn ObjectStore>) -> (Engine, Start) {
     server::restore(
         store.as_ref(),
         WORKSPACE,
-        representative::generate(&Size::TINY, 7),
+        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
     )
     .await
     .expect("valid formulas")
@@ -527,7 +531,10 @@ async fn a_new_owner_starts_from_the_newest_snapshot_it_can_read() {
 }
 
 fn start_from(start: Start) {
-    let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
+    let engine = Engine::new(
+        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
+    )
+    .expect("valid formulas");
     let _ = server::start(
         engine,
         start,

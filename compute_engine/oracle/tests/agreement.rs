@@ -57,14 +57,9 @@ proptest! {
             .expect("the oracle loads the workspace");
         let mut measures: Vec<Measure> = workspace.inputs.clone();
         for Formula { result, text } in &workspace.formulas {
-            let parsed = formula::parse(text);
-            prop_assert_eq!(&parsed.errors, &[], "{}", text);
-            let resolved =
-                formula::resolve(&parsed.expression, &measure_definitions, &dimensions);
-            prop_assert_eq!(&resolved.errors, &[], "{}", text);
-            let check = formula::check_axes(&resolved.expression, &result.axes);
-            prop_assert_eq!(&check.errors, &[], "{}", text);
-            let checked = check.checked.expect("a formula without errors is checked");
+            let compiled = workspace::compile(text, result, &measure_definitions, &dimensions);
+            prop_assert!(compiled.is_ok(), "{}: {:?}", text, compiled.err());
+            let checked = compiled.expect("the formula compiles");
 
             let actual = evaluator::evaluate(
                 &checked,

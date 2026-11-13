@@ -9,7 +9,7 @@ use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use ulid::Ulid;
-use workspace::Workspace;
+use workspace::UncheckedWorkspace;
 
 const SMALL: Size = Size {
     products: 30,
@@ -29,7 +29,7 @@ const PERIOD: DimensionGlobalId = DimensionGlobalId(Ulid(9));
 const VERSION: DimensionGlobalId = DimensionGlobalId(Ulid(10));
 
 struct Model {
-    workspace: Workspace,
+    workspace: UncheckedWorkspace,
     checked: Vec<(MeasureDefinition, CheckedExpression)>,
 }
 
@@ -61,11 +61,9 @@ impl Model {
             .formulas
             .iter()
             .map(|formula| {
-                let parsed = formula::parse(&formula.text);
-                let resolved = formula::resolve(&parsed.expression, &definitions, &dimensions);
-                let checked = formula::check_axes(&resolved.expression, &formula.result.axes)
-                    .checked
-                    .expect("the representative formulas are checked");
+                let checked =
+                    workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
+                        .expect("the representative formulas are checked");
                 (formula.result.clone(), checked)
             })
             .collect();

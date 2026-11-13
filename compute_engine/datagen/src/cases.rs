@@ -342,9 +342,13 @@ impl Fixture {
     }
 
     pub fn check(&self, source: &str, result: &str) -> CheckedExpression {
-        let check = formula::check_axes(&self.resolve(source), &self.definition(result).axes);
-        assert_eq!(check.errors, [], "{source}");
-        check.checked.expect("a formula without errors is checked")
+        let compiled = workspace::compile(
+            source,
+            self.definition(result),
+            &self.measure_definitions,
+            &self.dimensions.iter().collect::<Vec<_>>(),
+        );
+        compiled.unwrap_or_else(|error| panic!("{source}: {error:?}"))
     }
 }
 

@@ -6,7 +6,7 @@ use arrow_array::types::UInt32Type;
 use datagen::Configuration;
 use dimension::Dimension;
 use measure::MeasureDefinition;
-use workspace::Workspace;
+use workspace::UncheckedWorkspace;
 
 fn configuration(seed: u64) -> Configuration {
     Configuration {
@@ -21,7 +21,7 @@ fn configuration(seed: u64) -> Configuration {
     }
 }
 
-fn batches(workspace: &Workspace) -> Vec<RecordBatch> {
+fn batches(workspace: &UncheckedWorkspace) -> Vec<RecordBatch> {
     let dimensions = workspace
         .dimensions
         .iter()
@@ -58,12 +58,8 @@ fn every_formula_parses_resolves_and_passes_the_axis_check() {
             )
             .collect();
         for (index, workspace::Formula { result, text }) in workspace.formulas.iter().enumerate() {
-            let parsed = formula::parse(text);
-            assert_eq!(parsed.errors, [], "seed {seed}: {text}");
-            let resolved = formula::resolve(&parsed.expression, &measures, &dimensions);
-            assert_eq!(resolved.errors, [], "seed {seed}: {text}");
-            let check = formula::check_axes(&resolved.expression, &result.axes);
-            assert_eq!(check.errors, [], "seed {seed}: {text}");
+            let compiled = workspace::compile(text, result, &measures, &dimensions);
+            assert_eq!(compiled.err(), None, "seed {seed}: {text}");
             if index > 0 {
                 let previous = format!("'計算{}'", index - 1);
                 assert!(text.contains(&previous), "seed {seed}: {text}");

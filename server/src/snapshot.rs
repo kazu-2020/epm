@@ -423,15 +423,15 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use datagen::representative::{self, Size};
-    use workspace::Workspace;
+    use workspace::UncheckedWorkspace;
 
     use super::*;
 
-    fn workspace() -> Workspace {
+    fn workspace() -> UncheckedWorkspace {
         representative::generate(&Size::TINY, 7)
     }
 
-    fn snapshot(workspace: &Workspace) -> Snapshot {
+    fn snapshot(workspace: &UncheckedWorkspace) -> Snapshot {
         Snapshot {
             start: Start {
                 slot: Slot(3),
@@ -443,7 +443,7 @@ mod tests {
         }
     }
 
-    fn definitions(workspace: &Workspace) -> Vec<MeasureDefinition> {
+    fn definitions(workspace: &UncheckedWorkspace) -> Vec<MeasureDefinition> {
         workspace
             .inputs
             .iter()

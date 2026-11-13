@@ -26,11 +26,9 @@ fn main() -> std::io::Result<()> {
     let checked: Vec<(MeasureGlobalId, CheckedExpression)> = formulas
         .iter()
         .map(|formula| {
-            let parsed = formula::parse(&formula.text);
-            let resolved = formula::resolve(&parsed.expression, &definitions, &dimensions);
-            let checked = formula::check_axes(&resolved.expression, &formula.result.axes)
-                .checked
-                .expect("the representative formulas pass the check");
+            let checked =
+                workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
+                    .expect("the representative formulas pass the check");
             (formula.result.ulid, checked)
         })
         .collect();
