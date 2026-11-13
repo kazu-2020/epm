@@ -279,8 +279,8 @@ fn dimension(
         .expect("the representative dimensions are valid")
 }
 
-fn numbered(prefix: &str, len: u32) -> Vec<String> {
-    (1..=len)
+fn numbered(prefix: &str, member_count: u32) -> Vec<String> {
+    (1..=member_count)
         .map(|number| format!("{prefix}{number}"))
         .collect()
 }
@@ -451,7 +451,7 @@ impl Representative {
         ]
     }
 
-    fn lengths(&self, axes: &[DimensionGlobalId]) -> Vec<u32> {
+    fn member_counts(&self, axes: &[DimensionGlobalId]) -> Vec<u32> {
         axes.iter()
             .map(|&axis| match axis {
                 PRODUCT => self.size.products,
@@ -465,14 +465,14 @@ impl Representative {
     }
 
     fn dense_columns(&self, axes: &[DimensionGlobalId]) -> Vec<Vec<u32>> {
-        let lengths = self.lengths(axes);
-        let cells: u32 = lengths.iter().product();
+        let member_counts = self.member_counts(axes);
+        let cells: u32 = member_counts.iter().product();
         let mut columns = vec![Vec::with_capacity(cells as usize); axes.len()];
         for cell in 0..cells {
             let mut rest = cell;
-            for (column, &len) in columns.iter_mut().zip(&lengths).rev() {
-                column.push(rest % len);
-                rest /= len;
+            for (column, &member_count) in columns.iter_mut().zip(&member_counts).rev() {
+                column.push(rest % member_count);
+                rest /= member_count;
             }
         }
         columns
@@ -483,20 +483,20 @@ impl Representative {
         axes: &[DimensionGlobalId],
         value: impl Fn(&mut StdRng) -> f64,
     ) -> Vec<f64> {
-        let cells: u32 = self.lengths(axes).iter().product();
+        let cells: u32 = self.member_counts(axes).iter().product();
         (0..cells).map(|_| value(&mut self.random)).collect()
     }
 
     fn quantities(&mut self, references: &[&Dimension]) -> Measure {
         let axes = [PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER];
-        let lengths = self.lengths(&axes);
+        let member_counts = self.member_counts(&axes);
         let sales_departments = self.size.departments_per_kind;
-        let [periods, versions, _, products, customers] = lengths[..] else {
-            unreachable!("five axes have five lengths")
+        let [periods, versions, _, products, customers] = member_counts[..] else {
+            unreachable!("five axes have five member counts")
         };
         let possible = [sales_departments, periods, versions, products, customers]
             .iter()
-            .map(|&len| u64::from(len))
+            .map(|&member_count| u64::from(member_count))
             .product::<u64>();
         assert!(
             (self.size.quantity_cells as u64) < possible / 2,
@@ -523,7 +523,7 @@ impl Representative {
                     let customer = random.sample(customer_zipf) as u32 - 1;
                     seen.insert(pack(
                         &[period, version, department, product, customer],
-                        &lengths,
+                        &member_counts,
                     ));
                 }
                 let mut packed: Vec<u64> = seen.into_iter().collect();
@@ -539,7 +539,10 @@ impl Representative {
         debug_assert!(packed.is_sorted());
         let mut columns = vec![Vec::with_capacity(packed.len()); axes.len()];
         for &packed_coordinate in &packed {
-            for (column, member) in columns.iter_mut().zip(unpack(packed_coordinate, &lengths)) {
+            for (column, member) in columns
+                .iter_mut()
+                .zip(unpack(packed_coordinate, &member_counts))
+            {
                 column.push(member);
             }
         }
@@ -627,20 +630,20 @@ impl Representative {
     }
 }
 
-fn pack(coordinate: &[u32], lengths: &[u32]) -> u64 {
+fn pack(coordinate: &[u32], member_counts: &[u32]) -> u64 {
     coordinate
         .iter()
-        .zip(lengths)
-        .fold(0, |packed, (&member, &len)| {
-            packed * u64::from(len) + u64::from(member)
+        .zip(member_counts)
+        .fold(0, |packed, (&member, &member_count)| {
+            packed * u64::from(member_count) + u64::from(member)
         })
 }
 
-fn unpack(mut packed: u64, lengths: &[u32]) -> Vec<u32> {
-    let mut coordinate = vec![0; lengths.len()];
-    for (member, &len) in coordinate.iter_mut().zip(lengths).rev() {
-        *member = (packed % u64::from(len)) as u32;
-        packed /= u64::from(len);
+fn unpack(mut packed: u64, member_counts: &[u32]) -> Vec<u32> {
+    let mut coordinate = vec![0; member_counts.len()];
+    for (member, &member_count) in coordinate.iter_mut().zip(member_counts).rev() {
+        *member = (packed % u64::from(member_count)) as u32;
+        packed /= u64::from(member_count);
     }
     coordinate
 }

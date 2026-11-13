@@ -106,7 +106,7 @@ fn encode_in_chunks(
         }
         measures.push(MeasureEntry {
             ulid: compact.ulid(),
-            axes: compact.axis_lengths().collect(),
+            axes: compact.axis_member_counts().collect(),
             chunks,
         });
     }
@@ -237,9 +237,9 @@ impl Manifest {
         for measure in &self.measures {
             out.put_u128_le(measure.ulid.0.0);
             out.put_u32_le(count(measure.axes.len()));
-            for (axis, length) in &measure.axes {
+            for (axis, member_count) in &measure.axes {
                 out.put_u128_le(axis.0.0);
-                out.put_u32_le(*length);
+                out.put_u32_le(*member_count);
             }
             put_chunks(&mut out, &measure.chunks);
         }
@@ -572,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn the_manifest_names_its_objects_and_the_lengths_of_their_axes() {
+    fn the_manifest_names_its_objects_and_the_member_counts_of_their_axes() {
         let workspace = workspace();
         let (objects, manifest) = encode(&snapshot(&workspace));
         let manifest = Manifest::decode(manifest).expect("valid");
@@ -583,7 +583,7 @@ mod tests {
         assert_eq!(manifest.paths(), expected);
         assert_eq!(objects.len(), expected.len());
         for (entry, input) in manifest.measures.iter().zip(&workspace.inputs) {
-            let lengths: Vec<_> = input
+            let member_counts: Vec<_> = input
                 .definition()
                 .axes
                 .iter()
@@ -596,7 +596,7 @@ mod tests {
                     (axis, dimension.len())
                 })
                 .collect();
-            assert_eq!(entry.axes, lengths);
+            assert_eq!(entry.axes, member_counts);
         }
     }
 

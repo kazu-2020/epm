@@ -256,7 +256,7 @@ impl Cells {
             for source in &sources {
                 let members: Vec<MemberIndex> = match *source {
                     Source::Kept(position) => vec![coordinate[position]],
-                    Source::Repeated(len) => (0..len).map(MemberIndex).collect(),
+                    Source::Repeated(member_count) => (0..member_count).map(MemberIndex).collect(),
                 };
                 coordinates = coordinates
                     .into_iter()
