@@ -1,5 +1,7 @@
 mod columns;
 mod region;
+#[cfg(test)]
+mod tests;
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -9,7 +11,7 @@ use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
 use crate::columns::{ByAxis, Columns, find_dimension, packing_of};
-pub use crate::region::Region;
+use crate::region::Region;
 
 pub fn evaluate(
     expression: &CheckedExpression,
@@ -83,7 +85,7 @@ fn position(measures: &[Measure], ulid: MeasureGlobalId) -> Result<usize, Evalua
         .ok_or(EvaluateError::MissingMeasure(ulid))
 }
 
-pub fn changed_region(
+fn changed_region(
     expression: &CheckedExpression,
     changed: &HashMap<MeasureGlobalId, Region>,
     dimensions: &[&Dimension],
@@ -91,7 +93,7 @@ pub fn changed_region(
     changed_in(expression.root(), changed, dimensions)
 }
 
-pub fn recalculate(
+fn recalculate(
     expression: &CheckedExpression,
     result: &Measure,
     region: &Region,
