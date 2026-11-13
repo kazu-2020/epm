@@ -6,7 +6,7 @@ use change_log::Epoch;
 use datagen::representative::{self, Size};
 use object_store::aws::AmazonS3Builder;
 use server::Settings;
-use server::http::Stopped;
+use server::http::Shutdown;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
 
@@ -108,15 +108,15 @@ async fn main() -> ExitCode {
         Epoch(arguments.epoch),
     );
     match server::http::serve(listener, handle, owner, shutdown, SHUTDOWN_DEADLINE).await {
-        Stopped::Drained => ExitCode::SUCCESS,
-        Stopped::Deadline => {
+        Shutdown::Drained => ExitCode::SUCCESS,
+        Shutdown::Deadline => {
             eprintln!(
                 "the requests did not finish in {SHUTDOWN_DEADLINE:?} after the shutdown signal"
             );
             ExitCode::FAILURE
         }
         // Not a restart in this process after an exit: the same epoch must not write again (ADR 0006).
-        Stopped::Owner(exit) => {
+        Shutdown::Owner(exit) => {
             eprintln!("the owner stopped: {exit:?}");
             ExitCode::FAILURE
         }

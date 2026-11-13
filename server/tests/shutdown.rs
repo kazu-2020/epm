@@ -16,7 +16,7 @@ use object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use serde_json::{Value, json};
-use server::http::Stopped;
+use server::http::Shutdown;
 use server::{Engine, Settings};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -98,7 +98,7 @@ impl ObjectStore for Gate {
 }
 
 struct Running {
-    stopped: tokio::task::JoinHandle<Stopped>,
+    stopped: tokio::task::JoinHandle<Shutdown>,
     shutdown: oneshot::Sender<()>,
     address: SocketAddr,
     store: Arc<Gate>,
@@ -184,7 +184,7 @@ async fn a_shutdown_waits_for_the_edit_in_flight_and_then_stops_with_success() {
     let body: Value = serde_json::from_str(body).expect("a JSON body");
     assert_eq!(body, json!({ "sequence": 0 }));
     let stopped = running.stopped.await.expect("serve does not panic");
-    assert!(matches!(stopped, Stopped::Drained), "{stopped:?}");
+    assert!(matches!(stopped, Shutdown::Drained), "{stopped:?}");
 }
 
 #[tokio::test]
@@ -198,5 +198,5 @@ async fn a_shutdown_stops_with_the_deadline_when_a_request_does_not_finish() {
         .expect("the server waits for the signal");
 
     let stopped = running.stopped.await.expect("serve does not panic");
-    assert!(matches!(stopped, Stopped::Deadline), "{stopped:?}");
+    assert!(matches!(stopped, Shutdown::Deadline), "{stopped:?}");
 }
