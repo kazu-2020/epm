@@ -70,8 +70,8 @@ impl Generator<'_> {
         Ulid(self.last_ulid)
     }
 
-    fn skewed(&mut self, len: u32) -> u32 {
-        let zipf = Zipf::new(f64::from(len), self.configuration.zipf_exponent)
+    fn skewed(&mut self, member_count: u32) -> u32 {
+        let zipf = Zipf::new(f64::from(member_count), self.configuration.zipf_exponent)
             .expect("a non-empty range and a non-negative exponent make a Zipf distribution");
         self.random.sample(zipf) as u32 - 1
     }
@@ -85,7 +85,7 @@ impl Generator<'_> {
 
     fn dimension(&mut self, index: usize, earlier: &[Dimension]) -> Dimension {
         let ulid = DimensionGlobalId(self.ulid());
-        let len = self
+        let member_count = self
             .random
             .random_range(1..=self.configuration.members_per_dimension);
         let parent = (!earlier.is_empty() && self.random.random_bool(0.75))
@@ -112,13 +112,14 @@ impl Generator<'_> {
             attributes,
         )
         .expect("generated attributes have unique names and ULIDs");
-        let ulids = FixedSizeBinaryArray::try_from_iter((0..len).map(|_| self.ulid().to_bytes()))
-            .expect("every member ULID is 16 bytes");
+        let ulids =
+            FixedSizeBinaryArray::try_from_iter((0..member_count).map(|_| self.ulid().to_bytes()))
+                .expect("every member ULID is 16 bytes");
         let natural_keys =
-            StringArray::from_iter_values((0..len).map(|member| format!("m{member}")));
+            StringArray::from_iter_values((0..member_count).map(|member| format!("m{member}")));
         let mut columns: Vec<ArrayRef> = vec![Arc::new(ulids), Arc::new(natural_keys)];
         if let Some(parent) = parent {
-            let targets: UInt32Array = (0..len)
+            let targets: UInt32Array = (0..member_count)
                 .map(|_| (!self.random.random_bool(0.1)).then(|| self.skewed(parent.len())))
                 .collect();
             columns.push(Arc::new(targets));
