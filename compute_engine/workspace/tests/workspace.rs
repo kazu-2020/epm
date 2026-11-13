@@ -435,3 +435,30 @@ fn an_input_of_a_dimension_of_another_kind_is_an_error() {
     let same = input();
     assert!(workspace(Vec::from(ordinary), vec![same]).is_ok());
 }
+
+#[test]
+fn a_reference_attribute_outside_the_dimension_it_points_at_is_an_error() {
+    let division = DimensionGlobalId(Ulid(4));
+    let expected = WorkspaceError::ReferenceOutsideTarget {
+        dimension: DimensionGlobalId(Ulid(5)),
+        attribute: AttributeGlobalId(Ulid(103)),
+    };
+    let position = |unchecked: &UncheckedWorkspace| {
+        unchecked
+            .dimensions
+            .iter()
+            .position(|dimension| dimension.ulid() == division)
+            .expect("the representative model has the divisions")
+    };
+
+    let fewer = error(|unchecked| {
+        let position = position(unchecked);
+        unchecked.dimensions[position] = dimension(4, 2);
+    });
+    assert_eq!(fewer, expected);
+    let missing = error(|unchecked| {
+        let position = position(unchecked);
+        unchecked.dimensions.remove(position);
+    });
+    assert_eq!(missing, expected);
+}

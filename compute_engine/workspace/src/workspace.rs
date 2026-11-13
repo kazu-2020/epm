@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use dimension::{Dimension, DimensionGlobalId};
+use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 
 use crate::compile::{CompiledFormula, Formula, FormulaError};
@@ -24,6 +24,10 @@ pub enum WorkspaceError {
     DuplicateDimension(DimensionGlobalId),
     DuplicateMeasure(MeasureGlobalId),
     DuplicateName(String),
+    ReferenceOutsideTarget {
+        dimension: DimensionGlobalId,
+        attribute: AttributeGlobalId,
+    },
     InputOfOtherDimensions(MeasureGlobalId),
     Formula {
         result: MeasureGlobalId,
@@ -70,6 +74,18 @@ impl Workspace {
             .find(|name| !names.insert(*name))
         {
             return Err(WorkspaceError::DuplicateName(duplicate.to_owned()));
+        }
+        for dimension in &dimensions {
+            // Not trusted from Dimension::try_new: it checked the values against the targets it was given, which can be other dimensions of the same ID.
+            if let Some(attribute) = dimension
+                .reference_attributes()
+                .find(|attribute| !inside_target(dimension, *attribute, &references))
+            {
+                return Err(WorkspaceError::ReferenceOutsideTarget {
+                    dimension: dimension.ulid(),
+                    attribute: attribute.ulid(),
+                });
+            }
         }
         if let Some(input) = inputs.iter().find(|input| !made_from(input, &references)) {
             return Err(WorkspaceError::InputOfOtherDimensions(input.ulid()));
@@ -144,4 +160,19 @@ fn made_from(input: &Measure, dimensions: &[&Dimension]) -> bool {
         .collect();
     // Not the member counts alone: a dimension of another kind packs at another place, so the packed coordinates would read as other cells (ADR 0005).
     axes.is_some_and(|axes| axes.is_sorted_by_key(|dimension| dimension.packing_order()))
+}
+
+fn inside_target(
+    dimension: &Dimension,
+    attribute: ReferenceAttribute<'_>,
+    dimensions: &[&Dimension],
+) -> bool {
+    dimensions
+        .iter()
+        .find(|target| target.ulid() == attribute.target())
+        .is_some_and(|target| {
+            (0..dimension.len())
+                .filter_map(|member| attribute.value(MemberIndex(member)))
+                .all(|value| value.0 < target.len())
+        })
 }
