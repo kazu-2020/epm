@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use dimension::{Dimension, MemberIndex};
 use formula::{CheckedExpression, EvaluateError};
-use measure::{Delta, Measure, MeasureError, MeasureGlobalId};
+use measure::{CoordinateError, Delta, Measure, MeasureGlobalId};
 
 use crate::compile::CompiledFormula;
 use crate::workspace::Workspace;
@@ -18,7 +18,7 @@ pub struct Edit {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditError {
     NotAnInput(MeasureGlobalId),
-    Coordinate(MeasureError),
+    Coordinate(CoordinateError),
 }
 
 #[derive(Debug, PartialEq)]

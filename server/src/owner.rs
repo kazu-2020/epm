@@ -8,7 +8,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use change_log::{Admit, Commit, Epoch, Request, RequestId, Sequence, Slot, Start, Submission};
 use dimension::MemberIndex;
-use measure::{MeasureError, MeasureGlobalId};
+use measure::{CoordinateError, MeasureGlobalId};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -62,7 +62,7 @@ pub enum SubmitError {
 pub enum ReadError {
     NotCommitted(Lag),
     NoMeasure(MeasureGlobalId),
-    Coordinate(MeasureError),
+    Coordinate(CoordinateError),
     Stopped,
 }
 

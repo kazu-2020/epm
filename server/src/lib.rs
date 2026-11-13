@@ -12,7 +12,7 @@ use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence, Slot, Start};
 use dimension::Dimension;
 use formula::EvaluateError;
-use measure::{Measure, MeasureError, MeasureGlobalId};
+use measure::{CoordinateError, Measure, MeasureGlobalId};
 use workspace::{CalculateError, Calculated, EditCheck, EditError, Edits, Workspace};
 
 pub use crate::edit::DecodeError;
@@ -43,7 +43,7 @@ pub struct Definitions {
 pub enum Invalid {
     Undecodable(DecodeError),
     NotAnInput(MeasureGlobalId),
-    Coordinate(MeasureError),
+    Coordinate(CoordinateError),
 }
 
 #[derive(Clone, Debug, PartialEq)]

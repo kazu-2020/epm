@@ -9,7 +9,7 @@ use dimension::{Dimension, DimensionGlobalId, MemberIndex};
 use crate::axes::Axes;
 use crate::definition::{MeasureDefinition, MeasureGlobalId};
 use crate::delta::Delta;
-use crate::error::MeasureError;
+use crate::error::{CoordinateError, MeasureError};
 use crate::normalize::normalize;
 use crate::packing::CoordinatePacking;
 use crate::scan::{check_sorted, first_row, first_unsorted};
@@ -64,10 +64,11 @@ impl Measure {
         for (&position, column) in axes.positions.iter().zip(&columns) {
             let member_count = axes.member_counts[position];
             if let Some(&member) = column.iter().find(|&&member| member >= member_count) {
-                return Err(MeasureError::MemberOutOfRange {
+                return Err(CoordinateError::MemberOutOfRange {
                     axis: axes.dimensions[position],
                     member: MemberIndex(member),
-                });
+                }
+                .into());
             }
         }
         let packed_coordinates = (0..base.num_rows())
@@ -230,7 +231,7 @@ impl Measure {
             .sum()
     }
 
-    pub fn get(&self, coordinate: &[MemberIndex]) -> Result<Option<f64>, MeasureError> {
+    pub fn get(&self, coordinate: &[MemberIndex]) -> Result<Option<f64>, CoordinateError> {
         let packed = self.axes.pack(coordinate)?;
         for delta in self.deltas.iter().rev() {
             if let Ok(change) = delta.packed_coordinates.binary_search(&packed) {
