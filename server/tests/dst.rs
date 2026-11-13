@@ -103,7 +103,7 @@ struct Run {
 impl common::Server for Owners {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
         let mut settings = Settings {
-            calculation: Calculation::Inline(CALCULATION),
+            calculation: Calculation::Simulated(CALCULATION),
             snapshot_every: 1 + self.seed % 3,
             ..Settings::default()
         };
