@@ -1,6 +1,13 @@
 {
   "rules": {
-    "preset-ja-technical-writing": true,
+    "preset-ja-technical-writing": {
+      "no-mix-dearu-desumasu": {
+        "preferInHeader": "",
+        "preferInBody": "である",
+        "preferInList": "である",
+        "strict": false
+      }
+    },
     "prh": { "rulePaths": ["prh.yml"] }
   }
 }
