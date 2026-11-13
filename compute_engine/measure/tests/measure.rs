@@ -755,10 +755,10 @@ fn a_delta_from_packed_coordinates_takes_only_sorted_ones_that_fit_the_measure()
 }
 
 #[test]
-fn a_measure_gives_the_lengths_of_its_axes_in_order() {
+fn a_measure_gives_the_member_counts_of_its_axes_in_order() {
     let measure = sales();
     assert_eq!(
-        measure.axis_lengths().collect::<Vec<_>>(),
+        measure.axis_member_counts().collect::<Vec<_>>(),
         [(PERIOD, 3), (DEPARTMENT, 2)]
     );
 }

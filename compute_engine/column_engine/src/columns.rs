@@ -70,7 +70,7 @@ pub(crate) fn sort_in_packing_order<T>(
     Ok(())
 }
 
-fn lengths(
+fn member_counts(
     dimensions: &[&Dimension],
     axes: &[DimensionGlobalId],
 ) -> Result<Vec<u32>, EvaluateError> {
@@ -83,16 +83,16 @@ pub(crate) fn packing_of(
     dimensions: &[&Dimension],
     axes: &[DimensionGlobalId],
 ) -> Result<CoordinatePacking, EvaluateError> {
-    CoordinatePacking::new(&lengths(dimensions, axes)?)
+    CoordinatePacking::new(&member_counts(dimensions, axes)?)
         .ok_or(EvaluateError::InvalidResult(MeasureError::PackingTooWide))
 }
 
-fn dense_strides(lengths: &[u32]) -> Option<(usize, Vec<usize>)> {
-    let mut strides = vec![0; lengths.len()];
+fn dense_strides(member_counts: &[u32]) -> Option<(usize, Vec<usize>)> {
+    let mut strides = vec![0; member_counts.len()];
     let mut space: usize = 1;
-    for (stride, &len) in strides.iter_mut().zip(lengths).rev() {
+    for (stride, &member_count) in strides.iter_mut().zip(member_counts).rev() {
         *stride = space;
-        space = space.checked_mul(len as usize)?;
+        space = space.checked_mul(member_count as usize)?;
     }
     (space <= DENSE_LIMIT).then_some((space, strides))
 }
@@ -146,18 +146,19 @@ struct Index<'c> {
 
 impl<'c> Index<'c> {
     fn new(columns: &'c Columns, dimensions: &[&Dimension]) -> Result<Self, EvaluateError> {
-        let dense = dense_strides(&lengths(dimensions, &columns.axes)?).map(|(space, strides)| {
-            let mut rows = vec![u32::MAX; space];
-            for (row, &packed) in columns.packed_coordinates.iter().enumerate() {
-                let slot: usize = strides
-                    .iter()
-                    .zip(columns.packing.unpack(packed))
-                    .map(|(stride, member)| stride * member as usize)
-                    .sum();
-                rows[slot] = row as u32;
-            }
-            (strides, rows)
-        });
+        let dense =
+            dense_strides(&member_counts(dimensions, &columns.axes)?).map(|(space, strides)| {
+                let mut rows = vec![u32::MAX; space];
+                for (row, &packed) in columns.packed_coordinates.iter().enumerate() {
+                    let slot: usize = strides
+                        .iter()
+                        .zip(columns.packing.unpack(packed))
+                        .map(|(stride, member)| stride * member as usize)
+                        .sum();
+                    rows[slot] = row as u32;
+                }
+                (strides, rows)
+            });
         Ok(Index { columns, dense })
     }
 
@@ -851,9 +852,9 @@ impl Columns {
         let mut outputs: Vec<&ByAxis<'_>> = by.iter().collect();
         sort_in_packing_order(&mut outputs, |axis| axis.output, dimensions)?;
         let axes: Vec<DimensionGlobalId> = outputs.iter().map(|axis| axis.output).collect();
-        let lengths = lengths(dimensions, &axes)?;
+        let member_counts = member_counts(dimensions, &axes)?;
         let packing = packing_of(dimensions, &axes)?;
-        if let Some((space, strides)) = dense_strides(&lengths) {
+        if let Some((space, strides)) = dense_strides(&member_counts) {
             let slot_of = |row: usize| -> Option<usize> {
                 outputs
                     .iter()
@@ -917,8 +918,8 @@ impl Columns {
                     packing.pack(
                         strides
                             .iter()
-                            .zip(&lengths)
-                            .map(|(stride, &len)| (slot / stride) as u32 % len),
+                            .zip(&member_counts)
+                            .map(|(stride, &member_count)| (slot / stride) as u32 % member_count),
                     )
                 })
                 .collect();
@@ -985,15 +986,15 @@ impl Columns {
             if spread_axes.contains(&axis) {
                 continue;
             }
-            let len = find_dimension(dimensions, axis)?.len();
-            let copies = len as usize;
+            let member_count = find_dimension(dimensions, axis)?.len();
+            let copies = member_count as usize;
             for column in &mut members {
                 *column = column
                     .iter()
                     .flat_map(|&member| iter::repeat_n(member, copies))
                     .collect();
             }
-            members.push((0..values.len()).flat_map(|_| 0..len).collect());
+            members.push((0..values.len()).flat_map(|_| 0..member_count).collect());
             values = values
                 .iter()
                 .flat_map(|&value| iter::repeat_n(value, copies))

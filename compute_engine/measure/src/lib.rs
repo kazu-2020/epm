@@ -53,10 +53,10 @@ pub struct CoordinatePacking {
 }
 
 impl CoordinatePacking {
-    pub fn new(lengths: &[u32]) -> Option<CoordinatePacking> {
-        let widths: Vec<u32> = lengths
+    pub fn new(member_counts: &[u32]) -> Option<CoordinatePacking> {
+        let widths: Vec<u32> = member_counts
             .iter()
-            .map(|&len| u32::BITS - len.saturating_sub(1).leading_zeros())
+            .map(|&member_count| u32::BITS - member_count.saturating_sub(1).leading_zeros())
             .collect();
         Self::of_widths(&widths)
     }
@@ -127,7 +127,7 @@ impl CoordinatePacking {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Axis {
     dimension: DimensionGlobalId,
-    len: u32,
+    member_count: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -213,7 +213,7 @@ impl Measure {
             .map(|column| &column.as_primitive::<UInt32Type>().values()[..])
             .collect();
         for (axis, column) in axes.iter().zip(&columns) {
-            if let Some(&member) = column.iter().find(|&&member| member >= axis.len) {
+            if let Some(&member) = column.iter().find(|&&member| member >= axis.member_count) {
                 return Err(MeasureError::MemberOutOfRange {
                     axis: axis.dimension,
                     member: MemberIndex(member),
@@ -270,11 +270,16 @@ impl Measure {
                 .ok_or(MeasureError::MissingDimension(axis))?;
             axes.push(Axis {
                 dimension: axis,
-                len: dimension.len(),
+                member_count: dimension.len(),
             });
         }
-        let packing = CoordinatePacking::new(&axes.iter().map(|axis| axis.len).collect::<Vec<_>>())
-            .ok_or(MeasureError::PackingTooWide)?;
+        let packing = CoordinatePacking::new(
+            &axes
+                .iter()
+                .map(|axis| axis.member_count)
+                .collect::<Vec<_>>(),
+        )
+        .ok_or(MeasureError::PackingTooWide)?;
         Ok((axes, packing))
     }
 
@@ -348,8 +353,12 @@ impl Measure {
         &self.packing
     }
 
-    pub fn axis_lengths(&self) -> impl ExactSizeIterator<Item = (DimensionGlobalId, u32)> + '_ {
-        self.axes.iter().map(|axis| (axis.dimension, axis.len))
+    pub fn axis_member_counts(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (DimensionGlobalId, u32)> + '_ {
+        self.axes
+            .iter()
+            .map(|axis| (axis.dimension, axis.member_count))
     }
 
     pub fn base_packed_coordinates(&self) -> &ScalarBuffer<u64> {
@@ -619,7 +628,7 @@ fn pack_checked(
     if let Some((axis, &member)) = axes
         .iter()
         .zip(coordinate)
-        .find(|(axis, member)| member.0 >= axis.len)
+        .find(|(axis, member)| member.0 >= axis.member_count)
     {
         return Err(MeasureError::MemberOutOfRange {
             axis: axis.dimension,
@@ -639,7 +648,7 @@ fn check_in_range(
     }
     for (position, axis) in axes.iter().enumerate() {
         if let Some(row) = first_row(packed_coordinates, |&packed| {
-            packing.member(packed, position) >= axis.len
+            packing.member(packed, position) >= axis.member_count
         }) {
             return Err(MeasureError::MemberOutOfRange {
                 axis: axis.dimension,

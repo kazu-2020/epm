@@ -135,16 +135,16 @@ impl Generator<'_> {
             name: format!("入力{index}"),
             axes: self.axes(dimensions),
         };
-        let lengths: Vec<u32> = definition
+        let member_counts: Vec<u32> = definition
             .axes
             .iter()
             .map(|&axis| dimension(dimensions, axis).len())
             .collect();
         let mut cells = BTreeMap::new();
         for _ in 0..self.configuration.cells_per_input {
-            let coordinate: Vec<MemberIndex> = lengths
+            let coordinate: Vec<MemberIndex> = member_counts
                 .iter()
-                .map(|&length| MemberIndex(self.skewed(length)))
+                .map(|&member_count| MemberIndex(self.skewed(member_count)))
                 .collect();
             let value = self.value();
             cells.insert(coordinate, value);
