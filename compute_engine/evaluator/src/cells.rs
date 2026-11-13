@@ -1,10 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
-use formula::{ProductOperator, Sign};
+use formula::{EvaluateError, ProductOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
-
-use crate::evaluate_error::EvaluateError;
 
 pub(crate) struct Cells {
     pub(crate) axes: Vec<DimensionGlobalId>,

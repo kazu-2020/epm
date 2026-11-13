@@ -4,8 +4,7 @@ use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
 use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
-use evaluator::EvaluateError;
-use formula::{ProductOperator, Sign};
+use formula::{EvaluateError, ProductOperator, Sign};
 use measure::{
     CoordinatePacking, Measure, MeasureDefinition, MeasureError, first_row, first_unsorted,
     normalize,
@@ -83,8 +82,7 @@ pub(crate) fn packing_of(
     dimensions: &[&Dimension],
     axes: &[DimensionGlobalId],
 ) -> Result<CoordinatePacking, EvaluateError> {
-    CoordinatePacking::new(&member_counts(dimensions, axes)?)
-        .ok_or(EvaluateError::InvalidResult(MeasureError::PackingTooWide))
+    CoordinatePacking::new(&member_counts(dimensions, axes)?).ok_or(EvaluateError::PackingTooWide)
 }
 
 fn dense_strides(member_counts: &[u32]) -> Option<(usize, Vec<usize>)> {

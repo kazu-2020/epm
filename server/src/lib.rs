@@ -13,8 +13,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence, Slot, Start};
 use dimension::Dimension;
-use evaluator::EvaluateError;
-use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
+use formula::{AxisError, CheckedExpression, EvaluateError, ResolveError, SyntaxError};
 use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
 use workspace::Workspace;
 

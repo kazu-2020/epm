@@ -22,7 +22,6 @@ change_log = { path = "../storage/change_log" }
 column_engine = { path = "../compute_engine/column_engine" }
 datagen = { path = "../compute_engine/datagen" }
 dimension = { path = "../compute_engine/dimension" }
-evaluator = { path = "../compute_engine/evaluator" }
 formula = { path = "../compute_engine/formula" }
 measure = { path = "../compute_engine/measure" }
 object_store = { version = "0.14.2", default-features = false, features = ["aws"] }

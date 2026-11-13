@@ -6,13 +6,13 @@ edition = "2024"
 [dependencies]
 arrow-buffer = "60.1.0"
 dimension = { path = "../dimension" }
-evaluator = { path = "../evaluator" }
 formula = { path = "../formula" }
 measure = { path = "../measure" }
 rayon = "1.12.0"
 
 [dev-dependencies]
 datagen = { path = "../datagen" }
+evaluator = { path = "../evaluator" }
 rand = "0.10.3"
 ulid = "3.0.0"
 workspace = { path = "../workspace" }

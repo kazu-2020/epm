@@ -1,6 +1,6 @@
 use datagen::cases::{self, CASES, Fixture};
 use dimension::{AttributeGlobalId, Dimension};
-use evaluator::EvaluateError;
+use formula::EvaluateError;
 use formula::{CheckedExpression, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
 use measure::{Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
 use ulid::Ulid;

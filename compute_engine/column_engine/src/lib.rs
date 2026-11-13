@@ -5,8 +5,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
 use dimension::{Dimension, MemberIndex, ReferenceAttribute};
-use evaluator::EvaluateError;
-use formula::{CheckedAxis, CheckedExpression, CheckedNode};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
 use crate::columns::{ByAxis, Columns, find_dimension, packing_of};
