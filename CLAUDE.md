@@ -22,3 +22,7 @@ issue は GitHub Issues (kazu-2020/epm) に置く。See `docs/agents/issue-track
 ### Domain docs
 
 単一コンテキスト。用語の正はリポジトリ直下の `GLOSSARY.md`、決定は `docs/adr/`。See `docs/agents/domain.md`.
+
+## 日本語の校正
+
+`npm ci && npm run lint:ja` で Markdown 文書に textlint を実行する。規則は `.textlintrc.json`、プロジェクト固有の用語は `prh.yml`。
