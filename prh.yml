@@ -1,0 +1,7 @@
+version: 1
+rules:
+  - expected: バージョン
+    pattern: /(?<!出)版/
+    specs:
+      - from: 新しい版
+        to: 新しいバージョン

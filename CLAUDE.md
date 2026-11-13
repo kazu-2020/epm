@@ -1,6 +1,12 @@
 ## 原則
 
-コードには"How"、テストコードには"What",コミットログには"Why"、コードコメントには"Why not"を書く。
+書く内容は次のとおり。
+
+- コード: How
+- テストコード: What
+- コミットログ: Why
+- コードコメント: Why not
+
 コードコメントは基本それ以外書かない。
 
 日本語では和語を使わず、熟語とカタカナ語で説明する。返信、文書、コミットログ、コードコメントのすべてが対象。
@@ -22,3 +28,7 @@ issue は GitHub Issues (kazu-2020/epm) に置く。See `docs/agents/issue-track
 ### Domain docs
 
 単一コンテキスト。用語の正はリポジトリ直下の `GLOSSARY.md`、決定は `docs/adr/`。See `docs/agents/domain.md`.
+
+## 日本語の校正
+
+`pnpm install && pnpm lint:ja` で Markdown 文書に textlint を実行する。規則は `.textlintrc.json`、プロジェクト固有の用語は `prh.yml`。
