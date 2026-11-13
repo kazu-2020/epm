@@ -47,7 +47,7 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Runnin
 fn slow(busy_after: u64) -> Settings {
     Settings {
         busy_after,
-        calculation: Calculation::Inline(CALCULATION),
+        calculation: Calculation::Simulated(CALCULATION),
         ..Settings::default()
     }
 }

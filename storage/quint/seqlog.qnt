@@ -22,7 +22,6 @@ module seqlog {
   pure val MaxInFlight = 2
 
   // The epoch is at the start of the segment body, not in the key: the slot number alone is what two owners fight for.
-  // One epoch has one owner, so the epoch also tells whose write it is.
   type Slot = { epoch: int, requests: List[str] }
   type Write = { server: str, slot: int, epoch: int, requests: List[str], attempt: int }
   type Reply = { write: Write, succeeded: bool }
@@ -243,7 +242,6 @@ module seqlog {
   val staleEpochNeverCommits: bool = store.slots.keys().forall(i =>
     store.slots.keys().forall(j => i < j implies store.slots.get(i).epoch <= store.slots.get(j).epoch))
 
-  // A 412 is resolved by the epoch alone, so one epoch must never write two contents to one slot.
   val oneContentPerSlotPerEpoch: bool = {
     val everyWrite = store.writesInFlight.union(store.replies.map(r => r.write)).union(
       servers.keys().map(s => servers.get(s).pending.map(p => p.write)).flatten())

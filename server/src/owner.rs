@@ -27,8 +27,7 @@ pub struct Settings {
 
 pub enum Calculation {
     Threads(NonZeroUsize),
-    // Not for production: the calculation blocks the task that also writes the change log. The simulation uses it to stay reproducible.
-    Inline(Duration),
+    Simulated(Duration),
 }
 
 impl Default for Settings {
@@ -88,7 +87,7 @@ struct Admission {
 
 enum Calculator {
     Thread(rayon::ThreadPool),
-    Inline(Duration),
+    Simulated(Duration),
 }
 
 type Calculating = Pin<Box<dyn Future<Output = Result<Engine, EngineAlarm>> + Send>>;
@@ -135,7 +134,7 @@ pub fn start(
     let run = async move {
         let calculator = match settings.calculation {
             Calculation::Threads(threads) => Calculator::Thread(pool(threads)),
-            Calculation::Inline(cost) => Calculator::Inline(cost),
+            Calculation::Simulated(cost) => Calculator::Simulated(cost),
         };
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
         tokio::select! {
@@ -251,7 +250,7 @@ impl Calculator {
                 let last = commits.last().map_or(first, |(_, commit)| commit.sequence);
                 on_pool(pool, first..=last, move || engine.apply_batch(&commits))
             }
-            Calculator::Inline(cost) => {
+            Calculator::Simulated(cost) => {
                 let cost = *cost;
                 Box::pin(async move {
                     tokio::time::sleep(cost).await;
@@ -274,7 +273,7 @@ impl Calculator {
                 });
                 encoded
             }
-            Calculator::Inline(_) => {
+            Calculator::Simulated(_) => {
                 let (finished, encoded) = oneshot::channel();
                 let _ = finished.send(snapshot::encode(&snapshot));
                 encoded
