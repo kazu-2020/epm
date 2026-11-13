@@ -25,4 +25,4 @@ issue は GitHub Issues (kazu-2020/epm) に置く。See `docs/agents/issue-track
 
 ## 日本語の校正
 
-`npm ci && npm run lint:ja` で Markdown 文書に textlint を実行する。規則は `.textlintrc.json`、プロジェクト固有の用語は `prh.yml`。
+`pnpm install && pnpm lint:ja` で Markdown 文書に textlint を実行する。規則は `.textlintrc.json`、プロジェクト固有の用語は `prh.yml`。
