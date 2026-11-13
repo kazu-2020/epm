@@ -24,7 +24,7 @@ storage/quint/check.sh          # 1モジュールあたり5万回のランダ�
 storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少ないと変異が反例に届かず落ちることがあるので、そのときは既定の回数で実行し直す
 ```
 
-終了コードが 1 なら、次のどれかが起きた。設計どおりのモデル(`seqlog_designed`)で性質が破れた。到達するはずの状態に届かなかった。守りを外したモデルで、`check.sh` の `breaks` に書いた性質が破れなかった、または `holds` と `log_safe_without_guard` の性質が破れた。反例の手順は `quint run seqlog.qnt --main seqlog_designed --invariant <性質> --mbt` で見る(`mbt::actionTaken` に各ステップの操作が出る)。
+終了コードが 1 なら、次のどれかが起きた。設計どおりのモデル(`seqlog_designed`)で性質が破れた。到達するはずの状態に届かなかった。守りを外したモデルで、`check.sh` の `breaks` に書いた性質が破れなかった、または `holds` と `log_safe_without_guard` の性質が破れた。反例の手順は `quint run seqlog.qnt --main seqlog_designed --invariant <性質> --mbt` で確認する。`mbt::actionTaken` に各ステップの操作が出る。
 
 モデルが前提にする条件付き書き込みの応答は、RustFS で次のように実測する。
 
@@ -37,7 +37,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 ## 担当の動き
 
-担当の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` に、その動きは `seqlog.qnt` の action にある。変更ログは Slot 0 から最初の穴までを並べたものとして扱う。
+担当の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` にある。その動作は `seqlog.qnt` の action が記述する。変更ログは Slot 0 から最初の穴までを並べたものとして扱う。
 
 ## 検査する性質
 
@@ -70,7 +70,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 どの変異でどの性質が破れるかは `check.sh` の `breaks` に、破れないものは `holds` にある。2つの守りには、コードから分からない理由がある。
 
-`seqlog_two_in_flight` は、Slot の列に書くこの方式に固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、Slot N+1 が N より先に入り、N+1 の batch を ACK したのに、N が空いているのでログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの Slot に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。また、2つの応答が Slot と逆の順に届くと、両方ともログに入っていても `view` の順がログと食い違う。これは `viewIsLogPrefix` だけが捕まえる。
+`seqlog_two_in_flight` は、Slot の列へ書くこの方式固有の守り。PUT を pipelining すると、2つの壊れ方がある。1つは、Slot N+1 が N より先に入る場合である。N+1 の batch を ACK したのに、N が空いているので、その batch はログに載っていない(`pipelineAcknowledgesPastHoleTest`)。もう1つは、古い担当の2つ目の PUT が新しい担当のフェンスより後ろの Slot に入る。前者は5万回のランダムシミュレーションでは届かなかったので、固定の手順で確かめる。また、2つの応答が Slot と逆の順に届くと、両方ともログに入っていても `view` の順がログと食い違う。これは `viewIsLogPrefix` だけが捕まえる。
 
 `seqlog_rejected_as_fenced` は安全性を壊さない。412 で読まずに止まると、自分の書き込みが入っていても ACK しないだけで、ログは壊れない。412 のあとに読むのは、再送のたびに担当が止まらないためのもの(活性)で、安全性のためではない。止まった担当が確定済みのコミットを ACK しない場面は、固定の手順 `ownResendRejectedTest` で確かめる。
 
@@ -85,6 +85,6 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 ## コードとの対応
 
-Rust の実装は `storage/change_log/` にある。担当の状態機械 `Owner::step` が Quint の action に対応し、`mutations.sh` が `check.sh` と同じ変異を Rust のシミュレーションで確かめる。
+Rust の実装は `storage/change_log/` にある。担当の状態機械 `Owner::step` が Quint の action に対応する。`mutations.sh` は `check.sh` と同じ変異を Rust のシミュレーションで検証する。
 
-`storage/change_log/src/owner/replay.rs` は、`seqlog_replay.qnt` のトレースを [quint-connect](https://crates.io/crates/quint-connect) で `Owner::step` に再生し、各ステップのあとでモデルと状態を比べる。モデルで起きない手順(`two_in_flight` など)は確かめず、`mutations.sh` が捕まえる。`cargo test` で動き、`quint` が PATH に要る。失敗したら表示される `QUINT_SEED=<値>` を付けて再生する。
+`storage/change_log/src/owner/replay.rs` は、`seqlog_replay.qnt` のトレースを `Owner::step` に再生する。再生には [quint-connect](https://crates.io/crates/quint-connect) を使う。各ステップの後でモデルと状態を比較する。モデルで起きない手順(`two_in_flight` など)は確かめず、`mutations.sh` が捕まえる。`cargo test` で動き、`quint` が PATH に要る。失敗したら表示される `QUINT_SEED=<値>` を付けて再生する。
