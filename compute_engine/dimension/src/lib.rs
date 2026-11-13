@@ -243,6 +243,7 @@ impl Dimension {
         u32::try_from(rows).map_err(|_| DimensionError::TooManyMembers(rows))?;
         let expected = definition.schema();
         let found = members.schema();
+        // Not `expected == *found`: nullability may differ, and the null checks below run row by row.
         let same_shape =
             expected.fields().len() == found.fields().len()
                 && expected.fields().iter().zip(found.fields()).all(

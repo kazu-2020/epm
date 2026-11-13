@@ -19,7 +19,7 @@ const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(200));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(300));
 const COST: MeasureGlobalId = MeasureGlobalId(Ulid(400));
 
-fn dimension(ulid: DimensionGlobalId, names: &[&str]) -> Dimension {
+fn dimension(ulid: DimensionGlobalId, natural_keys: &[&str]) -> Dimension {
     let natural_key_attribute = AttributeGlobalId(ulid.0);
     let definition = DimensionDefinition::try_new(
         ulid,
@@ -34,10 +34,13 @@ fn dimension(ulid: DimensionGlobalId, names: &[&str]) -> Dimension {
     )
     .unwrap();
     let ulids = FixedSizeBinaryArray::try_from_iter(
-        (0..names.len()).map(|row| Ulid(ulid.0.0 + row as u128 + 1).to_bytes()),
+        (0..natural_keys.len()).map(|row| Ulid(ulid.0.0 + row as u128 + 1).to_bytes()),
     )
     .unwrap();
-    let columns: Vec<ArrayRef> = vec![Arc::new(ulids), Arc::new(StringArray::from(names.to_vec()))];
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(ulids),
+        Arc::new(StringArray::from(natural_keys.to_vec())),
+    ];
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
     Dimension::try_new(definition, batch, &[]).unwrap()
 }

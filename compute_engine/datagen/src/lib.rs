@@ -114,8 +114,9 @@ impl Generator<'_> {
         .expect("generated attributes have unique names and ULIDs");
         let ulids = FixedSizeBinaryArray::try_from_iter((0..len).map(|_| self.ulid().to_bytes()))
             .expect("every member ULID is 16 bytes");
-        let names = StringArray::from_iter_values((0..len).map(|member| format!("m{member}")));
-        let mut columns: Vec<ArrayRef> = vec![Arc::new(ulids), Arc::new(names)];
+        let natural_keys =
+            StringArray::from_iter_values((0..len).map(|member| format!("m{member}")));
+        let mut columns: Vec<ArrayRef> = vec![Arc::new(ulids), Arc::new(natural_keys)];
         if let Some(parent) = parent {
             let targets: UInt32Array = (0..len)
                 .map(|_| (!self.random.random_bool(0.1)).then(|| self.skewed(parent.len())))

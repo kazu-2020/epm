@@ -244,7 +244,7 @@ fn attribute(ulid: u128, name: &str, target: DimensionGlobalId) -> AttributeDefi
 fn dimension(
     ulid: DimensionGlobalId,
     name: &str,
-    names: Vec<String>,
+    natural_keys: Vec<String>,
     attribute: Option<(AttributeDefinition, Vec<u32>)>,
     earlier: &[Dimension],
 ) -> Dimension {
@@ -265,10 +265,11 @@ fn dimension(
     .expect("the representative dimension definitions are valid");
     let first_member = ulid.0.0 << 32;
     let ulids = FixedSizeBinaryArray::try_from_iter(
-        (0..names.len()).map(|row| Ulid(first_member + row as u128).to_bytes()),
+        (0..natural_keys.len()).map(|row| Ulid(first_member + row as u128).to_bytes()),
     )
     .expect("every member ULID is 16 bytes");
-    let mut columns: Vec<ArrayRef> = vec![Arc::new(ulids), Arc::new(StringArray::from(names))];
+    let mut columns: Vec<ArrayRef> =
+        vec![Arc::new(ulids), Arc::new(StringArray::from(natural_keys))];
     if let Some(targets) = targets {
         columns.push(Arc::new(UInt32Array::from(targets)));
     }
@@ -578,25 +579,25 @@ impl Representative {
             let group = group_of
                 .value(dimension::MemberIndex(account))
                 .expect("every account has a group");
-            let group_name = groups
+            let group_natural_key = groups
                 .member(group)
                 .expect("the group exists")
                 .natural_key();
-            if FROM_QUANTITY_GROUPS.contains(&group_name) {
+            if FROM_QUANTITY_GROUPS.contains(&group_natural_key) {
                 continue;
             }
             let category = category_of
                 .value(group)
                 .expect("every group has a category");
-            let category_name = categories
+            let category_natural_key = categories
                 .member(category)
                 .expect("the category exists")
                 .natural_key();
             for department in 0..self.departments() {
                 let kind = self.department_kind(department);
-                let books = if MANUFACTURING_GROUPS.contains(&group_name) {
+                let books = if MANUFACTURING_GROUPS.contains(&group_natural_key) {
                     kind == DepartmentKind::Manufacturing
-                } else if category_name == "販売費及び一般管理費" {
+                } else if category_natural_key == "販売費及び一般管理費" {
                     true
                 } else {
                     kind == DepartmentKind::Administration
