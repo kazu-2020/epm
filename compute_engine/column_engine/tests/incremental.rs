@@ -22,16 +22,41 @@ struct Model {
 
 impl Model {
     fn new() -> Model {
-        Model::with_results_reversed(false)
+        Model::of(representative::generate(&SMALL, 7))
     }
 
-    fn with_results_reversed(reversed: bool) -> Model {
+    fn with_results_reversed() -> Model {
         let mut workspace = representative::generate(&SMALL, 7);
-        if reversed {
-            for formula in &mut workspace.formulas {
-                formula.result.axes.reverse();
-            }
+        for formula in &mut workspace.formulas {
+            formula.result.axes.reverse();
         }
+        Model::of(workspace)
+    }
+
+    fn with_every_measure_reversed() -> Model {
+        let mut workspace = Model::with_results_reversed().workspace;
+        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        workspace.inputs = workspace
+            .inputs
+            .iter()
+            .map(|input| {
+                let mut definition = input.definition().clone();
+                definition.axes.reverse();
+                let cells = input
+                    .cells()
+                    .map(|(mut coordinate, value)| {
+                        coordinate.reverse();
+                        (coordinate, value)
+                    })
+                    .collect();
+                Measure::from_cells(definition, cells, &dimensions)
+                    .expect("the reversed cells fit the reversed axes")
+            })
+            .collect();
+        Model::of(workspace)
+    }
+
+    fn of(workspace: UncheckedWorkspace) -> Model {
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let definitions: Vec<MeasureDefinition> = workspace
             .inputs
@@ -112,7 +137,36 @@ fn edits_recalculate_to_the_same_cells_as_a_full_recalculation() {
 
 #[test]
 fn edits_match_a_full_recalculation_when_results_declare_axes_out_of_packing_order() {
-    edit_and_compare(&Model::with_results_reversed(true));
+    edit_and_compare(&Model::with_results_reversed());
+}
+
+#[test]
+fn edits_match_a_full_recalculation_when_every_measure_declares_axes_out_of_packing_order() {
+    edit_and_compare(&Model::with_every_measure_reversed());
+}
+
+#[test]
+fn a_full_recalculation_matches_the_evaluator_when_every_measure_declares_axes_out_of_packing_order()
+ {
+    let model = Model::with_every_measure_reversed();
+    let dimensions = model.dimensions();
+    let mut measures = model.workspace.inputs.clone();
+    for (result, expression) in &model.checked {
+        let references: Vec<&Measure> = measures.iter().collect();
+        let expected = evaluator::evaluate(expression, result, &references, &dimensions)
+            .expect("the evaluator evaluates the formula");
+        let column = column_engine::evaluate(expression, result, &references, &dimensions)
+            .expect("the column engine evaluates the formula");
+        let expected = exact(&expected.cells().collect::<Vec<_>>());
+        assert!(!expected.is_empty(), "{} has cells", result.name);
+        assert_eq!(
+            exact(&column.cells().collect::<Vec<_>>()),
+            expected,
+            "{}",
+            result.name
+        );
+        measures.push(column);
+    }
 }
 
 fn edit_and_compare(model: &Model) {

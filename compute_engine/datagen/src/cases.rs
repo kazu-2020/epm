@@ -354,13 +354,16 @@ impl Fixture {
 
 pub fn exact(cells: &[(Vec<MemberIndex>, f64)]) -> Vec<(Vec<u32>, String)> {
     // Not the f64 itself: 0.0 == -0.0, and the cases must tell them apart.
-    cells
+    let mut cells: Vec<(Vec<u32>, String)> = cells
         .iter()
         .map(|(coordinate, value)| {
             let members = coordinate.iter().map(|member| member.0).collect();
             (members, format!("{value:?}"))
         })
-        .collect()
+        .collect();
+    // Not the given order: a measure lists its cells in packing order, and the cases and the oracle list them by the declared axes.
+    cells.sort();
+    cells
 }
 
 pub fn expected(case: &Case) -> Vec<(Vec<u32>, String)> {
