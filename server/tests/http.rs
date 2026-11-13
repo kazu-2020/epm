@@ -227,7 +227,7 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
 async fn each_refusal_has_its_connect_code() {
     let app = app(Settings {
         busy_after: 0,
-        calculation: Calculation::Inline(Duration::from_secs(10)),
+        calculation: Calculation::Simulated(Duration::from_secs(10)),
         ..Settings::default()
     });
     let unknown = MeasureGlobalId(Ulid(999));
