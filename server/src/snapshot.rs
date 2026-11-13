@@ -5,7 +5,7 @@ use measure::{Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
 use ulid::Ulid;
 
 const MAGIC: [u8; 4] = *b"SNAP";
-const VERSION: u8 = 2;
+const VERSION: u8 = 1;
 const CELLS_PER_CHUNK: usize = 4 << 20;
 const REQUEST_IDS_PER_CHUNK: usize = 1 << 20;
 const LEVEL: i32 = 1;
@@ -523,7 +523,7 @@ mod tests {
         };
         let (objects, manifest) = encode(&empty);
         assert!(objects.is_empty());
-        assert_eq!(&manifest[..], b"SNAP\x02\x02\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
+        assert_eq!(&manifest[..], b"SNAP\x01\x02\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
     }
 
     #[test]
@@ -586,13 +586,13 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_of_an_earlier_version_is_an_error() {
+    fn a_manifest_of_another_version_is_an_error() {
         let (_, manifest) = encode(&snapshot(&workspace()));
-        let mut earlier = manifest.to_vec();
-        earlier[MAGIC.len()] = VERSION - 1;
+        let mut other = manifest.to_vec();
+        other[MAGIC.len()] = VERSION + 1;
         assert_eq!(
-            Manifest::decode(earlier.into()),
-            Err(SnapshotError::Version(VERSION - 1))
+            Manifest::decode(other.into()),
+            Err(SnapshotError::Version(VERSION + 1))
         );
     }
 
