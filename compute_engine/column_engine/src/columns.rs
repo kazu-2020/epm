@@ -5,10 +5,7 @@ use std::ops::Range;
 use arrow_buffer::ScalarBuffer;
 use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
 use formula::{EvaluateError, ProductOperator, Sign};
-use measure::{
-    CoordinatePacking, Measure, MeasureDefinition, MeasureError, first_row, first_unsorted,
-    normalize,
-};
+use measure::{CoordinatePacking, Measure, MeasureDefinition, MeasureError, normalize};
 use rayon::prelude::*;
 
 use crate::region::Region;
@@ -99,9 +96,15 @@ fn is_normalized(value: f64) -> bool {
     normalize(value).map(f64::to_bits) == Some(value.to_bits())
 }
 
+fn all_normalized(values: &[f64]) -> bool {
+    values
+        .par_chunks(PARALLEL_ROWS)
+        .all(|piece| piece.iter().copied().all(is_normalized))
+}
+
 fn stable_order(packed_coordinates: &[u64]) -> Vec<usize> {
     let mut rows: Vec<usize> = (0..packed_coordinates.len()).collect();
-    if first_unsorted(packed_coordinates).is_some() {
+    if !rows::ascending(packed_coordinates) {
         // Not sort_unstable: SUM adds each group in coordinate order.
         rows.par_sort_by_key(|&row| packed_coordinates[row]);
     }
@@ -204,9 +207,7 @@ impl Columns {
         values: impl Into<ScalarBuffer<f64>>,
     ) -> Columns {
         let values = values.into();
-        if first_unsorted(&packed_coordinates).is_none()
-            && first_row(&values, |&value| !is_normalized(value)).is_none()
-        {
+        if rows::ascending(&packed_coordinates) && all_normalized(&values) {
             return Columns {
                 axes,
                 packing,
@@ -233,7 +234,7 @@ impl Columns {
     }
 
     fn normalized(self) -> Columns {
-        if first_row(&self.values, |&value| !is_normalized(value)).is_none() {
+        if all_normalized(&self.values) {
             return self;
         }
         self.select(&rows::pieces(self.len()), |row| {
@@ -958,6 +959,17 @@ mod tests {
 
         assert_eq!(&columns.packed_coordinates[..], &[1]);
         assert_eq!(columns.values[0].to_bits(), 0);
+    }
+
+    #[test]
+    fn sorted_packed_coordinates_with_normalized_values_keep_the_given_values_without_a_copy() {
+        let axis = DimensionGlobalId(ulid::Ulid(1));
+        let packing = CoordinatePacking::new(&[8]).expect("3 bits fit in a packed coordinate");
+        let values: ScalarBuffer<f64> = vec![1.0, 2.0].into();
+
+        let columns = Columns::from_packed(vec![axis], packing, vec![0, 1], values.clone());
+
+        assert!(columns.values.ptr_eq(&values));
     }
 
     #[test]

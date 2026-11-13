@@ -13,6 +13,17 @@ pub(super) fn pieces(len: usize) -> Vec<Range<usize>> {
         .collect()
 }
 
+pub(super) fn ascending(packed_coordinates: &[u64]) -> bool {
+    (0..packed_coordinates.len())
+        .into_par_iter()
+        .step_by(PARALLEL_ROWS)
+        .all(|start| {
+            // Not the piece alone: its last packed coordinate is compared with the first one of the next piece too.
+            let end = (start + PARALLEL_ROWS + 1).min(packed_coordinates.len());
+            packed_coordinates[start..end].is_sorted_by(|left, right| left < right)
+        })
+}
+
 pub(super) fn gather<T: Copy + Send + Sync>(rows: &[usize], from: &[T]) -> Vec<T> {
     rows.par_iter()
         .with_min_len(PARALLEL_ROWS)
@@ -141,6 +152,30 @@ fn merge(left: &[u64], right: &[u64], mut emit: impl FnMut(u64)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_coordinates_are_ascending_only_without_a_repeat_or_a_step_back() {
+        assert!(ascending(&[]));
+        assert!(ascending(&[7]));
+        assert!(ascending(&[7, 8]));
+        assert!(!ascending(&[7, 7]));
+        assert!(!ascending(&[8, 7]));
+    }
+
+    #[test]
+    fn a_step_back_across_the_border_of_two_pieces_is_not_ascending() {
+        let pieces = 2 * PARALLEL_ROWS as u64;
+        let sorted: Vec<u64> = (0..pieces).collect();
+        assert!(ascending(&sorted));
+
+        let mut first_of_the_second_piece = sorted.clone();
+        first_of_the_second_piece[PARALLEL_ROWS] = 0;
+        assert!(!ascending(&first_of_the_second_piece));
+
+        let mut last = sorted;
+        last[2 * PARALLEL_ROWS - 1] = 0;
+        assert!(!ascending(&last));
+    }
 
     #[test]
     fn union_across_many_ranges_equals_the_set_union() {
