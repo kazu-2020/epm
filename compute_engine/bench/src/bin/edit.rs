@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use datagen::representative::{self, Size};
-use dimension::{Dimension, MemberIndex};
+use dimension::Dimension;
 use formula::CheckedExpression;
 use measure::{MeasureDefinition, MeasureGlobalId};
 
@@ -50,16 +50,13 @@ fn main() -> std::io::Result<()> {
         for edit in 0..edits {
             let row = (edit * 7_919 * 104_729) % rows;
             let measure = &measures[input];
-            let coordinate: Vec<MemberIndex> = measure
-                .packing()
-                .unpack(measure.base_packed_coordinates()[row])
-                .map(MemberIndex)
-                .collect();
-            let value = measure.base_values()[row];
-            let mut delta = measures[input].delta();
-            delta
-                .set(&coordinate, value * 1.01 + 1.0)
-                .expect("the coordinate fits");
+            // Not Delta::set: it takes the coordinate in the declared order, and the base row gives it packed.
+            let delta = measure
+                .delta_from_packed(
+                    vec![measure.base_packed_coordinates()[row]],
+                    vec![Some(measure.base_values()[row] * 1.01 + 1.0)],
+                )
+                .expect("a packed coordinate of the base fits the measure");
             let ulid = measures[input].ulid();
             let started = Instant::now();
             measures = column_engine::edit(&measures, [(ulid, delta)], &order, &dimensions)

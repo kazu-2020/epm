@@ -55,7 +55,7 @@ fn apply(
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {
     let index = position(measures, ulid)?;
-    let axes = &measures[index].definition().axes;
+    let axes = measures[index].axes_in_packing_order();
     if let Some(mut region) =
         Region::of_packed(axes, measures[index].packing(), delta.packed_coordinates())
     {
@@ -103,28 +103,8 @@ fn recalculate(
     let definition = result.definition();
     check_packing(result, dimensions)?;
     let new = evaluate_in(expression, definition, measures, dimensions, region)?;
-    let old = Columns::from_measure_in(result, region, dimensions)?;
-    let positions: Vec<usize> = definition
-        .axes
-        .iter()
-        .map(|&axis| new.position(axis))
-        .collect();
-    let (mut packed_coordinates, mut changes) = new.changes_from(&old);
-    if !positions.is_sorted() {
-        let packing = new.packing();
-        let mut pairs: Vec<(u64, Option<f64>)> = packed_coordinates
-            .iter()
-            .zip(changes)
-            .map(|(&packed, change)| {
-                let members = positions
-                    .iter()
-                    .map(|&position| packing.member(packed, position));
-                (result.packing().pack(members), change)
-            })
-            .collect();
-        pairs.sort_unstable_by_key(|&(packed, _)| packed);
-        (packed_coordinates, changes) = pairs.into_iter().unzip();
-    }
+    let old = Columns::from_measure_in(result, region);
+    let (packed_coordinates, changes) = new.changes_from(&old);
     result
         .delta_from_packed(packed_coordinates, changes)
         .map_err(EvaluateError::InvalidResult)
@@ -234,7 +214,7 @@ fn changed_in(
 }
 
 fn check_packing(measure: &Measure, dimensions: &[&Dimension]) -> Result<(), EvaluateError> {
-    if *measure.packing() != packing_of(dimensions, &measure.definition().axes)? {
+    if *measure.packing() != packing_of(dimensions, measure.axes_in_packing_order())? {
         return Err(EvaluateError::MeasurePackingChanged(measure.ulid()));
     }
     Ok(())
@@ -368,9 +348,9 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 }
                 check_packing(measure, self.dimensions)?;
                 if axes.iter().any(|&axis| region.members(axis).is_some()) {
-                    Columns::from_measure_in(measure, region, self.dimensions)
+                    Ok(Columns::from_measure_in(measure, region))
                 } else {
-                    Columns::from_measure(measure, self.dimensions)
+                    Ok(Columns::from_measure(measure))
                 }
             }
             CheckedNode::Terms(terms) => Columns::add(

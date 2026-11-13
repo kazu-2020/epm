@@ -5,7 +5,7 @@ use measure::{Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
 use ulid::Ulid;
 
 const MAGIC: [u8; 4] = *b"SNAP";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const CELLS_PER_CHUNK: usize = 4 << 20;
 const REQUEST_IDS_PER_CHUNK: usize = 1 << 20;
 const LEVEL: i32 = 1;
@@ -251,16 +251,24 @@ fn axes(
     definition: &MeasureDefinition,
     dimensions: &[&Dimension],
 ) -> Option<Vec<(DimensionGlobalId, u32)>> {
-    definition
+    let mut found = definition
         .axes
         .iter()
         .map(|&axis| {
-            let dimension = dimensions
+            dimensions
                 .iter()
-                .find(|dimension| dimension.ulid() == axis)?;
-            Some((axis, dimension.len()))
+                .find(|dimension| dimension.ulid() == axis)
+                .copied()
         })
-        .collect()
+        .collect::<Option<Vec<&Dimension>>>()?;
+    // Not the declared order: the cells are packed in packing order, so a definition that declares the same axes in another order reads the same bytes.
+    found.sort_by_key(|dimension| dimension.packing_order());
+    Some(
+        found
+            .iter()
+            .map(|dimension| (dimension.ulid(), dimension.len()))
+            .collect(),
+    )
 }
 
 fn request_path(index: usize) -> String {
@@ -515,7 +523,7 @@ mod tests {
         };
         let (objects, manifest) = encode(&empty);
         assert!(objects.is_empty());
-        assert_eq!(&manifest[..], b"SNAP\x01\x02\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
+        assert_eq!(&manifest[..], b"SNAP\x02\x02\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
     }
 
     #[test]
@@ -532,12 +540,59 @@ mod tests {
             "a measure without a definition"
         );
         let (objects, _) = encode(&snapshot(&workspace));
-        let mut moved = definitions(&workspace);
-        moved[0].axes.reverse();
+        let mut narrower = definitions(&workspace);
+        narrower[0].axes.pop();
         assert_eq!(
-            read_back(manifest, objects, &moved, &dimensions).err(),
+            read_back(manifest, objects, &narrower, &dimensions).err(),
             Some(SnapshotError::Definitions(first)),
             "a definition with other axes"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_reads_back_under_a_definition_that_declares_the_same_axes_in_another_order() {
+        let workspace = workspace();
+        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let snapshot = snapshot(&workspace);
+        let (objects, manifest) = encode(&snapshot);
+        let mut reversed = definitions(&workspace);
+        for definition in &mut reversed {
+            definition.axes.reverse();
+        }
+        assert_ne!(reversed, definitions(&workspace));
+
+        let read = read_back(manifest, objects, &reversed, &dimensions).expect("reads back");
+
+        for (read, written) in read.inputs.iter().zip(&snapshot.inputs) {
+            assert_eq!(
+                read.definition().axes.len(),
+                written.definition().axes.len()
+            );
+            let mut written: Vec<_> = written
+                .cells()
+                .map(|(mut coordinate, value)| {
+                    coordinate.reverse();
+                    (coordinate, value.to_bits())
+                })
+                .collect();
+            written.sort();
+            let mut read: Vec<_> = read
+                .cells()
+                .map(|(coordinate, value)| (coordinate, value.to_bits()))
+                .collect();
+            read.sort();
+            assert_eq!(read, written);
+        }
+    }
+
+    #[test]
+    fn a_manifest_of_an_earlier_version_is_an_error() {
+        let (_, manifest) = encode(&snapshot(&workspace()));
+        let mut earlier = manifest.to_vec();
+        earlier[MAGIC.len()] = VERSION - 1;
+        assert_eq!(
+            Manifest::decode(earlier.into()),
+            Err(SnapshotError::Version(VERSION - 1))
         );
     }
 
@@ -583,18 +638,22 @@ mod tests {
         assert_eq!(manifest.paths(), expected);
         assert_eq!(objects.len(), expected.len());
         for (entry, input) in manifest.measures.iter().zip(&workspace.inputs) {
-            let member_counts: Vec<_> = input
+            let mut axes: Vec<&Dimension> = input
                 .definition()
                 .axes
                 .iter()
                 .map(|&axis| {
-                    let dimension = workspace
+                    workspace
                         .dimensions
                         .iter()
                         .find(|dimension| dimension.ulid() == axis)
-                        .expect("a dimension");
-                    (axis, dimension.len())
+                        .expect("a dimension")
                 })
+                .collect();
+            axes.sort_by_key(|dimension| dimension.packing_order());
+            let member_counts: Vec<_> = axes
+                .iter()
+                .map(|dimension| (dimension.ulid(), dimension.len()))
                 .collect();
             assert_eq!(entry.axes, member_counts);
         }

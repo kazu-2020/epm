@@ -108,26 +108,6 @@ fn stable_order(packed_coordinates: &[u64]) -> Vec<usize> {
     rows
 }
 
-fn reorder(
-    packing: &CoordinatePacking,
-    packed_coordinates: &[u64],
-    positions: &[usize],
-) -> (CoordinatePacking, Vec<u64>) {
-    let reordered = packing.reordered(positions);
-    let packed_coordinates = packed_coordinates
-        .par_iter()
-        .with_min_len(PARALLEL_ROWS)
-        .map(|&packed| {
-            reordered.pack(
-                positions
-                    .iter()
-                    .map(|&position| packing.member(packed, position)),
-            )
-        })
-        .collect();
-    (reordered, packed_coordinates)
-}
-
 fn runs<'r>(packed_coordinates: &[u64], rows: &'r [usize]) -> Vec<&'r [usize]> {
     rows.chunk_by(|&left, &right| packed_coordinates[left] == packed_coordinates[right])
         .collect()
@@ -302,55 +282,26 @@ impl Columns {
         )
     }
 
-    pub(crate) fn from_measure(
-        measure: &Measure,
-        dimensions: &[&Dimension],
-    ) -> Result<Columns, EvaluateError> {
-        Columns::from_base(&measure.compact(), dimensions)
+    pub(crate) fn from_measure(measure: &Measure) -> Columns {
+        Columns::from_base(&measure.compact())
     }
 
-    pub(crate) fn from_measure_in(
-        measure: &Measure,
-        region: &Region,
-        dimensions: &[&Dimension],
-    ) -> Result<Columns, EvaluateError> {
-        let base = Columns::from_base(measure, dimensions)?.restrict(region);
-        let definition = &measure.definition().axes;
-        let positions: Vec<usize> = base
-            .axes
-            .iter()
-            .map(|axis| {
-                definition
-                    .iter()
-                    .position(|candidate| candidate == axis)
-                    .expect("the columns keep the measure's axes")
-            })
-            .collect();
-        let packing = measure.packing();
+    pub(crate) fn from_measure_in(measure: &Measure, region: &Region) -> Columns {
+        let base = Columns::from_base(measure).restrict(region);
         let (packed_coordinates, changes) = measure.merged_changes();
-        let mut inside: Vec<(u64, Option<f64>)> = packed_coordinates
+        let inside: Vec<(u64, Option<f64>)> = packed_coordinates
             .iter()
             .zip(changes)
             .filter(|&(&packed, _)| {
-                base.axes.iter().zip(&positions).all(|(&axis, &position)| {
-                    region
-                        .members(axis)
-                        .is_none_or(|members| members.contains(&packing.member(packed, position)))
+                base.axes.iter().enumerate().all(|(position, &axis)| {
+                    region.members(axis).is_none_or(|members| {
+                        members.contains(&base.packing.member(packed, position))
+                    })
                 })
             })
             .map(|(&packed, change)| (packed, change))
             .collect();
-        if !positions.is_sorted() {
-            for (packed, _) in &mut inside {
-                *packed = base.packing.pack(
-                    positions
-                        .iter()
-                        .map(|&position| packing.member(*packed, position)),
-                );
-            }
-            inside.sort_unstable_by_key(|&(packed, _)| packed);
-        }
-        Ok(base.with_changes(inside))
+        base.with_changes(inside)
     }
 
     fn with_changes(self, changes: Vec<(u64, Option<f64>)>) -> Columns {
@@ -517,31 +468,14 @@ impl Columns {
         (packed_coordinates, changes)
     }
 
-    fn from_base(measure: &Measure, dimensions: &[&Dimension]) -> Result<Columns, EvaluateError> {
-        let axes = measure.definition().axes.clone();
-        let mut order: Vec<usize> = (0..axes.len()).collect();
-        sort_in_packing_order(&mut order, |&position| axes[position], dimensions)?;
-        if order.is_sorted() {
-            // Not Columns::from_packed: Measure already rejects unsorted or unnormalized cells.
-            return Ok(Columns {
-                axes,
-                packing: measure.packing().clone(),
-                packed_coordinates: measure.base_packed_coordinates().clone(),
-                values: measure.base_values().clone(),
-            });
+    fn from_base(measure: &Measure) -> Columns {
+        // Not Columns::from_packed: Measure already rejects unsorted or unnormalized cells.
+        Columns {
+            axes: measure.axes_in_packing_order().to_vec(),
+            packing: measure.packing().clone(),
+            packed_coordinates: measure.base_packed_coordinates().clone(),
+            values: measure.base_values().clone(),
         }
-        let (packing, packed_coordinates) =
-            reorder(measure.packing(), measure.base_packed_coordinates(), &order);
-        Ok(Columns::from_packed(
-            order.iter().map(|&position| axes[position]).collect(),
-            packing,
-            packed_coordinates,
-            measure.base_values().clone(),
-        ))
-    }
-
-    pub(crate) fn packing(&self) -> &CoordinatePacking {
-        &self.packing
     }
 
     pub(crate) fn position(&self, dimension: DimensionGlobalId) -> usize {
@@ -1007,27 +941,7 @@ impl Columns {
         definition: MeasureDefinition,
         dimensions: &[&Dimension],
     ) -> Result<Measure, MeasureError> {
-        let positions: Vec<usize> = definition
-            .axes
-            .iter()
-            .map(|&axis| self.position(axis))
-            .collect();
-        if positions.is_sorted() {
-            return Measure::try_from_packed(
-                definition,
-                self.packed_coordinates,
-                self.values,
-                dimensions,
-            );
-        }
-        let (_, packed_coordinates) = reorder(&self.packing, &self.packed_coordinates, &positions);
-        let rows = stable_order(&packed_coordinates);
-        Measure::try_from_packed(
-            definition,
-            rows.iter().map(|&row| packed_coordinates[row]).collect(),
-            rows.iter().map(|&row| self.values[row]).collect(),
-            dimensions,
-        )
+        Measure::try_from_packed(definition, self.packed_coordinates, self.values, dimensions)
     }
 }
 

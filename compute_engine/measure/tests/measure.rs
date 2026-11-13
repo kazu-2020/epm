@@ -616,15 +616,6 @@ fn a_one_member_axis_in_front_of_64_bits_packs_without_overflow() {
 }
 
 #[test]
-fn a_reordered_packing_keeps_each_axis_width() {
-    let packing = CoordinatePacking::new(&[3, 2]).unwrap();
-    assert_eq!(
-        packing.reordered(&[1, 0]),
-        CoordinatePacking::new(&[2, 3]).unwrap()
-    );
-}
-
-#[test]
 fn one_axis_mask_holds_every_member_that_fits() {
     let packing = CoordinatePacking::new(&[5, 3]).unwrap();
     assert_eq!(packing.axis_mask(0), 0b11100);
@@ -755,11 +746,113 @@ fn a_delta_from_packed_coordinates_takes_only_sorted_ones_that_fit_the_measure()
 }
 
 #[test]
-fn a_measure_gives_the_member_counts_of_its_axes_in_order() {
-    let measure = sales();
+fn a_measure_gives_its_axes_and_their_member_counts_in_packing_order() {
+    for measure in [sales(), department_first(&[])] {
+        assert_eq!(measure.axes_in_packing_order(), [PERIOD, DEPARTMENT]);
+        assert_eq!(
+            measure.axis_member_counts().collect::<Vec<_>>(),
+            [(PERIOD, 3), (DEPARTMENT, 2)]
+        );
+    }
+}
+
+fn department_first(cells: &[(u32, u32, f64)]) -> Measure {
+    let cells = cells
+        .iter()
+        .map(|&(department, period, value)| {
+            (vec![MemberIndex(department), MemberIndex(period)], value)
+        })
+        .collect();
+    Measure::from_cells(
+        definition(SALES, vec![DEPARTMENT, PERIOD]),
+        cells,
+        &[&periods(), &departments()],
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_measure_packs_its_cells_in_packing_order_whatever_order_its_axes_are_declared_in() {
+    let period_first = try_sales(&[(0, 1, 1.0), (1, 0, 3.0), (2, 0, 2.0)]).unwrap();
+
+    let measure = department_first(&[(1, 0, 1.0), (0, 2, 2.0), (0, 1, 3.0)]);
+
+    assert_eq!(measure.packing(), period_first.packing());
     assert_eq!(
-        measure.axis_member_counts().collect::<Vec<_>>(),
-        [(PERIOD, 3), (DEPARTMENT, 2)]
+        measure.base_packed_coordinates(),
+        period_first.base_packed_coordinates()
+    );
+    assert_eq!(measure.base_values(), period_first.base_values());
+}
+
+#[test]
+fn coordinates_are_taken_and_given_in_the_declared_order_of_the_axes() {
+    let measure = department_first(&[(1, 0, 1.0), (0, 2, 2.0), (0, 1, 3.0)]);
+    let at = |department, period| [MemberIndex(department), MemberIndex(period)];
+
+    assert_eq!(measure.get(&at(0, 2)).unwrap(), Some(2.0));
+    assert_eq!(measure.get(&at(1, 0)).unwrap(), Some(1.0));
+    assert_eq!(measure.get(&at(1, 1)).unwrap(), None);
+    assert_eq!(
+        measure.get(&at(2, 0)).unwrap_err(),
+        MeasureError::MemberOutOfRange {
+            axis: DEPARTMENT,
+            member: MemberIndex(2)
+        }
+    );
+    assert_eq!(
+        measure.cells().collect::<Vec<_>>(),
+        [
+            (at(1, 0).to_vec(), 1.0),
+            (at(0, 1).to_vec(), 3.0),
+            (at(0, 2).to_vec(), 2.0),
+        ]
+    );
+
+    let mut delta = measure.delta();
+    delta.set(&at(1, 2), 9.0).unwrap();
+    delta.delete(&at(0, 1)).unwrap();
+    assert_eq!(
+        delta.packed_coordinates(),
+        [
+            measure.packing().pack([1, 0]),
+            measure.packing().pack([2, 1])
+        ]
+    );
+    let edited = measure.apply(delta).unwrap();
+    assert_eq!(edited.get(&at(1, 2)).unwrap(), Some(9.0));
+    assert_eq!(edited.get(&at(0, 1)).unwrap(), None);
+    assert_eq!(edited.get(&at(0, 2)).unwrap(), Some(2.0));
+}
+
+#[test]
+fn a_record_batch_has_its_columns_in_the_declared_order_and_its_rows_in_packing_order() {
+    let measure = department_first(&[(1, 0, 1.0), (0, 2, 2.0), (0, 1, 3.0)]);
+    let dimensions = [&periods(), &departments()];
+
+    let batch = measure.to_record_batch();
+
+    assert_eq!(rows(&measure), [(1, 0, 1.0), (0, 1, 3.0), (0, 2, 2.0)]);
+    let read = Measure::try_new(measure.definition().clone(), batch, &dimensions).unwrap();
+    assert_eq!(
+        read.base_packed_coordinates(),
+        measure.base_packed_coordinates()
+    );
+    let try_department_first = |rows: &[(u32, u32, f64)]| {
+        let definition = measure.definition().clone();
+        let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(rows)).unwrap();
+        Measure::try_new(definition, batch, &dimensions)
+    };
+    assert_eq!(
+        try_department_first(&[(0, 1, 1.0), (1, 0, 2.0)]).unwrap_err(),
+        MeasureError::UnsortedCoordinate(1)
+    );
+    assert_eq!(
+        try_department_first(&[(2, 0, 1.0)]).unwrap_err(),
+        MeasureError::MemberOutOfRange {
+            axis: DEPARTMENT,
+            member: MemberIndex(2)
+        }
     );
 }
 

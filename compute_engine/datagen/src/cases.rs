@@ -283,7 +283,7 @@ impl Default for Fixture {
             ),
             (
                 measure_definition(16, "桁落ち", &[DEPARTMENT, PERIOD]),
-                // Not stored in coordinate order: the rows are laid out by 部門 first, so adding them as stored rounds 1 away next to 1e16, while 期間 first cancels the two large values before 1.
+                // Not declared in packing order: adding the cells by 部門 first, as declared, rounds 1 away next to 1e16, while 期間 first cancels the two large values before 1.
                 &[(&[0, 0], 1e16), (&[0, 1], 1.0), (&[1, 0], -1e16)],
             ),
         ];
