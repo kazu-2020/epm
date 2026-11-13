@@ -109,7 +109,13 @@ impl Workspace {
         &self.formulas
     }
 
-    pub fn with_inputs(self, inputs: Vec<Measure>) -> Result<Workspace, Workspace> {
+    pub fn with_inputs(self, mut inputs: Vec<Measure>) -> Result<Workspace, Workspace> {
+        // Not the given order: a snapshot keeps the inputs in the order of the workspace that wrote it.
+        inputs.sort_by_key(|input| {
+            self.inputs
+                .iter()
+                .position(|declared| declared.ulid() == input.ulid())
+        });
         let references: Vec<&Dimension> = self.dimensions.iter().collect();
         let same_definitions = inputs
             .iter()

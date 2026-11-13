@@ -188,6 +188,13 @@ fn a_formula_error_names_the_result_and_the_step_that_failed() {
             error: FormulaError::MissingDimension(DimensionGlobalId(Ulid(99))),
         }
     );
+    assert_eq!(
+        error(|unchecked| formula(unchecked, SALES).result.axes.push(PERIOD)),
+        WorkspaceError::Formula {
+            result: SALES,
+            error: FormulaError::DuplicateAxis(PERIOD),
+        }
+    );
 }
 
 fn dimension(id: u128, members: u32) -> Dimension {
@@ -367,4 +374,11 @@ fn a_workspace_takes_only_inputs_of_its_definitions_and_dimensions() {
         .expect("the inputs are of the workspace");
     assert_eq!(cells(resumed.inputs()), cells(&edited));
     assert_ne!(cells(resumed.inputs()), cells(&generated().inputs));
+
+    let mut reversed = edited.clone();
+    reversed.reverse();
+    let resumed = workspace()
+        .with_inputs(reversed)
+        .expect("the order of the inputs does not matter");
+    assert_eq!(cells(resumed.inputs()), cells(&edited));
 }
