@@ -2,7 +2,9 @@
   "filters": {
     "comments": true,
     "allowlist": {
-      "allow": ["/^_Avoid_:.*$/m"]
+      "allow": [
+        "/^_Avoid_:.*$/m"
+      ]
     }
   },
   "rules": {
@@ -15,9 +17,21 @@
       },
       "no-doubled-joshi": {
         "min_interval": 1,
-        "allow": ["も", "や", "か", "でも"]
+        "allow": [
+          "も",
+          "や",
+          "か",
+          "でも"
+        ]
+      },
+      "sentence-length": {
+        "max": 90
       }
     },
-    "prh": { "rulePaths": ["prh.yml"] }
+    "prh": {
+      "rulePaths": [
+        "prh.yml"
+      ]
+    }
   }
 }
