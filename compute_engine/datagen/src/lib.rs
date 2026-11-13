@@ -70,8 +70,8 @@ impl Generator<'_> {
         Ulid(self.last_ulid)
     }
 
-    fn skewed(&mut self, member_count: u32) -> u32 {
-        let zipf = Zipf::new(f64::from(member_count), self.configuration.zipf_exponent)
+    fn skewed(&mut self, end: u32) -> u32 {
+        let zipf = Zipf::new(f64::from(end), self.configuration.zipf_exponent)
             .expect("a non-empty range and a non-negative exponent make a Zipf distribution");
         self.random.sample(zipf) as u32 - 1
     }

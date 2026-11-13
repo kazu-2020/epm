@@ -279,8 +279,8 @@ fn dimension(
         .expect("the representative dimensions are valid")
 }
 
-fn numbered(prefix: &str, len: u32) -> Vec<String> {
-    (1..=len)
+fn numbered(prefix: &str, member_count: u32) -> Vec<String> {
+    (1..=member_count)
         .map(|number| format!("{prefix}{number}"))
         .collect()
 }
