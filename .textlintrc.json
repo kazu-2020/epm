@@ -1,4 +1,10 @@
 {
+  "filters": {
+    "comments": true,
+    "allowlist": {
+      "allow": ["/^_Avoid_:.*$/m"]
+    }
+  },
   "rules": {
     "preset-ja-technical-writing": {
       "no-mix-dearu-desumasu": {
@@ -6,6 +12,10 @@
         "preferInBody": "である",
         "preferInList": "である",
         "strict": false
+      },
+      "no-doubled-joshi": {
+        "min_interval": 1,
+        "allow": ["も", "や", "か", "でも"]
       }
     },
     "prh": { "rulePaths": ["prh.yml"] }
