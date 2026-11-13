@@ -133,9 +133,15 @@ impl Workspace {
 }
 
 fn made_from(input: &Measure, dimensions: &[&Dimension]) -> bool {
-    input.axis_member_counts().all(|(axis, member_count)| {
-        dimensions
-            .iter()
-            .any(|dimension| dimension.ulid() == axis && dimension.len() == member_count)
-    })
+    let axes: Option<Vec<&Dimension>> = input
+        .axis_member_counts()
+        .map(|(axis, member_count)| {
+            dimensions
+                .iter()
+                .copied()
+                .find(|dimension| dimension.ulid() == axis && dimension.len() == member_count)
+        })
+        .collect();
+    // Not the member counts alone: a dimension of another kind packs at another place, so the packed coordinates would read as other cells (ADR 0005).
+    axes.is_some_and(|axes| axes.is_sorted_by_key(|dimension| dimension.packing_order()))
 }

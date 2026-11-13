@@ -198,6 +198,10 @@ fn a_formula_error_names_the_result_and_the_step_that_failed() {
 }
 
 fn dimension(id: u128, members: u32) -> Dimension {
+    dimension_of_kind(id, members, DimensionKind::Ordinary)
+}
+
+fn dimension_of_kind(id: u128, members: u32, kind: DimensionKind) -> Dimension {
     let natural_key = AttributeDefinition {
         ulid: AttributeGlobalId(Ulid(id * 1000)),
         name: "ID".into(),
@@ -206,7 +210,7 @@ fn dimension(id: u128, members: u32) -> Dimension {
     let definition = DimensionDefinition::try_new(
         DimensionGlobalId(Ulid(id)),
         format!("D{id}"),
-        DimensionKind::Ordinary,
+        kind,
         natural_key.ulid,
         vec![natural_key],
     )
@@ -381,4 +385,53 @@ fn a_workspace_takes_only_inputs_of_its_definitions_and_dimensions() {
         .with_inputs(reversed)
         .expect("the order of the inputs does not matter");
     assert_eq!(cells(resumed.inputs()), cells(&edited));
+}
+
+#[test]
+fn an_input_of_a_dimension_of_another_kind_is_an_error() {
+    let ordinary = [dimension(1, 2), dimension(2, 2)];
+    let definition = MeasureDefinition {
+        ulid: MeasureGlobalId(Ulid(10)),
+        name: "入力".into(),
+        axes: ordinary.iter().map(Dimension::ulid).collect(),
+    };
+    let input = || {
+        Measure::from_cells(
+            definition.clone(),
+            vec![([1, 0].map(MemberIndex).to_vec(), 1.0)],
+            &ordinary.iter().collect::<Vec<_>>(),
+        )
+        .expect("the cell fits the dimensions")
+    };
+    let workspace = |dimensions: Vec<Dimension>, inputs: Vec<Measure>| {
+        Workspace::try_new(UncheckedWorkspace {
+            dimensions,
+            inputs,
+            formulas: Vec::new(),
+        })
+    };
+    let calendar = || {
+        vec![
+            dimension(1, 2),
+            dimension_of_kind(2, 2, DimensionKind::Calendar),
+        ]
+    };
+
+    assert_eq!(
+        workspace(calendar(), vec![input()]).err(),
+        Some(WorkspaceError::InputOfOtherDimensions(definition.ulid))
+    );
+    let made_for_calendar = Measure::from_cells(
+        definition.clone(),
+        Vec::new(),
+        &calendar().iter().collect::<Vec<_>>(),
+    )
+    .expect("an empty measure fits the dimensions");
+    let unchanged = workspace(calendar(), vec![made_for_calendar])
+        .expect("the input is of the dimensions")
+        .with_inputs(vec![input()])
+        .expect_err("the input is of dimensions of another kind");
+    assert_eq!(unchanged.inputs()[0].cells().count(), 0);
+    let same = input();
+    assert!(workspace(Vec::from(ordinary), vec![same]).is_ok());
 }
