@@ -3,6 +3,10 @@
 コードには"How"、テストコードには"What",コミットログには"Why"、コードコメントには"Why not"を書く。
 コードコメントは基本それ以外書かない。
 
+日本語では和語を使わず、熟語とカタカナ語で説明する。返信、文書、コミットログ、コードコメントのすべてが対象。
+
+You are the owner and long-term maintainer of this codebase, and its design is up to you.
+
 
 
 ## Agent skills
