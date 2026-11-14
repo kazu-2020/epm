@@ -21,7 +21,7 @@ use ulid::Ulid;
 
 use crate::{Edit, Exit, Handle, Invalid, ReadError, Rejection, SubmitError};
 
-// Not only the body limit: the change log keeps every Request ID, and each new owner reads them all again.
+// Not only the body limit: the change log keeps every Request ID, and each new assignee reads them all again.
 const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 
 #[derive(Deserialize)]
@@ -66,7 +66,7 @@ struct Failure {
 pub enum Shutdown {
     Drained,
     Deadline,
-    Owner(Exit),
+    Assignee(Exit),
 }
 
 pub fn router(handle: Handle) -> Router {
@@ -81,7 +81,7 @@ pub fn router(handle: Handle) -> Router {
 pub async fn serve(
     listener: TcpListener,
     handle: Handle,
-    owner: impl Future<Output = Exit>,
+    assignee: impl Future<Output = Exit>,
     shutdown: impl Future<Output = ()> + Send + 'static,
     deadline: Duration,
 ) -> Shutdown {
@@ -95,7 +95,7 @@ pub async fn serve(
         tokio::time::sleep(deadline).await;
     };
     tokio::select! {
-        exit = owner => Shutdown::Owner(exit),
+        exit = assignee => Shutdown::Assignee(exit),
         served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => {
             served.expect("the graceful serve of axum 0.8 returns only Ok");
             Shutdown::Drained
@@ -238,7 +238,7 @@ fn submit_failure(error: SubmitError) -> Failure {
             Code::ResourceExhausted,
             format!("the engine is {behind} commits behind, retry later"),
         ),
-        SubmitError::Stopped => Failure::new(Code::Unavailable, "the owner stopped".to_owned()),
+        SubmitError::Stopped => Failure::new(Code::Unavailable, "the assignee stopped".to_owned()),
     }
 }
 
@@ -258,7 +258,7 @@ fn read_failure(error: ReadError) -> Failure {
             Failure::new(Code::NotFound, format!("no measure {}", measure.0))
         }
         ReadError::Coordinate(error) => Failure::new(Code::InvalidArgument, error.to_string()),
-        ReadError::Stopped => Failure::new(Code::Unavailable, "the owner stopped".to_owned()),
+        ReadError::Stopped => Failure::new(Code::Unavailable, "the assignee stopped".to_owned()),
     }
 }
 

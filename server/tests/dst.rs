@@ -86,7 +86,7 @@ impl Model {
     }
 }
 
-struct Owners {
+struct Assignees {
     inputs: Vec<MeasureDefinition>,
     results: Vec<MeasureDefinition>,
     seed: u64,
@@ -100,7 +100,7 @@ struct Run {
     snapshots: BTreeMap<String, Bytes>,
 }
 
-impl common::Server for Owners {
+impl common::Server for Assignees {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
         let mut settings = Settings {
             calculation: Calculation::Simulated(CALCULATION),
@@ -111,7 +111,7 @@ impl common::Server for Owners {
             settings.busy_after = self.seed / 2 % 3;
         }
         let (started, handle) = oneshot::channel();
-        // Not a watch: it wakes its waiters in a random order, and the requests would reach the owner in another order on each run.
+        // Not a watch: it wakes its waiters in a random order, and the requests would reach the assignee in another order on each run.
         let handle = handle.map(Result::ok).shared();
         let restored = Arc::clone(&self.restored);
         let exit = async move {
@@ -124,10 +124,10 @@ impl common::Server for Owners {
                 .lock()
                 .expect("restored")
                 .push((epoch, start.clone()));
-            let (handle, owner) =
+            let (handle, assignee) =
                 server::start(engine, start, settings, store, workspace, Epoch(epoch));
             let _ = started.send(handle);
-            match owner.await {
+            match assignee.await {
                 Exit::ChangeLog(exit) => Ok(exit),
                 Exit::Engine(alarm) => Err(format!("{alarm:?}")),
             }
@@ -135,7 +135,7 @@ impl common::Server for Owners {
         let recalculated = stream::once(handle.clone())
             .filter_map(std::future::ready)
             .flat_map(|handle| {
-                // Not only the changes: an owner from a snapshot starts with its commits recalculated.
+                // Not only the changes: an assignee from a snapshot starts with its commits recalculated.
                 let first = handle.engine_receiver().borrow().recalculated();
                 stream::once(std::future::ready(first)).chain(stream::unfold(
                     handle.engine_receiver(),
@@ -197,7 +197,7 @@ impl common::Server for Owners {
 
 fn simulate(model: &Model, seed: u64) -> Run {
     let restored = Arc::new(Mutex::new(Vec::new()));
-    let owners = Owners {
+    let assignees = Assignees {
         inputs: model
             .workspace
             .inputs()
@@ -220,7 +220,8 @@ fn simulate(model: &Model, seed: u64) -> Run {
         .build()
         .expect("a runtime")
         .block_on(async {
-            let outcome = common::simulate(Arc::new(owners), Arc::clone(&inner), "ws", seed).await;
+            let outcome =
+                common::simulate(Arc::new(assignees), Arc::clone(&inner), "ws", seed).await;
             let listed: Vec<_> = inner
                 .list(Some(&Path::from("ws/snapshot")))
                 .try_collect()
@@ -322,7 +323,7 @@ fn recalculation_witnesses(outcome: &common::Outcome) -> BTreeSet<&'static str> 
             }
             Record::Crashed { server } => crashed.extend(epochs.get(server)),
             Record::Recalculated { epoch, sequence } => {
-                // Not None before the first record: every owner recalculates from Commit Sequence 0, so its first batch starts there.
+                // Not None before the first record: every assignee recalculates from Commit Sequence 0, so its first batch starts there.
                 let first = recalculated_so_far
                     .insert(*epoch, *sequence)
                     .map_or(Sequence(0), Sequence::next);
@@ -528,8 +529,8 @@ fn seeds_keep_the_invariants() {
             "crashAfterApplyBeforeReply",
             "crashBeforeRecalculated",
             "fenceFoundOlderCommits",
-            "fenceMovedPastOldOwner",
-            "oldOwnerStopped",
+            "fenceMovedPastOldAssignee",
+            "oldAssigneeStopped",
             "refusedBusy",
             "refusedInvalid",
             "sameBytesResent",

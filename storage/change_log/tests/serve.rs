@@ -23,17 +23,17 @@ use tokio::task::JoinHandle;
 
 const WORKSPACE: &str = "ws";
 
-struct Owner {
+struct Assignee {
     submission_sender: mpsc::Sender<Submission<Infallible>>,
     commit_receiver: mpsc::UnboundedReceiver<(Slot, Commit)>,
     exit: JoinHandle<Exit>,
 }
 
-fn start(store: &Arc<dyn ObjectStore>, epoch: u64) -> Owner {
+fn start(store: &Arc<dyn ObjectStore>, epoch: u64) -> Assignee {
     start_from(store, epoch, Start::default())
 }
 
-fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Owner {
+fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Assignee {
     let (submission_sender, submission_receiver) = mpsc::channel(16);
     let (commit_sender, commit_receiver) = mpsc::unbounded_channel();
     let store = Arc::clone(store);
@@ -49,14 +49,14 @@ fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Owner {
         )
         .await
     });
-    Owner {
+    Assignee {
         submission_sender,
         commit_receiver,
         exit,
     }
 }
 
-impl Owner {
+impl Assignee {
     fn take_commits(&mut self) -> Vec<(String, Sequence)> {
         let mut named_sequences = Vec::new();
         while let Ok((_, commit)) = self.commit_receiver.try_recv() {
@@ -77,7 +77,7 @@ async fn submit(
     submission_sender
         .send(submission)
         .await
-        .expect("the owner is running");
+        .expect("the assignee is running");
     let Ok(sequence) = ack.await?;
     Ok(sequence)
 }
@@ -120,7 +120,7 @@ async fn log(store: &Arc<dyn ObjectStore>) -> Vec<String> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_newer_owner_takes_over_and_the_old_owner_stops() {
+async fn a_newer_assignee_takes_over_and_the_old_assignee_stops() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut a = start(&store, 1);
     assert_eq!(submit(&a.submission_sender, "r1").await, Ok(Sequence(0)));
@@ -301,7 +301,7 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
     });
     let (submission_sender, submission_receiver) = mpsc::channel(16);
     let (commit_sender, _commit_receiver) = mpsc::unbounded_channel();
-    let _owner = tokio::spawn(async move {
+    let _assignee = tokio::spawn(async move {
         serve(
             store,
             WORKSPACE,
@@ -322,7 +322,7 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
         submission_sender
             .send(submission)
             .await
-            .expect("the owner is running");
+            .expect("the assignee is running");
         answers.push(ack);
     }
     let [bad, good] = <[_; 2]>::try_from(answers).expect("two requests");
@@ -335,7 +335,7 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_owner_from_a_start_reads_no_slot_before_it() {
+async fn an_assignee_from_a_start_reads_no_slot_before_it() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let a = start(&store, 1);
     for (sequence, name) in (0..).zip(["r1", "r2"]) {

@@ -61,7 +61,7 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
                 exit: Exit::Stopped,
                 ..
             } => {
-                seen.insert("oldOwnerStopped");
+                seen.insert("oldAssigneeStopped");
             }
             Record::Rejected { .. } => {
                 seen.insert("storeRejectedPut");
@@ -102,7 +102,7 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
         .iter()
         .any(|(epoch, slot)| fences.contains(&(*epoch, Slot(slot.0 + 1))))
     {
-        seen.insert("fenceMovedPastOldOwner");
+        seen.insert("fenceMovedPastOldAssignee");
     }
     if fences.iter().any(|(epoch, slot)| {
         fences.contains(&(*epoch, Slot(slot.0 + 1)))

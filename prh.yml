@@ -13,3 +13,5 @@ rules:
     pattern: 受け付け
   - expected: リマップ
     pattern: 付け替え
+  - expected: Assignee
+    pattern: 担当

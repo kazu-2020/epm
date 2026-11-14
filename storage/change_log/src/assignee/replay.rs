@@ -78,7 +78,7 @@ struct Server {
 
 impl From<ModelServer> for Server {
     fn from(model: ModelServer) -> Server {
-        // Not compared after a stop: the model keeps the view of a stopped owner, but the owner drops it.
+        // Not compared after a stop: the model keeps the view of a stopped assignee, but the assignee drops it.
         if model.phase == ModelPhase::Stopped {
             return Server::empty(ModelPhase::Stopped, model.epoch);
         }
@@ -111,9 +111,9 @@ impl Server {
         }
     }
 
-    fn of(owner: &Owner<AdmitAll>) -> Server {
-        let epoch = owner.epoch.0;
-        match &owner.phase {
+    fn of(assignee: &Assignee<AdmitAll>) -> Server {
+        let epoch = assignee.epoch.0;
+        match &assignee.phase {
             Phase::Loading { .. } => Server::empty(ModelPhase::Loading, epoch),
             Phase::Fencing { view, fence, .. } => Server {
                 next: fence.slot.0 + 1,
@@ -200,7 +200,7 @@ impl State<Replay> for ModelState {
                 .iter()
                 .map(|server| {
                     let state = replay
-                        .owners
+                        .assignees
                         .get(*server)
                         .map_or_else(|| Server::empty(ModelPhase::Down, 0), Server::of);
                     (server.to_string(), state)
@@ -224,7 +224,7 @@ fn names(segment: &Segment) -> Vec<String> {
 
 #[derive(Default)]
 struct Replay {
-    owners: BTreeMap<String, Owner<AdmitAll>>,
+    assignees: BTreeMap<String, Assignee<AdmitAll>>,
     granted_epoch: u64,
     slots: BTreeMap<Slot, Segment>,
     writes_in_flight: BTreeMap<Write, Segment>,
@@ -242,11 +242,11 @@ impl Driver for Replay {
             init => *self = Replay::default(),
             grant(server: String) => {
                 self.granted_epoch += 1;
-                self.owners.insert(server.clone(), Owner::new(Epoch(self.granted_epoch), AdmitAll));
+                self.assignees.insert(server.clone(), Assignee::new(Epoch(self.granted_epoch), AdmitAll));
                 self.next_to_pass_on.insert(server, Sequence(0));
             },
             crash(server: String) => {
-                self.owners.remove(&server);
+                self.assignees.remove(&server);
                 self.next_to_pass_on.remove(&server);
             },
             load(server: String) => {
@@ -285,11 +285,11 @@ impl Driver for Replay {
 
 impl Replay {
     fn run(&mut self, server: &str, event: Event) -> anyhow::Result<()> {
-        let owner = self
-            .owners
+        let assignee = self
+            .assignees
             .get_mut(server)
-            .context("the model has an owner")?;
-        for effect in owner.step(event) {
+            .context("the model has an assignee")?;
+        for effect in assignee.step(event) {
             match effect {
                 // Not sent: the model resends at most MaxResends times and then waits for a timeout, as if the network lost the resend.
                 Effect::Put { attempt, .. } if attempt > MAX_RESENDS => {}
@@ -298,7 +298,7 @@ impl Replay {
                     body,
                     attempt,
                 } => {
-                    let segment = Segment::decode(body).expect("the owner encodes its own body");
+                    let segment = Segment::decode(body).expect("the assignee encodes its own body");
                     let write = Write {
                         server: server.to_string(),
                         slot: slot.0,
@@ -313,7 +313,7 @@ impl Replay {
                     let next_to_pass_on = self
                         .next_to_pass_on
                         .get_mut(server)
-                        .context("a granted owner counts its commits")?;
+                        .context("a granted assignee counts its commits")?;
                     if commit.sequence != *next_to_pass_on || !logged {
                         bail!("{server} passed on {commit:?} when {next_to_pass_on:?} was next");
                     }
@@ -341,7 +341,7 @@ impl Replay {
                 }
                 Effect::Rejected { reason, .. } => match reason {},
                 Effect::Get { .. } | Effect::Stop => {}
-                Effect::Alarm(alarm) => bail!("the owner raised {alarm:?}"),
+                Effect::Alarm(alarm) => bail!("the assignee raised {alarm:?}"),
             }
         }
         Ok(())
@@ -360,7 +360,7 @@ impl Replay {
         let segment = self
             .writes_in_flight
             .remove(&write)
-            .context("the owner sent the write")?;
+            .context("the assignee sent the write")?;
         let slot = Slot(write.slot);
         let succeeded = !self.slots.contains_key(&slot);
         if succeeded {
@@ -380,6 +380,6 @@ impl Replay {
     max_samples = 300,
     max_steps = 60
 )]
-fn owner_follows_the_model() -> impl Driver {
+fn assignee_follows_the_model() -> impl Driver {
     Replay::default()
 }

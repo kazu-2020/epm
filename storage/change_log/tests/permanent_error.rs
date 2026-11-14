@@ -141,7 +141,7 @@ fn with_code(statuses: Statuses, code: &'static str) -> Statuses {
 }
 
 #[tokio::test]
-async fn a_permanent_error_stops_the_owner_with_an_alarm() {
+async fn a_permanent_error_stops_the_assignee_with_an_alarm() {
     let slot = "ws/log/00000000000000000000";
     let cases = [
         (statuses(403, 200, 200), true, "ws/log", 403, &["LIST"][..]),
@@ -212,7 +212,7 @@ async fn a_transient_error_is_retried() {
     ];
     for (statuses, operation, reason) in cases {
         let (exit, seen) = run(statuses, true, Duration::from_millis(500)).await;
-        assert_eq!(exit, None, "{reason}: the owner still runs");
+        assert_eq!(exit, None, "{reason}: the assignee still runs");
         let sent = seen.iter().filter(|seen| *seen == operation).count();
         assert!(sent > 1, "{reason}: {operation} is sent again: {seen:?}");
     }

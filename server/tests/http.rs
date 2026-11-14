@@ -35,7 +35,7 @@ fn app(settings: Settings) -> App {
         .find(|measure| measure.global_id() == QUANTITY)
         .and_then(|quantity| quantity.cells().next())
         .expect("the seed has a quantity");
-    let (handle, owner) = server::start(
+    let (handle, assignee) = server::start(
         engine,
         Start::default(),
         settings,
@@ -43,7 +43,7 @@ fn app(settings: Settings) -> App {
         "ws".to_owned(),
         Epoch(1),
     );
-    tokio::spawn(owner);
+    tokio::spawn(assignee);
     App {
         router: server::http::router(handle),
         coordinate: coordinate.iter().map(|member| member.0).collect(),

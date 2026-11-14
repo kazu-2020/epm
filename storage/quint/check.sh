@@ -2,12 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 samples="${1:-50000}"
-invariants=(refinesChangeLog segmentsNeverChange staleEpochNeverCommits slotsContiguous newestOwnerSeesAcknowledged oneContentPerSlotPerEpoch dataWriteNeverSeesOlderEpoch viewIsLogPrefix)
-witnesses=(witnessNotTwoAcknowledged witnessNoCommitAfterHandover witnessNoOwnResendRejected witnessNoOldOwnerStopped)
+invariants=(refinesChangeLog segmentsNeverChange staleEpochNeverCommits slotsContiguous newestAssigneeSeesAcknowledged oneContentPerSlotPerEpoch dataWriteNeverSeesOlderEpoch viewIsLogPrefix)
+witnesses=(witnessNotTwoAcknowledged witnessNoCommitAfterHandover witnessNoOwnResendRejected witnessNoOldAssigneeStopped)
 breaks=(
   seqlog_blind_put:refinesChangeLog seqlog_unknown_as_success:refinesChangeLog seqlog_no_deduplication:refinesChangeLog
   seqlog_no_inflight_deduplication:refinesChangeLog
-  seqlog_no_fence:newestOwnerSeesAcknowledged
+  seqlog_no_fence:newestAssigneeSeesAcknowledged
   seqlog_blind_put:segmentsNeverChange
   seqlog_no_epoch_check:staleEpochNeverCommits
   seqlog_two_in_flight:staleEpochNeverCommits seqlog_two_in_flight:slotsContiguous

@@ -15,7 +15,7 @@ pub async fn restore(
     mut workspace: Workspace,
 ) -> Result<(Engine, Start), CalculateError> {
     let folder = Path::from(name).join("snapshot");
-    // Not an error: without a list, the owner reads the whole log, which gives the same state.
+    // Not an error: without a list, the assignee reads the whole log, which gives the same state.
     let mut found = store
         .list_with_delimiter(Some(&folder))
         .await

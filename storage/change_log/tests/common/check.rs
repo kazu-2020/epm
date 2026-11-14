@@ -21,7 +21,7 @@ pub(super) fn slot_of(key: &str) -> Slot {
 }
 
 pub(super) fn decode(body: &Bytes) -> Segment {
-    Segment::decode(body.clone()).expect("the owner writes segments it can read")
+    Segment::decode(body.clone()).expect("the assignee writes segments it can read")
 }
 
 pub fn replay(store: &BTreeMap<String, Bytes>) -> (BTreeMap<Slot, Segment>, Vec<Commit>) {
@@ -176,14 +176,16 @@ pub fn check(outcome: &Outcome) -> Violations {
                 if !acknowledged {
                     violate(
                         "takeoverCompletes",
-                        format!("record {at}: the newest owner did not acknowledge every request"),
+                        format!(
+                            "record {at}: the newest assignee did not acknowledge every request"
+                        ),
                     );
                 }
                 if before_probe.as_ref() != Some(&log) {
                     violate(
-                        "newestOwnerSeesAcknowledged",
+                        "newestAssigneeSeesAcknowledged",
                         format!(
-                            "record {at}: the newest owner wrote an acknowledged request again"
+                            "record {at}: the newest assignee wrote an acknowledged request again"
                         ),
                     );
                 }
@@ -194,9 +196,9 @@ pub fn check(outcome: &Outcome) -> Violations {
                     .find(|(.., acked)| Some(*acked) > *sequence)
                 {
                     violate(
-                        "newestOwnerRecalculatesAcknowledged",
+                        "newestAssigneeRecalculatesAcknowledged",
                         format!(
-                            "record {at}: the newest owner recalculated up to {sequence:?}, not {request} at {newest:?}"
+                            "record {at}: the newest assignee recalculated up to {sequence:?}, not {request} at {newest:?}"
                         ),
                     );
                 }
