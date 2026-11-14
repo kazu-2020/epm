@@ -63,7 +63,7 @@ struct Failure {
 }
 
 #[derive(Debug)]
-pub enum Stopped {
+pub enum Shutdown {
     Drained,
     Deadline,
     Owner(Exit),
@@ -84,7 +84,7 @@ pub async fn serve(
     owner: impl Future<Output = Exit>,
     shutdown: impl Future<Output = ()> + Send + 'static,
     deadline: Duration,
-) -> Stopped {
+) -> Shutdown {
     let (signal_sender, signal_receiver) = oneshot::channel();
     let shutdown = async move {
         shutdown.await;
@@ -95,12 +95,12 @@ pub async fn serve(
         tokio::time::sleep(deadline).await;
     };
     tokio::select! {
-        exit = owner => Stopped::Owner(exit),
+        exit = owner => Shutdown::Owner(exit),
         served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => {
             served.expect("the graceful serve of axum 0.8 returns only Ok");
-            Stopped::Drained
+            Shutdown::Drained
         }
-        () = deadline_passed => Stopped::Deadline,
+        () = deadline_passed => Shutdown::Deadline,
     }
 }
 

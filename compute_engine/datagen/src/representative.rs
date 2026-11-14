@@ -507,7 +507,7 @@ impl Representative {
         let [department_zipf, product_zipf, customer_zipf] =
             [sales_departments, products, customers].map(zipf);
         let value_zipf = zipf(500);
-        let (packed, values): (Vec<Vec<u64>>, Vec<Vec<f64>>) = seeds
+        let (cell_indexes, values): (Vec<Vec<u64>>, Vec<Vec<f64>>) = seeds
             .into_par_iter()
             .enumerate()
             .map(|(pair, seed)| {
@@ -521,27 +521,27 @@ impl Representative {
                     let department = sales_departments + random.sample(department_zipf) as u32 - 1;
                     let product = random.sample(product_zipf) as u32 - 1;
                     let customer = random.sample(customer_zipf) as u32 - 1;
-                    seen.insert(pack(
+                    seen.insert(cell_index(
                         &[period, version, department, product, customer],
                         &member_counts,
                     ));
                 }
-                let mut packed: Vec<u64> = seen.into_iter().collect();
-                packed.sort_unstable();
-                let values = (0..packed.len())
+                let mut cell_indexes: Vec<u64> = seen.into_iter().collect();
+                cell_indexes.sort_unstable();
+                let values = (0..cell_indexes.len())
                     .map(|_| random.sample(value_zipf))
                     .collect();
-                (packed, values)
+                (cell_indexes, values)
             })
             .unzip();
-        let packed: Vec<u64> = packed.into_iter().flatten().collect();
+        let cell_indexes: Vec<u64> = cell_indexes.into_iter().flatten().collect();
         let values: Vec<f64> = values.into_iter().flatten().collect();
-        debug_assert!(packed.is_sorted());
-        let mut columns = vec![Vec::with_capacity(packed.len()); axes.len()];
-        for &packed_coordinate in &packed {
+        debug_assert!(cell_indexes.is_sorted());
+        let mut columns = vec![Vec::with_capacity(cell_indexes.len()); axes.len()];
+        for &cell_index in &cell_indexes {
             for (column, member) in columns
                 .iter_mut()
-                .zip(unpack(packed_coordinate, &member_counts))
+                .zip(coordinate_of(cell_index, &member_counts))
             {
                 column.push(member);
             }
@@ -630,20 +630,20 @@ impl Representative {
     }
 }
 
-fn pack(coordinate: &[u32], member_counts: &[u32]) -> u64 {
+fn cell_index(coordinate: &[u32], member_counts: &[u32]) -> u64 {
     coordinate
         .iter()
         .zip(member_counts)
-        .fold(0, |packed, (&member, &member_count)| {
-            packed * u64::from(member_count) + u64::from(member)
+        .fold(0, |index, (&member, &member_count)| {
+            index * u64::from(member_count) + u64::from(member)
         })
 }
 
-fn unpack(mut packed: u64, member_counts: &[u32]) -> Vec<u32> {
+fn coordinate_of(mut index: u64, member_counts: &[u32]) -> Vec<u32> {
     let mut coordinate = vec![0; member_counts.len()];
     for (member, &member_count) in coordinate.iter_mut().zip(member_counts).rev() {
-        *member = (packed % u64::from(member_count)) as u32;
-        packed /= u64::from(member_count);
+        *member = (index % u64::from(member_count)) as u32;
+        index /= u64::from(member_count);
     }
     coordinate
 }
