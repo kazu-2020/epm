@@ -4,7 +4,7 @@
 
 ## 決めたこと
 
-変更ログは S3 に置く。担当はセグメントを `{ワークスペース}/log/{Slot}` に If-None-Match で PUT し、200 なら ACK する。担当は次の守りを持つ。根拠は `storage/quint/seqlog.qnt` のモデルである。守りを1つずつ外すと性質が破れることを確認した(破れる性質は `storage/quint/check.sh` の `breaks`)。Rust の実装 `storage/change_log/` でも、シミュレーションが同じ変異をいずれかの性質の違反として検出する。破れる性質はモデルと違うことがある。たとえばフェンスを外すと、モデルでは `newestOwnerSeesAcknowledged` が破れる。シミュレーションでは `dataWriteNeverSeesOlderEpoch` が破れる。
+変更ログは S3 に置く。担当はセグメントを `{ワークスペース}/log/{Slot}` に If-None-Match で PUT し、200 なら ACK する。担当は次の守りを持つ。根拠は `storage/quint/seqlog.qnt` のモデルである。守りを1つずつ外すと性質が破れることを確認した(破れる性質は `storage/quint/check.sh` の `breaks`)。Rust の実装 `storage/change_log/` でも、シミュレーションが同じ変異をいずれかの性質の違反として検出する。破れる性質はモデルと違うことがある。たとえばフェンスを外すと、モデルでは `newestAssigneeSeesAcknowledged` が破れる。シミュレーションでは `dataWriteNeverSeesOlderEpoch` が破れる。
 
 - **すべての書き込みを If-None-Match にする**。 1つの Slot には1回しか入らない。
 - **結果が分からない書き込みは、読み直して判定する**。 応答が来ないとき、409 のとき、412 のときに、その Slot を読む。空なら同じ中身で再送する。自分のエポックで同じ中身なら成功とみなす。自分より新しいエポックなら止まる。412 を「ほかの担当に取られた」証拠にはしない。自分の再送が先に通った結果でもありうる。
@@ -20,7 +20,7 @@
 - 結果が分からない書き込みを成功とみなすと、確定していない変更に ACK を返す(`refinesChangeLog`)。
 - If-None-Match を外すと、遅れて届いた古い PUT が確定済みの Slot を上書きする(`refinesChangeLog`、`segmentsNeverChange`)。
 - 担当が手元の集合だけで重複を排除すると、交代後に同じ Request ID が2回入る。PUT 中の Request ID を集合に入れないと、flush の後に同じ Request ID が次の Slot へ再度入る(どちらも `refinesChangeLog`)。
-- フェンスを外してもログの整合性は失われない。それでも必要な理由は次のとおり。フェンスがないと、新しい担当の受理開始後も古い担当がコミットと ACK を続ける。新しい担当はそのコミットを見ないまま読み込みに応じる(`newestOwnerSeesAcknowledged`)。
+- フェンスを外してもログの整合性は失われない。それでも必要な理由は次のとおり。フェンスがないと、新しい担当の受理開始後も古い担当がコミットと ACK を続ける。新しい担当はそのコミットを見ないまま読み込みに応じる(`newestAssigneeSeesAcknowledged`)。
 - 末尾のエポックの検査を外すと、古い担当が新しいエポックのあとに確定できる(`staleEpochNeverCommits`)。
 - PUT を同時に2つ送ると、Slot N+1 が N より先に入る。すると N が空いたまま N+1 の batch を ACK する(`refinesChangeLog`、`slotsContiguous`)。
 - 読み込み直すときに同じエポックを使うと、前の PUT が遅れて届いたとき、自分のエポックの Slot に知らないコミットが入る。新しいエポックを取得すれば、その Slot は古いエポックとして扱われ、中身を view へ追加する経路に入る。

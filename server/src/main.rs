@@ -100,7 +100,7 @@ async fn main() -> ExitCode {
         "workspace {} epoch {} listening on {}",
         arguments.workspace, arguments.epoch, arguments.listen
     );
-    let (handle, owner) = server::start(
+    let (handle, assignee) = server::start(
         engine,
         start,
         Settings::default(),
@@ -108,7 +108,7 @@ async fn main() -> ExitCode {
         arguments.workspace,
         Epoch(arguments.epoch),
     );
-    match server::http::serve(listener, handle, owner, shutdown, SHUTDOWN_DEADLINE).await {
+    match server::http::serve(listener, handle, assignee, shutdown, SHUTDOWN_DEADLINE).await {
         Shutdown::Drained => ExitCode::SUCCESS,
         Shutdown::Deadline => {
             eprintln!(
@@ -117,8 +117,8 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         // Not a restart in this process after an exit: the same epoch must not write again (ADR 0006).
-        Shutdown::Owner(exit) => {
-            eprintln!("the owner stopped: {exit:?}");
+        Shutdown::Assignee(exit) => {
+            eprintln!("the assignee stopped: {exit:?}");
             ExitCode::FAILURE
         }
     }

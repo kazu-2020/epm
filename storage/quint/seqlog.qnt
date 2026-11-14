@@ -21,7 +21,7 @@ module seqlog {
   pure val MaxResends = 1
   pure val MaxInFlight = 2
 
-  // The epoch is at the start of the segment body, not in the key: the slot number alone is what two owners fight for.
+  // The epoch is at the start of the segment body, not in the key: the slot number alone is what two assignees fight for.
   type Slot = { epoch: int, requests: List[str] }
   type Write = { server: str, slot: int, epoch: int, requests: List[str], attempt: int }
   type Reply = { write: Write, succeeded: bool }
@@ -202,11 +202,11 @@ module seqlog {
     val refence = { ...write, slot: write.slot + 1, attempt: 0 }
     val resend = not(taken) and write.attempt < MaxResends
     val own = taken and found.epoch == write.epoch
-    val oldOwnerTookFenceSlot = taken and found.epoch < write.epoch and isFence(write)
+    val oldAssigneeTookFenceSlot = taken and found.epoch < write.epoch and isFence(write)
     all {
       if (not(taken)) replace(server, self, write, { write: if (resend) again else write, unknown: false })
       else if (own) succeed(server, self, write)
-      else if (oldOwnerTookFenceSlot) all {
+      else if (oldAssigneeTookFenceSlot) all {
         servers' = servers.set(server, {
           ...self, next: refence.slot + 1, view: self.view.concat(found.requests), pending: Set({ write: refence, unknown: false }),
         }),
@@ -215,7 +215,7 @@ module seqlog {
       else stop(server),
       store' =
         if (resend) { ...store, writesInFlight: store.writesInFlight.union(Set(again)) }
-        else if (oldOwnerTookFenceSlot) { ...store, writesInFlight: store.writesInFlight.union(Set(refence)) }
+        else if (oldAssigneeTookFenceSlot) { ...store, writesInFlight: store.writesInFlight.union(Set(refence)) }
         else store,
       grantedEpoch' = grantedEpoch,
     }
@@ -259,7 +259,7 @@ module seqlog {
 
   val slotsContiguous: bool = store.slots.keys().forall(i => i >= 0 and i < store.slots.keys().size())
 
-  val newestOwnerSeesAcknowledged: bool = servers.keys().forall(server =>
+  val newestAssigneeSeesAcknowledged: bool = servers.keys().forall(server =>
     val self = servers.get(server)
     (self.phase == Ready and self.epoch == grantedEpoch) implies clients.acknowledged.subseteq(self.view.toSet()))
 
@@ -273,12 +273,12 @@ module seqlog {
   val witnessNoCommitAfterHandover: bool = not(store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0))
   val witnessNoOwnResendRejected: bool = not(store.replies.exists(reply =>
     not(reply.succeeded) and store.slots.get(reply.write.slot).epoch == reply.write.epoch))
-  val witnessNoOldOwnerStopped: bool = servers.keys().forall(server => servers.get(server).phase != Stopped)
+  val witnessNoOldAssigneeStopped: bool = servers.keys().forall(server => servers.get(server).phase != Stopped)
 
   action applyOne: bool = nondet write = store.writesInFlight.oneOf() all { ghost, apply(write, false) }
   action replyOne: bool = nondet reply = store.replies.oneOf() all { ghost, receiveReply(reply) }
 
-  run oldOwnerTakesSlotFirstTest =
+  run oldAssigneeTakesSlotFirstTest =
     init
       .then(all { ghost, grant("A") })
       .then(all { ghost, load("A") })
@@ -303,7 +303,7 @@ module seqlog {
         clients.acknowledged == Set("r1"),
         replay(store.slots) == List("r1"),
         store.slots.get(2) == { epoch: 2, requests: List() },
-        refinesChangeLog, newestOwnerSeesAcknowledged, staleEpochNeverCommits,
+        refinesChangeLog, newestAssigneeSeesAcknowledged, staleEpochNeverCommits,
       })
 
   run ownResendAcknowledgedTest =

@@ -106,7 +106,7 @@ fn collect_sources(node: &CheckedNode, sources: &mut BTreeSet<MeasureGlobalId>) 
     }
 }
 
-// Not left to the evaluation: a result in the middle of a formula that is wider than 64 bits (ADR 0004) would stop the owner at the first edit.
+// Not left to the evaluation: a result in the middle of a formula that is wider than 64 bits (ADR 0004) would stop the assignee at the first edit.
 fn node_axes(
     node: &CheckedNode,
     dimensions: &[&Dimension],

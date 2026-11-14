@@ -100,8 +100,8 @@ fn seeds_keep_the_invariants() {
         let expected = [
             "commitAfterHandover",
             "crashAfterApplyBeforeReply",
-            "fenceMovedPastOldOwner",
-            "oldOwnerStopped",
+            "fenceMovedPastOldAssignee",
+            "oldAssigneeStopped",
             "sameBytesResent",
             "storeRejectedPut",
             "twoAcknowledged",

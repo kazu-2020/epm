@@ -236,7 +236,7 @@ async fn apply(
     payload: PutPayload,
     options: PutOptions,
 ) -> object_store::Result<PutResult> {
-    // Not run in the owner's task: a real store can apply a PUT that a crashed owner never saw finish.
+    // Not run in the assignee's task: a real store can apply a PUT that a crashed assignee never saw finish.
     tokio::spawn(apply_and_record(inner, history, location, payload, options))
         .await
         .expect("a PUT does not panic")
@@ -407,7 +407,7 @@ impl ObjectStore for Faults {
 }
 
 type Granted = Option<(u64, Submit)>;
-type Owners = Vec<watch::Receiver<Granted>>;
+type Assignees = Vec<watch::Receiver<Granted>>;
 
 struct Cluster {
     server: Arc<dyn Server>,
@@ -415,7 +415,7 @@ struct Cluster {
     workspace: String,
     history: History,
     servers: Vec<watch::Sender<Granted>>,
-    owners: Vec<Option<JoinHandle<()>>>,
+    assignees: Vec<Option<JoinHandle<()>>>,
     recorders: Vec<JoinHandle<()>>,
     epoch: u64,
 }
@@ -461,7 +461,7 @@ impl Cluster {
             receiver
         });
         let history = Arc::clone(&self.history);
-        self.owners[server] = Some(tokio::spawn(async move {
+        self.assignees[server] = Some(tokio::spawn(async move {
             let ended = match AssertUnwindSafe(exit).catch_unwind().await {
                 Ok(Ok(exit)) => Record::Exited {
                     server,
@@ -492,10 +492,10 @@ impl Cluster {
     }
 
     fn crash(&mut self, server: usize) {
-        if let Some(owner) = self.owners[server].take()
-            && !owner.is_finished()
+        if let Some(assignee) = self.assignees[server].take()
+            && !assignee.is_finished()
         {
-            owner.abort();
+            assignee.abort();
             record(&self.history, Record::Crashed { server });
         }
         self.servers[server].send_replace(None);
@@ -503,7 +503,7 @@ impl Cluster {
 }
 
 async fn submit(
-    owner: &Submit,
+    assignee: &Submit,
     name: &str,
     payload: Bytes,
     wait: Duration,
@@ -512,13 +512,13 @@ async fn submit(
         request_id: RequestId(Bytes::from(name.to_owned())),
         payload,
     };
-    timeout(wait, owner(request)).await.ok()?
+    timeout(wait, assignee(request)).await.ok()?
 }
 
 async fn client(
     requests: Vec<(String, Bytes)>,
     mut rng: Rng,
-    owners: Owners,
+    assignees: Assignees,
     history: History,
     end: Instant,
     crashes: mpsc::UnboundedSender<(usize, u64)>,
@@ -526,10 +526,10 @@ async fn client(
     for (name, payload) in requests {
         while Instant::now() < end {
             let server = rng.below(SERVERS as u64) as usize;
-            let owner = owners[server].borrow().clone();
-            let reply = match owner {
-                Some((epoch, owner)) => {
-                    submit(&owner, &name, payload.clone(), rng.up_to(CLIENT_WAIT))
+            let assignee = assignees[server].borrow().clone();
+            let reply = match assignee {
+                Some((epoch, assignee)) => {
+                    submit(&assignee, &name, payload.clone(), rng.up_to(CLIENT_WAIT))
                         .await
                         .map(|reply| (epoch, reply))
                 }
@@ -594,14 +594,15 @@ pub async fn simulate(
         calm: AtomicBool::new(false),
         history: Arc::clone(&history),
     });
-    let (servers, owners): (Vec<_>, Owners) = (0..SERVERS).map(|_| watch::channel(None)).unzip();
+    let (servers, assignees): (Vec<_>, Assignees) =
+        (0..SERVERS).map(|_| watch::channel(None)).unzip();
     let mut cluster = Cluster {
         server: Arc::clone(&server),
         store: Arc::clone(&faults) as Arc<dyn ObjectStore>,
         workspace: workspace.to_owned(),
         history: Arc::clone(&history),
         servers,
-        owners: (0..SERVERS).map(|_| None).collect(),
+        assignees: (0..SERVERS).map(|_| None).collect(),
         recorders: Vec::new(),
         epoch: 0,
     };
@@ -619,7 +620,7 @@ pub async fn simulate(
             let run = client(
                 requests,
                 rng.fork(),
-                owners.clone(),
+                assignees.clone(),
                 Arc::clone(&history),
                 end,
                 crashes.clone(),
@@ -663,15 +664,19 @@ pub async fn simulate(
     record(&history, Record::ProbeStarted);
     let acknowledged: BTreeSet<String> = acknowledged(&history.lock().expect("history"));
     let recalculated = cluster.grant(0);
-    let (_, owner) = cluster.servers[0]
+    let (_, assignee) = cluster.servers[0]
         .borrow()
         .clone()
-        .expect("the probe owner runs");
+        .expect("the probe assignee runs");
     let probe = async {
         let mut sequences = Vec::new();
         for request in &acknowledged {
             let payload = server.payload(request);
-            sequences.push(submit(&owner, request, payload, PROBE_WAIT).await?.ok()?);
+            sequences.push(
+                submit(&assignee, request, payload, PROBE_WAIT)
+                    .await?
+                    .ok()?,
+            );
         }
         Some(sequences)
     };
@@ -690,7 +695,7 @@ pub async fn simulate(
     for recorder in cluster.recorders.drain(..) {
         recorder
             .await
-            .expect("a recorder ends when its owner drops the channel");
+            .expect("a recorder ends when its assignee drops the channel");
     }
 
     let listed: Vec<ObjectMeta> = inner

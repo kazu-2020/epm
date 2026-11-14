@@ -1,5 +1,5 @@
 mod apply;
-mod owner;
+mod assignee;
 mod restore;
 
 pub mod edit;
@@ -15,8 +15,8 @@ use formula::EvaluateError;
 use measure::{CoordinateError, Measure, MeasureGlobalId};
 use workspace::{CalculateError, Calculated, EditCheck, EditError, Edits, Workspace};
 
+pub use crate::assignee::{Calculation, Handle, Lag, ReadError, Settings, SubmitError, start};
 pub use crate::edit::DecodeError;
-pub use crate::owner::{Calculation, Handle, Lag, ReadError, Settings, SubmitError, start};
 pub use crate::restore::restore;
 pub use workspace::Edit;
 

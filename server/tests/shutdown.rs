@@ -48,7 +48,7 @@ impl ObjectStore for Gate {
         payload: PutPayload,
         options: PutOptions,
     ) -> object_store::Result<PutResult> {
-        // Not every PUT: the first one is the fence of the new owner, and the edit comes after it.
+        // Not every PUT: the first one is the fence of the new assignee, and the edit comes after it.
         if self.puts.fetch_add(1, Ordering::SeqCst) == 0 {
             return self.inner.put_opts(location, payload, options).await;
         }
@@ -111,7 +111,7 @@ async fn run(deadline: Duration) -> Running {
     )
     .expect("valid formulas");
     let store = Arc::new(Gate::default());
-    let (handle, owner) = server::start(
+    let (handle, assignee) = server::start(
         engine,
         Start::default(),
         Settings::default(),
@@ -125,7 +125,7 @@ async fn run(deadline: Duration) -> Running {
     let stopped = tokio::spawn(server::http::serve(
         listener,
         handle,
-        owner,
+        assignee,
         async move {
             let _ = signal.await;
         },

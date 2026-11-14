@@ -12,7 +12,7 @@ use object_store::path::Path;
 use object_store::{ObjectStore, PutMode};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::owner::{Admit, Alarm, Effect, Event, Owner, PutFailure, Request, Start};
+use crate::assignee::{Admit, Alarm, Assignee, Effect, Event, PutFailure, Request, Start};
 use crate::segment::{Commit, Epoch, RequestId, Segment, Sequence, Slot};
 
 pub struct Submission<R> {
@@ -54,7 +54,7 @@ pub async fn serve<A: Admit>(
 ) -> Exit {
     let log = Path::from(workspace).join("log");
     let first = start.slot;
-    let mut owner = Owner::resume(epoch, admit, start);
+    let mut assignee = Assignee::resume(epoch, admit, start);
     let mut io: FuturesUnordered<BoxFuture<'static, Result<Event, Alarm>>> =
         FuturesUnordered::new();
     io.push(load(Arc::clone(&store), log.clone(), first).boxed());
@@ -74,8 +74,8 @@ pub async fn serve<A: Admit>(
                 None => return Exit::Closed,
             },
         };
-        let mut effects = owner.step(event);
-        effects.extend(owner.step(Event::Flush));
+        let mut effects = assignee.step(event);
+        effects.extend(assignee.step(Event::Flush));
         for effect in effects {
             match effect {
                 Effect::Put {
@@ -122,7 +122,7 @@ fn reject<R>(waiters: &mut Waiters<R>, request_id: &RequestId, reason: R) {
     if waiting.is_empty() {
         waiters.remove(request_id);
     }
-    // Not an error: a client that stopped waiting resends, and the owner checks it again.
+    // Not an error: a client that stopped waiting resends, and the assignee checks it again.
     let _ = oldest.send(Err(reason));
 }
 

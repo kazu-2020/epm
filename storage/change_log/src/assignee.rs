@@ -100,7 +100,7 @@ impl Admit for AdmitAll {
 }
 
 #[derive(Debug)]
-pub struct Owner<A> {
+pub struct Assignee<A> {
     epoch: Epoch,
     admit: A,
     phase: Phase,
@@ -158,13 +158,13 @@ enum Outcome {
     OtherContent(Write),
 }
 
-impl<A: Admit> Owner<A> {
-    pub fn new(epoch: Epoch, admit: A) -> Owner<A> {
-        Owner::resume(epoch, admit, Start::default())
+impl<A: Admit> Assignee<A> {
+    pub fn new(epoch: Epoch, admit: A) -> Assignee<A> {
+        Assignee::resume(epoch, admit, Start::default())
     }
 
-    pub fn resume(epoch: Epoch, admit: A, start: Start) -> Owner<A> {
-        Owner {
+    pub fn resume(epoch: Epoch, admit: A, start: Start) -> Assignee<A> {
+        Assignee {
             epoch,
             admit,
             phase: Phase::Loading {

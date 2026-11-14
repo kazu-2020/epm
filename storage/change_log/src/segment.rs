@@ -61,7 +61,7 @@ impl Segment {
         // Not Vec::with_capacity(count): the count is untrusted until the bytes behind it are read.
         let mut commits = Vec::new();
         for _ in 0..count {
-            // Not a slice of the segment: the owner keeps every Request ID, and a slice would keep the whole segment with its payloads.
+            // Not a slice of the segment: the assignee keeps every Request ID, and a slice would keep the whole segment with its payloads.
             let request_id = RequestId(Bytes::copy_from_slice(&reader.prefixed()?));
             let sequence = Sequence(reader.u64()?);
             let payload = reader.prefixed()?;

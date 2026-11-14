@@ -47,14 +47,14 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 | `segmentsNeverChange` | 一度書いた Slot の中身は変わらない。同じ中身での上書きはログを変えないので、`refinesChangeLog` とは別に見る |
 | `staleEpochNeverCommits` | Slot の順にエポックが減らない。古いエポックの担当は、新しいエポックのあとに確定できない |
 | `slotsContiguous` | 最大の Slot より下に穴がない |
-| `newestOwnerSeesAcknowledged` | いちばん新しいエポックを持つ受理中の担当は、ACK 済みのコミットをすべて見ている。縛るのはこの担当だけで、交代を知らずに受理を続ける古い担当は縛らない。読み取りの操作もモデルにない |
+| `newestAssigneeSeesAcknowledged` | いちばん新しいエポックを持つ受理中の担当は、ACK 済みのコミットをすべて見ている。縛るのはこの担当だけで、交代を知らずに受理を続ける古い担当は縛らない。読み取りの操作もモデルにない |
 | `oneContentPerSlotPerEpoch` | 1つのエポックは1つの Slot に1つの中身しか書かない |
 | `dataWriteNeverSeesOlderEpoch` | データの書き込みが 412 のあとに自分より古いエポックを見ることはない |
 | `viewIsLogPrefix` | いちばん新しいエポックを持つ受理中の担当の `view`(Rust の `Effect::Committed` で渡した列)は、ログの先頭部分に一致する。ACK 済みの集合では見えない、順序の入れ替わりも反例になる |
 
 `witness` で始まる4つは、到達するはずの状態(2件の ACK、担当交代後の担当が書いた Slot、自分の再送が先に通ったための 412、古い担当の停止)に本当に届くかの確認。届かないと、上の性質は何も調べずに通ってしまう。
 
-固定の手順は3つある。`oldOwnerTakesSlotFirstTest` は、担当の交代の直後に古い担当の遅れた PUT が Slot を先に取る場面。フェンスのやり直しで中身を読むのを省く誤りも捕まえる(省いても5万回のランダムシミュレーションでは届かなかった)。`ownResendAcknowledgedTest` は、自分の再送が 412 になり、読んで自分の書き込みと分かって ACK する場面。`pipelineAcknowledgesPastHoleTest` は下の `seqlog_two_in_flight` の場面。
+固定の手順は3つある。`oldAssigneeTakesSlotFirstTest` は、担当の交代の直後に古い担当の遅れた PUT が Slot を先に取る場面。フェンスのやり直しで中身を読むのを省く誤りも捕まえる(省いても5万回のランダムシミュレーションでは届かなかった)。`ownResendAcknowledgedTest` は、自分の再送が 412 になり、読んで自分の書き込みと分かって ACK する場面。`pipelineAcknowledgesPastHoleTest` は下の `seqlog_two_in_flight` の場面。
 
 ## モデルが置く前提と出典
 
@@ -85,6 +85,6 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 
 ## コードとの対応
 
-Rust の実装は `storage/change_log/` にある。担当の状態機械 `Owner::step` が Quint の action に対応する。`mutations.sh` は `check.sh` と同じ変異を Rust のシミュレーションで検証する。
+Rust の実装は `storage/change_log/` にある。担当の状態機械 `Assignee::step` が Quint の action に対応する。`mutations.sh` は `check.sh` と同じ変異を Rust のシミュレーションで検証する。
 
-`storage/change_log/src/owner/replay.rs` は、`seqlog_replay.qnt` のトレースを `Owner::step` に再生する。再生には [quint-connect](https://crates.io/crates/quint-connect) を使う。各ステップの後でモデルと状態を比較する。モデルで起きない手順(`two_in_flight` など)は確かめず、`mutations.sh` が捕まえる。`cargo test` で動き、`quint` が PATH に要る。失敗したら表示される `QUINT_SEED=<値>` を付けて再生する。
+`storage/change_log/src/assignee/replay.rs` は、`seqlog_replay.qnt` のトレースを `Assignee::step` に再生する。再生には [quint-connect](https://crates.io/crates/quint-connect) を使う。各ステップの後でモデルと状態を比較する。モデルで起きない手順(`two_in_flight` など)は確かめず、`mutations.sh` が捕まえる。`cargo test` で動き、`quint` が PATH に要る。失敗したら表示される `QUINT_SEED=<値>` を付けて再生する。

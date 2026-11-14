@@ -136,7 +136,7 @@ pub fn start(
             Calculation::Threads(threads) => Calculator::Thread(pool(threads)),
             Calculation::Simulated(cost) => Calculator::Simulated(cost),
         };
-        // Not two spawned tasks: a crash aborts this one future, so the engine stops with the owner.
+        // Not two spawned tasks: a crash aborts this one future, so the engine stops with the assignee.
         tokio::select! {
             biased;
             exit = change_log::serve(Arc::clone(&store), &workspace, epoch, start, admission, submission_receiver, commit_sender) => {
@@ -171,7 +171,7 @@ async fn apply(
         let event = tokio::select! {
             biased;
             Some(commit) = commit_receiver.recv() => {
-                // Not one commit at a time: a new owner receives the whole log at once, and a batch of only its first commit would add one recalculation.
+                // Not one commit at a time: a new assignee receives the whole log at once, and a batch of only its first commit would add one recalculation.
                 let mut batch = vec![commit];
                 while let Ok(commit) = commit_receiver.try_recv() {
                     batch.push(commit);
@@ -219,7 +219,7 @@ async fn apply(
 fn pool(threads: NonZeroUsize) -> rayon::ThreadPool {
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads.get())
-        // Not the default handler: it aborts the process, and a panic in one batch must stop only this owner.
+        // Not the default handler: it aborts the process, and a panic in one batch must stop only this assignee.
         .panic_handler(drop::<Box<dyn std::any::Any + Send>>)
         .build()
         .expect("the engine pool starts")
@@ -232,7 +232,7 @@ fn on_pool(
 ) -> Calculating {
     let (finished, result) = oneshot::channel();
     pool.spawn(move || {
-        // Not an error: the owner stopped and does not read the result.
+        // Not an error: the assignee stopped and does not read the result.
         let _ = finished.send(batch());
     });
     Box::pin(async move {
@@ -268,7 +268,7 @@ impl Calculator {
             Calculator::Thread(pool) => {
                 let (finished, encoded) = oneshot::channel();
                 pool.spawn(move || {
-                    // Not an error: the owner stopped and does not write the snapshot.
+                    // Not an error: the assignee stopped and does not write the snapshot.
                     let _ = finished.send(snapshot::encode(&snapshot));
                 });
                 encoded
@@ -341,7 +341,7 @@ impl Handle {
         // Not only after the wait: a read that can never succeed would get NotCommitted, and the caller would try it again.
         values(&self.engine_receiver.borrow(), cells)?;
         if at_least.is_some() {
-            // Not NotCommitted at once: a new owner counts the commits of the log only when it has read the log, and a committed sequence would look uncommitted.
+            // Not NotCommitted at once: a new assignee counts the commits of the log only when it has read the log, and a committed sequence would look uncommitted.
             self.readiness_receiver
                 .clone()
                 .wait_for(|ready| *ready)

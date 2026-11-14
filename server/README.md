@@ -36,7 +36,7 @@ cargo run --locked -- --listen 127.0.0.1:8080 --workspace demo
 - `--workspace`: the prefix of the change log in the bucket. The default is `demo`.
 - `--epoch`: the epoch of this process. The default is the current time in milliseconds. Each start must use a larger epoch than the last start.
 
-The workspace definition is fixed in the code (`src/main.rs`). When the owner stops, the process exits with code 1. Start a new process to continue. SIGINT (Ctrl-C) and SIGTERM stop the server. It finishes the requests in progress and exits with code 0. If the requests do not finish in 5 seconds, or a second signal comes first, it exits with code 1.
+The workspace definition is fixed in the code (`src/main.rs`). When the assignee stops, the process exits with code 1. Start a new process to continue. SIGINT (Ctrl-C) and SIGTERM stop the server. It finishes the requests in progress and exits with code 0. If the requests do not finish in 5 seconds, or a second signal comes first, it exits with code 1.
 
 ## Run the demo
 
@@ -86,4 +86,4 @@ The errors in this table have the body `{"code": ..., "message": ...}` with a Co
 | The engine is too far behind | `resource_exhausted` | 429 |
 | The sequence is not committed yet | `unavailable` | 503 |
 
-If you get 429 or 503, try again later. When the owner stops, the process exits and the connection closes.
+If you get 429 or 503, try again later. When the assignee stops, the process exits and the connection closes.

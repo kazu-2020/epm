@@ -36,7 +36,7 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Runnin
         Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
     )
     .expect("valid formulas");
-    let (handle, owner) = server::start(
+    let (handle, assignee) = server::start(
         engine,
         Start::default(),
         settings,
@@ -44,7 +44,7 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Runnin
         WORKSPACE.to_owned(),
         Epoch(epoch),
     );
-    let exit = tokio::spawn(owner);
+    let exit = tokio::spawn(assignee);
     Running { handle, exit }
 }
 
@@ -90,12 +90,12 @@ async fn submit_bytes(
     submission_sender
         .send(submission)
         .await
-        .expect("the owner is running");
+        .expect("the assignee is running");
     ack.await.ok()?.ok()
 }
 
 #[tokio::test(start_paused = true)]
-async fn only_checked_edits_enter_the_log_and_a_newer_owner_recalculates_them() {
+async fn only_checked_edits_enter_the_log_and_a_newer_assignee_recalculates_them() {
     let store = store();
     let a = start(&store, 1, Settings::default());
     assert_eq!(
@@ -150,11 +150,11 @@ async fn only_checked_edits_enter_the_log_and_a_newer_owner_recalculates_them() 
 
 #[tokio::test(start_paused = true)]
 async fn a_rejected_edit_returns_its_reason() {
-    let owner = start(&store(), 1, Settings::default());
+    let assignee = start(&store(), 1, Settings::default());
     let mut result = quantity(Some(1.0));
     result.measure = SALES;
     assert_eq!(
-        owner.handle.submit(id("result"), &result).await,
+        assignee.handle.submit(id("result"), &result).await,
         Err(SubmitError::Rejected(Rejection::Invalid(
             Invalid::NotAnInput(SALES)
         )))
@@ -162,7 +162,7 @@ async fn a_rejected_edit_returns_its_reason() {
     let mut short = quantity(Some(1.0));
     short.coordinate.pop();
     assert_eq!(
-        owner.handle.submit(id("short"), &short).await,
+        assignee.handle.submit(id("short"), &short).await,
         Err(SubmitError::Rejected(Rejection::Invalid(
             Invalid::Coordinate(CoordinateError::Length {
                 expected: 5,
@@ -173,10 +173,10 @@ async fn a_rejected_edit_returns_its_reason() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_busy_owner_rejects_new_edits_and_still_acknowledges_resends() {
-    let owner = start(&store(), 1, slow(0));
+async fn a_busy_assignee_rejects_new_edits_and_still_acknowledges_resends() {
+    let assignee = start(&store(), 1, slow(0));
     assert_eq!(
-        owner.handle.submit(id("r1"), &quantity(Some(1.0))).await,
+        assignee.handle.submit(id("r1"), &quantity(Some(1.0))).await,
         Ok(Sequence(0))
     );
     let behind = Lag {
@@ -184,38 +184,38 @@ async fn a_busy_owner_rejects_new_edits_and_still_acknowledges_resends() {
         recalculated: None,
     };
     assert_eq!(
-        owner.handle.lag(),
+        assignee.handle.lag(),
         behind,
         "the ACK came before the recalculation"
     );
     assert_eq!(
-        owner.handle.submit(id("r1"), &quantity(Some(1.0))).await,
+        assignee.handle.submit(id("r1"), &quantity(Some(1.0))).await,
         Ok(Sequence(0)),
-        "a resend of a committed edit gets its ACK while the owner is busy"
+        "a resend of a committed edit gets its ACK while the assignee is busy"
     );
     assert_eq!(
-        owner.handle.submit(id("r2"), &quantity(Some(2.0))).await,
+        assignee.handle.submit(id("r2"), &quantity(Some(2.0))).await,
         Err(SubmitError::Rejected(Rejection::Busy { behind: 1 }))
     );
     assert_eq!(
-        owner.handle.read(Some(Sequence(0)), &[]).await,
+        assignee.handle.read(Some(Sequence(0)), &[]).await,
         Ok((Some(Sequence(0)), vec![]))
     );
     assert_eq!(
-        owner.handle.submit(id("r2"), &quantity(Some(2.0))).await,
+        assignee.handle.submit(id("r2"), &quantity(Some(2.0))).await,
         Ok(Sequence(1)),
         "the engine caught up"
     );
 }
 
 #[tokio::test(start_paused = true)]
-async fn edits_that_arrive_together_are_rejected_one_by_one_when_the_owner_is_busy() {
-    let owner = start(&store(), 1, slow(1));
+async fn edits_that_arrive_together_are_rejected_one_by_one_when_the_assignee_is_busy() {
+    let assignee = start(&store(), 1, slow(1));
     let edit = quantity(Some(1.0));
     let (r1, r2, r3) = tokio::join!(
-        owner.handle.submit(id("r1"), &edit),
-        owner.handle.submit(id("r2"), &edit),
-        owner.handle.submit(id("r3"), &edit),
+        assignee.handle.submit(id("r1"), &edit),
+        assignee.handle.submit(id("r2"), &edit),
+        assignee.handle.submit(id("r3"), &edit),
     );
     assert_eq!((r1, r2), (Ok(Sequence(0)), Ok(Sequence(1))));
     assert_eq!(
@@ -226,7 +226,7 @@ async fn edits_that_arrive_together_are_rejected_one_by_one_when_the_owner_is_bu
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_new_owner_counts_the_commits_of_an_older_owner_that_it_did_not_recalculate() {
+async fn a_new_assignee_counts_the_commits_of_an_older_assignee_that_it_did_not_recalculate() {
     let store = store();
     let a = start(&store, 1, Settings::default());
     for (sequence, name) in (0..).zip(["r1", "r2"]) {
@@ -243,7 +243,7 @@ async fn a_new_owner_counts_the_commits_of_an_older_owner_that_it_did_not_recalc
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_new_owner_waits_for_the_log_before_it_answers_a_read_of_a_committed_sequence() {
+async fn a_new_assignee_waits_for_the_log_before_it_answers_a_read_of_a_committed_sequence() {
     let store = store();
     let a = start(&store, 1, Settings::default());
     for (sequence, name) in (0..).zip(["r1", "r2"]) {
@@ -258,7 +258,7 @@ async fn a_new_owner_waits_for_the_log_before_it_answers_a_read_of_a_committed_s
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_new_owner_recalculates_the_whole_log_in_one_batch() {
+async fn a_new_assignee_recalculates_the_whole_log_in_one_batch() {
     let store = store();
     let a = start(&store, 1, Settings::default());
     for (sequence, name) in (0..).zip(["r1", "r2", "r3"]) {
@@ -279,22 +279,22 @@ async fn a_new_owner_recalculates_the_whole_log_in_one_batch() {
 
 #[tokio::test(start_paused = true)]
 async fn a_read_without_a_sequence_returns_the_published_values_and_does_not_wait() {
-    let owner = start(&store(), 1, slow(1000));
-    let seeded = owner.handle.read(None, &cells()).await;
+    let assignee = start(&store(), 1, slow(1000));
+    let seeded = assignee.handle.read(None, &cells()).await;
     assert!(matches!(seeded, Ok((None, _))), "{seeded:?}");
     assert_eq!(
-        owner.handle.submit(id("r1"), &quantity(None)).await,
+        assignee.handle.submit(id("r1"), &quantity(None)).await,
         Ok(Sequence(0))
     );
     let started = Instant::now();
     assert_eq!(
-        owner.handle.read(None, &cells()).await,
+        assignee.handle.read(None, &cells()).await,
         seeded,
         "the values from before r1"
     );
     assert_eq!(started.elapsed(), Duration::ZERO);
     assert_eq!(
-        owner.handle.read(Some(Sequence(0)), &cells()).await,
+        assignee.handle.read(Some(Sequence(0)), &cells()).await,
         Ok((Some(Sequence(0)), vec![None, None]))
     );
     assert_eq!(started.elapsed(), CALCULATION);
@@ -308,13 +308,13 @@ async fn only_a_read_of_a_sequence_waits_for_the_log() {
         ..ThrottleConfig::default()
     };
     let store: Arc<dyn ObjectStore> = Arc::new(ThrottledStore::new(InMemory::new(), config));
-    let owner = start(&store, 1, Settings::default());
+    let assignee = start(&store, 1, Settings::default());
     let started = Instant::now();
-    let seeded = owner.handle.read(None, &cells()).await;
+    let seeded = assignee.handle.read(None, &cells()).await;
     assert!(matches!(seeded, Ok((None, _))), "{seeded:?}");
     assert_eq!(started.elapsed(), Duration::ZERO);
     assert_eq!(
-        owner.handle.read(Some(Sequence(0)), &[]).await,
+        assignee.handle.read(Some(Sequence(0)), &[]).await,
         Err(ReadError::NotCommitted(Lag {
             committed: None,
             recalculated: None
@@ -325,9 +325,9 @@ async fn only_a_read_of_a_sequence_waits_for_the_log() {
 
 #[tokio::test(start_paused = true)]
 async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence() {
-    let owner = start(&store(), 1, slow(1000));
+    let assignee = start(&store(), 1, slow(1000));
     assert_eq!(
-        owner.handle.read(Some(Sequence(0)), &cells()).await,
+        assignee.handle.read(Some(Sequence(0)), &cells()).await,
         Err(ReadError::NotCommitted(Lag {
             committed: None,
             recalculated: None
@@ -337,7 +337,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     let edits = [Some(3.0), Some(4.0), None];
     for (sequence, (name, value)) in (0..).zip(["r1", "r2", "r3"].into_iter().zip(edits)) {
         assert_eq!(
-            owner.handle.submit(id(name), &quantity(value)).await,
+            assignee.handle.submit(id(name), &quantity(value)).await,
             Ok(Sequence(sequence))
         );
     }
@@ -347,14 +347,14 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
         "no ACK waited for a recalculation"
     );
     assert_eq!(
-        owner.handle.read(Some(Sequence(3)), &cells()).await,
+        assignee.handle.read(Some(Sequence(3)), &cells()).await,
         Err(ReadError::NotCommitted(Lag {
             committed: Some(Sequence(2)),
             recalculated: None
         }))
     );
     assert_eq!(
-        owner.handle.read(Some(Sequence(1)), &cells()).await,
+        assignee.handle.read(Some(Sequence(1)), &cells()).await,
         Ok((Some(Sequence(2)), vec![None, None])),
         "the values as of r3, a sequence after the one asked for"
     );
@@ -364,7 +364,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
         "r2 and r3 were recalculated in one batch"
     );
     assert_eq!(
-        owner
+        assignee
             .handle
             .read(Some(Sequence(0)), &[(SALES, vec![MemberIndex(0)])])
             .await,
@@ -375,7 +375,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     );
     let unknown = MeasureGlobalId(Ulid(999));
     assert_eq!(
-        owner
+        assignee
             .handle
             .read(Some(Sequence(9)), &[(unknown, vec![])])
             .await,
@@ -385,7 +385,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_commit_that_the_engine_cannot_apply_stops_the_owner() {
+async fn a_commit_that_the_engine_cannot_apply_stops_the_assignee() {
     let store = store();
     let (submission_sender, submission_receiver) = mpsc::channel(1);
     let (commit_sender, _commit_receiver) = mpsc::unbounded_channel();
@@ -452,7 +452,7 @@ fn snapshot_object(count: usize, name: &str) -> Path {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_new_owner_starts_from_the_newest_snapshot_it_can_read() {
+async fn a_new_assignee_starts_from_the_newest_snapshot_it_can_read() {
     let store = store();
     let settings = || Settings {
         snapshot_every: 1,
@@ -490,7 +490,7 @@ async fn a_new_owner_starts_from_the_newest_snapshot_it_can_read() {
         "the snapshot before the broken one"
     );
     assert_eq!(quantity_in(&engine), Some(2.0));
-    let (handle, owner) = server::start(
+    let (handle, assignee) = server::start(
         engine,
         start,
         settings(),
@@ -498,7 +498,7 @@ async fn a_new_owner_starts_from_the_newest_snapshot_it_can_read() {
         WORKSPACE.to_owned(),
         Epoch(2),
     );
-    let b = tokio::spawn(owner);
+    let b = tokio::spawn(assignee);
     assert_eq!(
         handle
             .read(Some(Sequence(2)), &cells())
@@ -547,7 +547,7 @@ fn start_from(start: Start) {
 
 #[tokio::test]
 #[should_panic(expected = "the engine starts where the change log starts")]
-async fn an_owner_does_not_start_when_the_engine_and_the_log_start_at_different_slots() {
+async fn an_assignee_does_not_start_when_the_engine_and_the_log_start_at_different_slots() {
     start_from(Start {
         slot: Slot(1),
         ..Start::default()
@@ -556,7 +556,7 @@ async fn an_owner_does_not_start_when_the_engine_and_the_log_start_at_different_
 
 #[tokio::test]
 #[should_panic(expected = "the engine starts where the change log starts")]
-async fn an_owner_does_not_start_when_the_engine_and_the_log_start_at_different_counts() {
+async fn an_assignee_does_not_start_when_the_engine_and_the_log_start_at_different_counts() {
     start_from(Start {
         request_ids: vec![RequestId(Bytes::from_static(b"r0"))],
         ..Start::default()
