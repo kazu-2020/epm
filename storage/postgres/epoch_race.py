@@ -7,14 +7,13 @@ import time
 
 import psycopg
 
-DSN = os.environ.get("EPM_PG", "postgresql://postgres@127.0.0.1:56432/epm")
+DSN = os.environ.get("EPM_PG", "postgresql://postgres@127.0.0.1:56433/epm")
 WRITERS = 8
 ROUNDS = 50
 LOOKUPS = 2000
 WORKSPACE = "01KA0000000000000000000000"
 
 CONDITIONAL = "UPDATE placement SET epoch = epoch + 1 WHERE workspace_global_id = %s AND epoch = %s RETURNING epoch"
-# The mutation that the Quint module placement_blind_claim models.
 BLIND = "UPDATE placement SET epoch = %s + 1 WHERE workspace_global_id = %s RETURNING epoch"
 LOOKUP = "SELECT epoch FROM placement WHERE workspace_global_id = %s"
 
@@ -27,7 +26,7 @@ def connect() -> psycopg.Connection:
 def race(connections: list[psycopg.Connection], claim) -> collections.Counter[int]:
     issued: collections.Counter[int] = collections.Counter()
     for _ in range(ROUNDS):
-        barrier = threading.Barrier(WRITERS)
+        barrier = threading.Barrier(WRITERS, timeout=10)
 
         def writer(connection: psycopg.Connection) -> int | None:
             (seen,) = connection.execute(LOOKUP, (WORKSPACE,)).fetchone()
@@ -59,7 +58,8 @@ def main() -> None:
     reset()
     blind = race(connections, lambda connection, seen: connection.execute(BLIND, (seen, WORKSPACE)))
     print(f"blind update: {len(blind)} epochs issued in {ROUNDS} rounds, most issues of one epoch: {max(blind.values())}")
-    assert max(blind.values()) > 1, "the blind update is expected to issue an epoch more than once"
+    assert sorted(blind) == list(range(1, ROUNDS + 1)), "each round issues the next epoch"
+    assert max(blind.values()) == WRITERS, "every writer of a round issues the same epoch"
 
     times = []
     for _ in range(LOOKUPS):

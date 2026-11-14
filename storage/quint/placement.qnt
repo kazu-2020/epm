@@ -1,15 +1,12 @@
 module placement_design {
   type PlacementGuards = {
-    conditionalClaim: bool, startOnce: bool, identityCheck: bool, readyBeforeRead: bool, lookupPerRequest: bool, routedWrites: bool,
+    conditionalClaim: bool, startOnce: bool, workspaceCheck: bool, epochCheck: bool, lookupPerRequest: bool, routedWrites: bool,
   }
   pure val allPlacementGuards: PlacementGuards = {
-    conditionalClaim: true, startOnce: true, identityCheck: true, readyBeforeRead: true, lookupPerRequest: true, routedWrites: true,
+    conditionalClaim: true, startOnce: true, workspaceCheck: true, epochCheck: true, lookupPerRequest: true, routedWrites: true,
   }
 }
 
-// The placement table, the app servers and the launcher, on top of the change log of seqlog.
-// The row of the workspace is (grantedEpoch, serving). A server name is an address on a node.
-// A claim keeps serving, so the old Assignee answers until the new one is recorded.
 module placement {
   import change_log.* from "./change_log"
   import seqlog_design.* from "./seqlog"
@@ -35,7 +32,8 @@ module placement {
   var route: Route
   var reads: Set[Read]
   var served: Served
-  var startLost: bool
+  var startLost: int
+  var previousGrantedEpoch: int
 
   action keepPlacement = all {
     serving' = serving, writes' = writes, seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
@@ -48,7 +46,7 @@ module placement {
     init,
     serving' = { server: "", epoch: 0 }, writes' = Set(), seen' = Apps.mapBy(_ => 0), starts' = Set(), spawned' = List(), otherWorkspace' = Set(),
     route' = { server: "", epoch: 0 }, reads' = Set(),
-    served' = { epoch: 0, view: Set(), mustSee: Set(), otherWorkspace: false }, startLost' = false,
+    served' = { epoch: 0, view: Set(), mustSee: Set(), otherWorkspace: false }, startLost' = 0, previousGrantedEpoch' = 0,
   }
 
   action readRow(app: str): bool = all {
@@ -73,11 +71,10 @@ module placement {
     }
   }
 
-  // The app server stopped after the claim, or the launcher did not get the request.
   action loseStart(start: Start): bool = all {
     starts.contains(start),
     starts' = starts.exclude(Set(start)),
-    startLost' = true,
+    startLost' = if (start.epoch > startLost) start.epoch else startLost,
     keepLog,
     serving' = serving, writes' = writes, seen' = seen, spawned' = spawned, otherWorkspace' = otherWorkspace,
     route' = route, reads' = reads, served' = served,
@@ -96,7 +93,7 @@ module placement {
   }
 
   action record(server: str): bool = all {
-    servers.get(server).phase != Down,
+    servers.get(server).phase == Ready,
     servers.get(server).epoch == grantedEpoch,
     serving' = { server: server, epoch: grantedEpoch }, writes' = writes,
     keepLog,
@@ -120,7 +117,6 @@ module placement {
     route' = route, reads' = reads, served' = served, startLost' = startLost,
   }
 
-  // mustSee is the set of acknowledged commits when the app server chose the route.
   action lookupWith(chosen: Route): bool = all {
     chosen.server != "",
     chosen == serving or (not(placementGuards.lookupPerRequest) and chosen == route),
@@ -139,9 +135,9 @@ module placement {
   action serve(read: Read): bool = {
     val self = servers.get(read.server)
     val other = otherWorkspace.contains(read.server)
-    val ready = if (placementGuards.readyBeforeRead) self.phase == Ready
-      else self.phase == Ready or self.phase == Fencing or self.phase == Loading
-    val accepted = if (placementGuards.identityCheck) not(other) and self.epoch == read.epoch else true
+    val ready = self.phase == Ready
+    // Not the epoch of the process of the other workspace: it can be equal by chance, so only the workspace check stops that request.
+    val accepted = (not(other) or not(placementGuards.workspaceCheck)) and (other or self.epoch == read.epoch or not(placementGuards.epochCheck))
     all {
       reads.contains(read),
       reads' = reads.exclude(Set(read)),
@@ -163,7 +159,6 @@ module placement {
     store' = store, grantedEpoch' = grantedEpoch,
   }
 
-  // Without routedWrites, a write reaches a process that the row does not name yet.
   action routeWriteTo(chosen: Route, request: str): bool = all {
     chosen.server != "",
     chosen == serving or (not(placementGuards.routedWrites) and chosen.epoch == servers.get(chosen.server).epoch),
@@ -181,7 +176,8 @@ module placement {
 
   action deliverWrite(write: RoutedWrite): bool = {
     val self = servers.get(write.server)
-    val accepted = if (placementGuards.identityCheck) not(otherWorkspace.contains(write.server)) and self.epoch == write.epoch else true
+    val other = otherWorkspace.contains(write.server)
+    val accepted = (not(other) or not(placementGuards.workspaceCheck)) and (other or self.epoch == write.epoch or not(placementGuards.epochCheck))
     all {
       writes.contains(write),
       writes' = writes.exclude(Set(write)),
@@ -191,8 +187,10 @@ module placement {
     }
   }
 
+  action placementGhost = all { ghost, previousGrantedEpoch' = grantedEpoch }
+
   action placementStep = all {
-    ghost,
+    placementGhost,
     any {
       all { keepPlacement, nondet server = Servers.oneOf() any { stopProcess(server), load(server), flush(server), timeout(server), resolve(server) } },
       all { keepPlacement, nondet server = Servers.oneOf() nondet request = Requests.oneOf() receive(server, request) },
@@ -217,29 +215,30 @@ module placement {
   val logDataWriteNeverSeesOlderEpoch: bool = dataWriteNeverSeesOlderEpoch
 
   val epochStartsOneProcess: bool = spawned.indices().forall(i => spawned.indices().forall(j => i != j implies spawned[i] != spawned[j]))
-  val epochNeverDecreases: bool = seen.keys().forall(app => seen.get(app) <= grantedEpoch)
+  val epochNeverDecreases: bool = previousGrantedEpoch <= grantedEpoch
   val readSeesAcknowledgedAtLookup: bool = served.mustSee.subseteq(served.view) or served.otherWorkspace
   val neverReadsOtherWorkspace: bool = not(served.otherWorkspace)
 
-  val witnessNoReadAfterLostStart: bool = not(startLost and served.epoch >= 2)
+  val witnessNoReadAfterLostStart: bool = not(startLost > 0 and served.epoch > startLost)
   val witnessNoAddressReuse: bool = not(reads.exists(read =>
     otherWorkspace.contains(read.server) or (servers.get(read.server).phase != Down and servers.get(read.server).epoch != read.epoch)))
 
   // Fixed scenarios, because random simulation does not reach a read after a handover.
   action onLog(server: str, kind: str, request: str): bool = all {
-    ghost, keepPlacement,
+    placementGhost, keepPlacement,
     any {
       all { kind == "load", load(server) },
       all { kind == "apply", nondet write = store.writesInFlight.filter(w => w.server == server).oneOf() apply(write, false) },
       all { kind == "reply", nondet reply = store.replies.filter(r => r.write.server == server).oneOf() receiveReply(reply) },
       all { kind == "receive", receive(server, request) },
       all { kind == "flush", flush(server) },
+      all { kind == "stop", stopProcess(server) },
       all { kind == "resolve", resolve(server) },
     },
   }
 
   action table(kind: str, app: str, server: str): bool = all {
-    ghost,
+    placementGhost,
     any {
       all { kind == "readRow", readRow(app) },
       all { kind == "claim", claim(app) },
@@ -247,15 +246,15 @@ module placement {
       all { kind == "record", record(server) },
     },
   }
-  action routes(chosen: Route, request: str): bool = all { ghost, routeWriteTo(chosen, request) }
-  action delivers: bool = { nondet write = writes.oneOf() all { ghost, deliverWrite(write) } }
-  action looksUp(chosen: Route): bool = all { ghost, lookupWith(chosen) }
+  action routes(chosen: Route, request: str): bool = all { placementGhost, routeWriteTo(chosen, request) }
+  action delivers: bool = { nondet write = writes.oneOf() all { placementGhost, deliverWrite(write) } }
+  action looksUp(chosen: Route): bool = all { placementGhost, lookupWith(chosen) }
   val acknowledged: Set[str] = clients.acknowledged
   val log: List[str] = replay(store.slots)
   def isReady(server: str): bool = servers.get(server).phase == Ready
 
   run started(app: str, server: str): bool =
-    table("readRow", app, "").then(table("claim", app, "")).then(table("spawn", "", server)).then(table("record", "", server))
+    table("readRow", app, "").then(table("claim", app, "")).then(table("spawn", "", server)).then(fenced(server)).then(table("record", "", server))
 
   run fenced(server: str): bool =
     onLog(server, "load", "").then(onLog(server, "apply", "")).then(onLog(server, "reply", ""))
@@ -268,13 +267,13 @@ module placement {
       .then(onLog(server, "apply", ""))
       .then(onLog(server, "reply", ""))
 
-  run servedOne = nondet read = reads.oneOf() all { ghost, serve(read) }
+  run servedOne = nondet read = reads.oneOf() all { placementGhost, serve(read) }
 
   run handedOver =
     placementInit
-      .then(started("X", "A")).then(fenced("A")).then(committed("A", "r1"))
+      .then(started("X", "A")).then(committed("A", "r1"))
       .then(looksUp({ server: "A", epoch: 1 }))
-      .then(started("Y", "B")).then(fenced("B")).then(committed("B", "r2"))
+      .then(started("Y", "B")).then(committed("B", "r2"))
       .expect(acknowledged == Set("r1", "r2") and isReady("A"))
 
   // The read that chose the old Assignee before the handover is concurrent with r2, so it may miss r2.
@@ -288,11 +287,10 @@ module placement {
 
   run warmStarted =
     placementInit
-      .then(started("X", "A")).then(fenced("A")).then(committed("A", "r1"))
+      .then(started("X", "A")).then(committed("A", "r1"))
       .then(table("readRow", "Y", "")).then(table("claim", "Y", "")).then(table("spawn", "", "B")).then(fenced("B"))
       .expect(isReady("A") and isReady("B") and serving == { server: "A", epoch: 1 })
 
-  // The old Assignee answers reads while the new one loads. Its write fails, and the retry goes to the new one.
   run warmHandoverTest =
     warmStarted
       .then(looksUp(serving)).then(servedOne)
@@ -334,22 +332,27 @@ module placement_start_resent {
       .expect(acknowledged == Set("r1", "r2") and log == List("r1") and not(logRefinesChangeLog))
 }
 
-module placement_no_identity_check {
+module placement_no_workspace_check {
   import placement_design.*
-  import placement(placementGuards = { ...allPlacementGuards, identityCheck: false }).*
+  import placement(placementGuards = { ...allPlacementGuards, workspaceCheck: false }).*
 }
 
-module placement_read_while_loading {
+// A fixed scenario, because random simulation does not reach a write in flight to an address that a later epoch takes.
+module placement_no_epoch_check {
   import placement_design.*
-  import placement(placementGuards = { ...allPlacementGuards, readyBeforeRead: false }).*
+  import placement(placementGuards = { ...allPlacementGuards, epochCheck: false }).*
 
-  run readWhileLoadingMissesCommitTest =
+  run staleWriteReachesNewerProcessTest =
     placementInit
-      .then(started("X", "A")).then(fenced("A")).then(committed("A", "r1"))
+      .then(started("X", "A"))
+      .then(routes({ server: "A", epoch: 1 }, "r1"))
+      .then(onLog("A", "stop", ""))
       .then(started("Y", "B"))
-      .then(looksUp({ server: "B", epoch: 2 }))
-      .then(servedOne)
-      .expect(served.mustSee == Set("r1") and served.view == Set() and not(readSeesAcknowledgedAtLookup))
+      .then(table("readRow", "X", "")).then(table("claim", "X", "")).then(table("spawn", "", "A")).then(fenced("A"))
+      .then(delivers).then(onLog("A", "receive", "r1")).then(onLog("A", "flush", "")).then(onLog("A", "apply", "")).then(onLog("A", "reply", ""))
+      .expect(acknowledged == Set("r1") and isReady("B"))
+      .then(looksUp({ server: "B", epoch: 2 })).then(servedOne)
+      .expect(served.epoch == 2 and served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
 }
 
 module placement_cached_route {

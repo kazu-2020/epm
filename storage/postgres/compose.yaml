@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_HOST_AUTH_METHOD: trust
       POSTGRES_DB: epm
-    ports: ["127.0.0.1:55432:5432"]
+    ports: ["127.0.0.1:55433:5432"]
   # The transaction mode and no prepared statements: the app server must work with the strictest pooling.
   pgbouncer:
     image: edoburu/pgbouncer:v1.25.2-p0
@@ -14,4 +14,4 @@ services:
       AUTH_TYPE: trust
       POOL_MODE: transaction
       MAX_PREPARED_STATEMENTS: "0"
-    ports: ["127.0.0.1:56432:5432"]
+    ports: ["127.0.0.1:56433:5432"]

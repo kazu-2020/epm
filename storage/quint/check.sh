@@ -75,14 +75,14 @@ placement_witnesses=(witnessNoReadAfterLostStart witnessNoAddressReuse)
 placement_breaks=(
   placement_blind_claim:epochStartsOneProcess placement_blind_claim:epochNeverDecreases
   placement_start_resent:epochStartsOneProcess
-  placement_no_identity_check:neverReadsOtherWorkspace
+  placement_no_workspace_check:neverReadsOtherWorkspace
 )
 # Random simulation does not reach these violations, so a fixed scenario shows each one.
 placement_scenarios=(
   placement_designed:readAfterHandoverTest
   placement_designed:warmHandoverTest
   placement_start_resent:sameEpochAcknowledgesLostCommitTest
-  placement_read_while_loading:readWhileLoadingMissesCommitTest
+  placement_no_epoch_check:staleWriteReachesNewerProcessTest
   placement_cached_route:cachedRouteMissesCommitTest
   placement_unrouted_write:unroutedWriteMissesCommitTest
 )
