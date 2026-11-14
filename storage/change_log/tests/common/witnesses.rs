@@ -42,7 +42,7 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
             }
             Record::Applied { body, .. } => {
                 let segment = decode(body);
-                if let Some(first) = segment.commits.first() {
+                if let Some(first) = segment.commits().first() {
                     applied.insert((segment.epoch.0, first.sequence));
                 }
             }
@@ -80,7 +80,7 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     }
     if segments
         .values()
-        .any(|segment| segment.epoch.0 >= 2 && !segment.commits.is_empty())
+        .any(|segment| segment.epoch.0 >= 2 && !segment.commits().is_empty())
     {
         seen.insert("commitAfterHandover");
     }
@@ -95,7 +95,7 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let fences: BTreeSet<(Epoch, Slot)> = sent
         .iter()
         .flat_map(|(key, bodies)| bodies.iter().map(|body| (slot_of(key), decode(body))))
-        .filter(|(_, segment)| segment.commits.is_empty())
+        .filter(|(_, segment)| segment.commits().is_empty())
         .map(|(slot, segment)| (segment.epoch, slot))
         .collect();
     if fences
@@ -108,7 +108,7 @@ pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
         fences.contains(&(*epoch, Slot(slot.0 + 1)))
             && segments
                 .get(slot)
-                .is_some_and(|older| older.epoch < *epoch && !older.commits.is_empty())
+                .is_some_and(|older| older.epoch < *epoch && !older.commits().is_empty())
     }) {
         seen.insert("fenceFoundOlderCommits");
     }

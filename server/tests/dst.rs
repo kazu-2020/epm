@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use change_log::{Commit, Epoch, ProcessId, Request, Sequence, Slot, Start};
+use change_log::{AssigneeId, Commit, Epoch, ProcessId, Request, Sequence, Slot, Start};
 use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
@@ -130,8 +130,10 @@ impl common::Server for Assignees {
                 settings,
                 store,
                 workspace,
-                Epoch(epoch),
-                ProcessId(u128::from(epoch)),
+                AssigneeId {
+                    epoch: Epoch(epoch),
+                    process: ProcessId(u128::from(epoch)),
+                },
             );
             let _ = started.send(handle);
             match assignee.await {
@@ -305,7 +307,7 @@ fn recalculation_witnesses(outcome: &common::Outcome) -> BTreeSet<&'static str> 
         .values()
         .flat_map(|segment| {
             segment
-                .commits
+                .commits()
                 .iter()
                 .map(|commit| (commit.sequence, segment.epoch.0))
         })
@@ -415,7 +417,7 @@ fn snapshots_match_log(model: &Model, run: &Run) -> common::Violations {
         let last = count.checked_sub(1).map(|last| Sequence(last as u64));
         let in_slot = segments.get(&start.slot).is_some_and(|segment| {
             segment
-                .commits
+                .commits()
                 .iter()
                 .any(|commit| Some(commit.sequence) == last)
         });

@@ -12,8 +12,10 @@ use object_store::path::Path;
 use object_store::{ObjectStore, PutMode};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::assignee::{Admit, Alarm, Assignee, Effect, Event, PutFailure, Request, Start};
-use crate::segment::{Commit, Epoch, ProcessId, RequestId, Segment, Sequence, Slot};
+use crate::assignee::{
+    Admit, Alarm, Assignee, AssigneeId, Effect, Event, PutFailure, Request, Start,
+};
+use crate::segment::{Commit, RequestId, Segment, Sequence, Slot};
 
 pub struct Submission<R> {
     request: Request,
@@ -43,13 +45,10 @@ pub enum Exit {
 }
 
 // Not a bounded channel for commits: a full channel would delay ACKs, and the server rejects requests as Busy while its engine is far behind.
-// Not a struct for the arguments: each caller fills each one once, and the struct has no other use.
-#[expect(clippy::too_many_arguments)]
 pub async fn serve<A: Admit>(
     store: Arc<dyn ObjectStore>,
     workspace: &str,
-    epoch: Epoch,
-    process: ProcessId,
+    id: AssigneeId,
     start: Start,
     admit: A,
     mut submission_receiver: mpsc::Receiver<Submission<A::Rejection>>,
@@ -57,7 +56,7 @@ pub async fn serve<A: Admit>(
 ) -> Exit {
     let log = Path::from(workspace).join("log");
     let first = start.slot;
-    let mut assignee = Assignee::resume(epoch, process, admit, start);
+    let mut assignee = Assignee::resume(id, admit, start);
     let mut io: FuturesUnordered<BoxFuture<'static, Result<Event, Alarm>>> =
         FuturesUnordered::new();
     io.push(load(Arc::clone(&store), log.clone(), first).boxed());

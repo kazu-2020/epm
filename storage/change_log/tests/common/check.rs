@@ -33,7 +33,7 @@ pub fn replay(store: &BTreeMap<String, Bytes>) -> (BTreeMap<Slot, Segment>, Vec<
         .iter()
         .zip(0..)
         .take_while(|((slot, _), expected)| slot.0 == *expected)
-        .flat_map(|((_, segment), _)| segment.commits.iter().cloned())
+        .flat_map(|((_, segment), _)| segment.commits().iter().cloned())
         .collect();
     (segments, log)
 }

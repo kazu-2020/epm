@@ -2,7 +2,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use change_log::{Epoch, ProcessId};
+use change_log::{AssigneeId, Epoch, ProcessId};
 use datagen::representative::{self, Size};
 use object_store::aws::AmazonS3Builder;
 use server::Settings;
@@ -107,8 +107,10 @@ async fn main() -> ExitCode {
         Settings::default(),
         store,
         arguments.workspace,
-        Epoch(arguments.epoch),
-        ProcessId(Ulid::generate().0),
+        AssigneeId {
+            epoch: Epoch(arguments.epoch),
+            process: ProcessId(Ulid::generate().0),
+        },
     );
     match server::http::serve(listener, handle, assignee, shutdown, SHUTDOWN_DEADLINE).await {
         Shutdown::Drained => ExitCode::SUCCESS,

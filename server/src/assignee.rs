@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use change_log::{
-    Admit, Commit, Epoch, ProcessId, Request, RequestId, Sequence, Slot, Start, Submission,
+    Admit, AssigneeId, Commit, Request, RequestId, Sequence, Slot, Start, Submission,
 };
 use dimension::MemberIndex;
 use measure::{CoordinateError, MeasureGlobalId};
@@ -104,8 +104,7 @@ pub fn start(
     settings: Settings,
     store: Arc<dyn ObjectStore>,
     workspace: String,
-    epoch: Epoch,
-    process: ProcessId,
+    id: AssigneeId,
 ) -> (Handle, impl Future<Output = Exit>) {
     assert!(
         engine.next.index() == start.request_ids.len() && engine.slot == start.slot,
@@ -144,7 +143,7 @@ pub fn start(
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the assignee.
         tokio::select! {
             biased;
-            exit = change_log::serve(Arc::clone(&store), &workspace, epoch, process, start, admission, submission_receiver, commit_sender) => {
+            exit = change_log::serve(Arc::clone(&store), &workspace, id, start, admission, submission_receiver, commit_sender) => {
                 Exit::ChangeLog(exit)
             }
             alarm = apply(

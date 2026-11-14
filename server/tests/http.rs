@@ -5,7 +5,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
-use change_log::{Epoch, ProcessId, Start};
+use change_log::{AssigneeId, Epoch, ProcessId, Start};
 use datagen::representative::{self, Size};
 use measure::MeasureGlobalId;
 use object_store::memory::InMemory;
@@ -41,8 +41,10 @@ fn app(settings: Settings) -> App {
         settings,
         Arc::new(InMemory::new()),
         "ws".to_owned(),
-        Epoch(1),
-        ProcessId(1),
+        AssigneeId {
+            epoch: Epoch(1),
+            process: ProcessId(1),
+        },
     );
     tokio::spawn(assignee);
     App {
