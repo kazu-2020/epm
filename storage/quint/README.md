@@ -12,7 +12,7 @@
 | `seqlog.qnt` | 変更ログの書き方のモデル。Assignee、配置コントローラー(エポックを渡す)、Slot、クライアントの再送。守りは `seqlog_design` の `allGuards` に、サーバー数などの上限は `seqlog` の `pure val` に置く |
 | `seqlog_mutations.qnt` | 守りを1つずつ外したモデル(`{ ...allGuards, deduplication: false }` など)。検査が実際に落ちることを示す。`check.sh` は、ここのモジュールがすべて `breaks` か `holds` に入っているかを確かめる |
 | `seqlog_replay.qnt` | Rust の実装に再生するトレースを作るための `replayStep`。`step` の一部の手順だけを許し、送信と停止にステップを使い切らないようにした |
-| `placement.qnt` | 配置表、App server、ランチャー、読み取りを `seqlog.qnt` に追加したモデル。規則は `placement_design` の `allPlacementGuards` に置く。規則を1個ずつ除外した module と固定の手順も同一ファイルにある(ADR 0012) |
+| `placement.qnt` | 配置表、App server、ランチャー、読み取り、書き込みの転送を `seqlog.qnt` に追加したモデル。規則は `placement_design` の `allPlacementGuards` に置く。規則を1個ずつ除外した module と固定の手順も同一ファイルにある(ADR 0012) |
 | `check.sh` | すべての検査をまとめて実行する |
 | `../postgres/epoch_race.py` | PostgreSQL と PgBouncer で、エポックを発行する UPDATE の同時実行を実測する |
 | `../rustfs/conditional_write.py` | S3 互換サーバーで If-None-Match の応答を実測する |

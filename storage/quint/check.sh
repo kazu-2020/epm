@@ -80,9 +80,11 @@ placement_breaks=(
 # Random simulation does not reach these violations, so a fixed scenario shows each one.
 placement_scenarios=(
   placement_designed:readAfterHandoverTest
+  placement_designed:warmHandoverTest
   placement_start_resent:sameEpochAcknowledgesLostCommitTest
   placement_read_while_loading:readWhileLoadingMissesCommitTest
   placement_cached_route:cachedRouteMissesCommitTest
+  placement_unrouted_write:unroutedWriteMissesCommitTest
 )
 
 listed=$(printf '%s\n' placement_designed "${placement_breaks[@]%%:*}" "${placement_scenarios[@]%%:*}" | sort -u)
