@@ -22,15 +22,16 @@ WHERE workspace_global_id = %(w)s AND epoch = %(seen)s
 RETURNING epoch, consecutive_failures"""
 RECORD = """UPDATE placement_rules
 SET address = %(a)s, address_epoch = %(e)s, recorded_at = now(), boot_duration = now() - claimed_at
-WHERE workspace_global_id = %(w)s AND epoch = %(e)s RETURNING boot_duration"""
+WHERE workspace_global_id = %(w)s AND epoch = %(e)s AND node = %(node)s RETURNING boot_duration"""
 def claim(seen, planned=False, wait="0 seconds"):
     return c.execute(CLAIM, dict(node="n1", planned=planned, w=W, seen=seen, wait=wait)).fetchone()
-def record(e): return c.execute(RECORD, dict(a="n1:1", e=e, w=W)).fetchone()
+def record(e, node="n1"): return c.execute(RECORD, dict(a="n1:1", e=e, w=W, node=node)).fetchone()
 assert claim(0) == (1, 0), "the first claim of a new row is not a failure"
 assert claim(1, wait="1 hour") is None, "a booting row waits for the boot deadline"
 assert claim(1, planned=True) is None, "a planned replacement does not interrupt a booting row"
 assert claim(1) == (2, 1), "a claim that follows an unrecorded epoch is a failure"
 assert record(1) is None, "an old epoch is not recorded"
+assert record(2, node="n2") is None, "a process on another node is not recorded"
 assert record(2)[0] is not None
 assert claim(2, planned=True) == (3, 1), "a planned replacement keeps the count"
 record(3)
