@@ -28,6 +28,12 @@ jobs:
       - run: |
           npm ci --prefix ../quint
           echo "$PWD/../quint/node_modules/.bin" >> "$GITHUB_PATH"
+      # Not left to quint: it fetches the evaluator through the unauthenticated GitHub API, whose 60 requests per hour the shared runner IPs exhaust.
+      - name: Install the Quint Rust evaluator
+        run: |
+          version=$(node -p "require('../quint/node_modules/@informalsystems/quint/dist/src/rust/binaryManager.js').QUINT_EVALUATOR_VERSION")
+          mkdir -p "$HOME/.quint/rust-evaluator-$version"
+          curl -fsSL --retry 5 "https://github.com/quint-co/quint/releases/download/evaluator/$version/quint_evaluator-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.quint/rust-evaluator-$version"
       - run: cargo test --locked
 
   rustfs:
