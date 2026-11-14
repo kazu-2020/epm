@@ -15,6 +15,7 @@
 | `placement.qnt` | 配置表、App server、ランチャー、読み取り、書き込みの転送を `seqlog.qnt` に追加したモデル。規則は `placement_design` の `allPlacementGuards` に置く。規則を1個ずつ除外した module と固定の手順も同一ファイルにある(ADR 0012) |
 | `check.sh` | すべての検査をまとめて実行する |
 | `../postgres/epoch_race.py` | PostgreSQL と PgBouncer で、エポックを発行する UPDATE の同時実行を実測する |
+| `../postgres/claim_rules.py` | エポックの発行と記録の UPDATE の規則(連続失敗の計数、待機時間、計画的な入れ替え、復元後の補正)を1個の接続で確認する |
 | `../rustfs/conditional_write.py` | S3 互換サーバーで If-None-Match の応答を実測する |
 
 ## 実行
@@ -42,6 +43,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 ```sh
 docker compose -f storage/postgres/compose.yaml up -d
 uv run --with 'psycopg[binary]' storage/postgres/epoch_race.py
+uv run --with 'psycopg[binary]' storage/postgres/claim_rules.py
 ```
 
 ## Assignee の動き
