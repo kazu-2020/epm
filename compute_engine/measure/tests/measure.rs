@@ -10,7 +10,8 @@ use dimension::{
     DimensionGlobalId, DimensionKind, MemberIndex,
 };
 use measure::{
-    CoordinatePacking, Measure, MeasureDefinition, MeasureError, MeasureGlobalId, normalize,
+    CoordinateError, CoordinatePacking, Measure, MeasureDefinition, MeasureError, MeasureGlobalId,
+    normalize,
 };
 use ulid::Ulid;
 
@@ -108,7 +109,7 @@ fn cell_is_read_by_its_member_ids_and_missing_cells_are_empty() {
     assert_eq!(measure.get(&coordinate(1, 0)).unwrap(), None);
     assert_eq!(
         measure.get(&[MemberIndex(0)]).unwrap_err(),
-        MeasureError::CoordinateLength {
+        CoordinateError::Length {
             expected: 2,
             found: 1
         }
@@ -118,7 +119,7 @@ fn cell_is_read_by_its_member_ids_and_missing_cells_are_empty() {
 #[test]
 fn reading_a_member_outside_the_dimension_is_an_error_like_writing_it() {
     let measure = sales();
-    let outside = MeasureError::MemberOutOfRange {
+    let outside = CoordinateError::MemberOutOfRange {
         axis: DEPARTMENT,
         member: MemberIndex(2),
     };
@@ -127,6 +128,20 @@ fn reading_a_member_outside_the_dimension_is_an_error_like_writing_it() {
     assert_eq!(
         measure.delta().set(&coordinate(0, 2), 1.0).unwrap_err(),
         outside
+    );
+}
+
+#[test]
+fn coordinate_errors_tell_the_client_what_is_wrong() {
+    let measure = sales();
+
+    assert_eq!(
+        measure.get(&[MemberIndex(0)]).unwrap_err().to_string(),
+        "the coordinate needs 2 members, but it has 1"
+    );
+    assert_eq!(
+        measure.get(&coordinate(0, 2)).unwrap_err().to_string(),
+        format!("member 2 is not in dimension {}", DEPARTMENT.0)
     );
 }
 
@@ -212,10 +227,10 @@ fn base_keeps_the_definition_schema_even_when_given_nullable_columns() {
 fn member_outside_the_axis_dimension_is_rejected() {
     assert_eq!(
         try_sales(&[(0, 2, 1.0)]).unwrap_err(),
-        MeasureError::MemberOutOfRange {
+        MeasureError::Coordinate(CoordinateError::MemberOutOfRange {
             axis: DEPARTMENT,
             member: MemberIndex(2)
-        }
+        })
     );
 }
 
@@ -320,14 +335,14 @@ fn delta_rejects_coordinates_that_do_not_fit_the_measure() {
     let mut delta = measure.delta();
     assert_eq!(
         delta.set(&[MemberIndex(0)], 1.0).unwrap_err(),
-        MeasureError::CoordinateLength {
+        CoordinateError::Length {
             expected: 2,
             found: 1
         }
     );
     assert_eq!(
         delta.delete(&coordinate(3, 0)).unwrap_err(),
-        MeasureError::MemberOutOfRange {
+        CoordinateError::MemberOutOfRange {
             axis: PERIOD,
             member: MemberIndex(3)
         }
@@ -542,10 +557,10 @@ fn cells_must_fit_the_measure() {
             &dimensions
         )
         .unwrap_err(),
-        MeasureError::CoordinateLength {
+        MeasureError::Coordinate(CoordinateError::Length {
             expected: 2,
             found: 1
-        }
+        })
     );
     assert_eq!(
         Measure::from_cells(
@@ -644,10 +659,10 @@ fn packed_coordinates_from_the_engine_are_checked_like_a_base() {
     };
     assert_eq!(
         from_packed(vec![packing.pack([3, 0])]).unwrap_err(),
-        MeasureError::MemberOutOfRange {
+        MeasureError::Coordinate(CoordinateError::MemberOutOfRange {
             axis: PERIOD,
             member: MemberIndex(3)
-        }
+        })
     );
     assert_eq!(
         from_packed(vec![1 << 3]).unwrap_err(),
@@ -738,10 +753,10 @@ fn a_delta_from_packed_coordinates_takes_only_sorted_ones_that_fit_the_measure()
         measure
             .delta_from_packed(vec![packed(3, 0)], vec![None])
             .unwrap_err(),
-        MeasureError::MemberOutOfRange {
+        MeasureError::Coordinate(CoordinateError::MemberOutOfRange {
             axis: PERIOD,
             member: MemberIndex(3)
-        }
+        })
     );
 }
 
@@ -795,7 +810,7 @@ fn coordinates_are_taken_and_given_in_the_declared_order_of_the_axes() {
     assert_eq!(measure.get(&at(1, 1)).unwrap(), None);
     assert_eq!(
         measure.get(&at(2, 0)).unwrap_err(),
-        MeasureError::MemberOutOfRange {
+        CoordinateError::MemberOutOfRange {
             axis: DEPARTMENT,
             member: MemberIndex(2)
         }
@@ -849,10 +864,10 @@ fn a_record_batch_has_its_columns_in_the_declared_order_and_its_rows_in_packing_
     );
     assert_eq!(
         try_department_first(&[(2, 0, 1.0)]).unwrap_err(),
-        MeasureError::MemberOutOfRange {
+        MeasureError::Coordinate(CoordinateError::MemberOutOfRange {
             axis: DEPARTMENT,
             member: MemberIndex(2)
-        }
+        })
     );
 }
 

@@ -5,7 +5,7 @@ use bytes::Bytes;
 use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Slot, Start, Submission, serve};
 use datagen::representative::{self, Size};
 use dimension::MemberIndex;
-use measure::{MeasureError, MeasureGlobalId};
+use measure::{CoordinateError, MeasureGlobalId};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::throttle::{ThrottleConfig, ThrottledStore};
@@ -164,7 +164,7 @@ async fn a_rejected_edit_returns_its_reason() {
     assert_eq!(
         owner.handle.submit(id("short"), &short).await,
         Err(SubmitError::Rejected(Rejection::Invalid(
-            Invalid::Coordinate(MeasureError::CoordinateLength {
+            Invalid::Coordinate(CoordinateError::Length {
                 expected: 5,
                 found: 4
             })
@@ -368,7 +368,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
             .handle
             .read(Some(Sequence(0)), &[(SALES, vec![MemberIndex(0)])])
             .await,
-        Err(ReadError::Coordinate(MeasureError::CoordinateLength {
+        Err(ReadError::Coordinate(CoordinateError::Length {
             expected: 5,
             found: 1
         }))

@@ -11,7 +11,7 @@ use axum::{Json, Router};
 use bytes::Bytes;
 use change_log::{RequestId, Sequence};
 use dimension::MemberIndex;
-use measure::{MeasureError, MeasureGlobalId};
+use measure::MeasureGlobalId;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -230,7 +230,7 @@ fn submit_failure(error: SubmitError) -> Failure {
             let message = match invalid {
                 Invalid::Undecodable(_) => "the edit cannot be decoded".to_owned(),
                 Invalid::NotAnInput(measure) => format!("measure {} is not an input", measure.0),
-                Invalid::Coordinate(error) => coordinate_message(&error),
+                Invalid::Coordinate(error) => error.to_string(),
             };
             Failure::new(Code::InvalidArgument, message)
         }
@@ -257,22 +257,8 @@ fn read_failure(error: ReadError) -> Failure {
         ReadError::NoMeasure(measure) => {
             Failure::new(Code::NotFound, format!("no measure {}", measure.0))
         }
-        ReadError::Coordinate(error) => {
-            Failure::new(Code::InvalidArgument, coordinate_message(&error))
-        }
+        ReadError::Coordinate(error) => Failure::new(Code::InvalidArgument, error.to_string()),
         ReadError::Stopped => Failure::new(Code::Unavailable, "the owner stopped".to_owned()),
-    }
-}
-
-fn coordinate_message(error: &MeasureError) -> String {
-    match error {
-        MeasureError::CoordinateLength { expected, found } => {
-            format!("the coordinate needs {expected} members, but it has {found}")
-        }
-        MeasureError::MemberOutOfRange { axis, member } => {
-            format!("member {} is not in dimension {}", member.0, axis.0)
-        }
-        other => other.to_string(),
     }
 }
 

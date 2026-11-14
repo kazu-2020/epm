@@ -3,7 +3,7 @@ use change_log::{Commit, RequestId, Sequence, Slot};
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::MemberIndex;
-use measure::{MeasureError, MeasureGlobalId};
+use measure::{CoordinateError, MeasureGlobalId};
 use server::{DecodeError, Edit, Engine, EngineAlarm, Invalid};
 use ulid::Ulid;
 use workspace::Workspace;
@@ -90,7 +90,7 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     short.coordinate.pop();
     assert_eq!(
         check(&server::edit::encode(&short)),
-        Err(Invalid::Coordinate(MeasureError::CoordinateLength {
+        Err(Invalid::Coordinate(CoordinateError::Length {
             expected: 5,
             found: 4
         }))
@@ -98,7 +98,7 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     let versions = 3;
     assert!(matches!(
         check(&server::edit::encode(&quantity([0, versions, 1, 0, 1], Some(2.5)))),
-        Err(Invalid::Coordinate(MeasureError::MemberOutOfRange { member, .. }))
+        Err(Invalid::Coordinate(CoordinateError::MemberOutOfRange { member, .. }))
             if member == MemberIndex(versions)
     ));
 }

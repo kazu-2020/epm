@@ -4,7 +4,7 @@ use dimension::MemberIndex;
 
 use crate::axes::Axes;
 use crate::definition::MeasureGlobalId;
-use crate::error::MeasureError;
+use crate::error::CoordinateError;
 use crate::normalize::normalize;
 use crate::scan::first_unsorted;
 
@@ -18,11 +18,11 @@ pub struct Delta {
 }
 
 impl Delta {
-    pub fn set(&mut self, coordinate: &[MemberIndex], value: f64) -> Result<(), MeasureError> {
+    pub fn set(&mut self, coordinate: &[MemberIndex], value: f64) -> Result<(), CoordinateError> {
         self.write(coordinate, normalize(value))
     }
 
-    pub fn delete(&mut self, coordinate: &[MemberIndex]) -> Result<(), MeasureError> {
+    pub fn delete(&mut self, coordinate: &[MemberIndex]) -> Result<(), CoordinateError> {
         self.write(coordinate, None)
     }
 
@@ -36,7 +36,7 @@ impl Delta {
         &mut self,
         coordinate: &[MemberIndex],
         change: Option<f64>,
-    ) -> Result<(), MeasureError> {
+    ) -> Result<(), CoordinateError> {
         let packed = self.axes.pack(coordinate)?;
         self.packed_coordinates.push(packed);
         self.changes.push(change);

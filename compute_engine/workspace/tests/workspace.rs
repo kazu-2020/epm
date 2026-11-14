@@ -9,7 +9,7 @@ use dimension::{
     DimensionGlobalId, DimensionKind, MemberIndex,
 };
 use formula::{AxisErrorKind, ResolveErrorKind};
-use measure::{Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
+use measure::{CoordinateError, Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 use workspace::{
     Calculated, Edit, EditError, Edits, Formula, FormulaError, UncheckedWorkspace, Workspace,
@@ -285,7 +285,7 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     short.coordinate.pop();
     assert_eq!(
         checks.check(&short),
-        Err(EditError::Coordinate(MeasureError::CoordinateLength {
+        Err(EditError::Coordinate(CoordinateError::Length {
             expected: 5,
             found: 4,
         }))

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use dimension::{Dimension, DimensionGlobalId, MemberIndex};
 
 use crate::definition::MeasureDefinition;
-use crate::error::MeasureError;
+use crate::error::{CoordinateError, MeasureError};
 use crate::packing::CoordinatePacking;
 use crate::scan::first_row;
 
@@ -56,9 +56,9 @@ impl Axes {
         }))
     }
 
-    pub(crate) fn pack(&self, coordinate: &[MemberIndex]) -> Result<u64, MeasureError> {
+    pub(crate) fn pack(&self, coordinate: &[MemberIndex]) -> Result<u64, CoordinateError> {
         if coordinate.len() != self.positions.len() {
-            return Err(MeasureError::CoordinateLength {
+            return Err(CoordinateError::Length {
                 expected: self.positions.len(),
                 found: coordinate.len(),
             });
@@ -69,7 +69,7 @@ impl Axes {
             .zip(coordinate)
             .find(|&(&position, member)| member.0 >= self.member_counts[position])
         {
-            return Err(MeasureError::MemberOutOfRange {
+            return Err(CoordinateError::MemberOutOfRange {
                 axis: self.dimensions[position],
                 member,
             });
@@ -100,10 +100,11 @@ impl Axes {
             if let Some(row) = first_row(packed_coordinates, |&packed| {
                 self.packing.member(packed, position) >= member_count
             }) {
-                return Err(MeasureError::MemberOutOfRange {
+                return Err(CoordinateError::MemberOutOfRange {
                     axis: self.dimensions[position],
                     member: MemberIndex(self.packing.member(packed_coordinates[row], position)),
-                });
+                }
+                .into());
             }
         }
         Ok(())
