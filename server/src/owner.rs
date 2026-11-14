@@ -383,7 +383,7 @@ fn values(
             engine
                 .measures()
                 .iter()
-                .find(|candidate| candidate.ulid() == *measure)
+                .find(|candidate| candidate.global_id() == *measure)
                 .ok_or(ReadError::NoMeasure(*measure))?
                 .get(coordinate)
                 .map_err(ReadError::Coordinate)

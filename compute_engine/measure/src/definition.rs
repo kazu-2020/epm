@@ -9,7 +9,7 @@ pub struct MeasureGlobalId(pub Ulid);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeasureDefinition {
-    pub ulid: MeasureGlobalId,
+    pub global_id: MeasureGlobalId,
     pub name: String,
     pub axes: Vec<DimensionGlobalId>,
 }

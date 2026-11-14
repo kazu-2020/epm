@@ -40,7 +40,7 @@ fn every_engine_computes_the_small_representative_model_bit_for_bit_alike() {
             .expect("the column engine evaluates the formula");
         let expected = exact(
             &oracle
-                .evaluate(&checked, formula.result.ulid)
+                .evaluate(&checked, formula.result.global_id)
                 .expect("the oracle evaluates the formula"),
         );
         assert!(!expected.is_empty(), "{} has cells", formula.result.name);

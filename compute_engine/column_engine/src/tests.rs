@@ -36,11 +36,11 @@ impl Model {
         }
     }
 
-    fn dimension(&self, ulid: DimensionGlobalId) -> &Dimension {
+    fn dimension(&self, global_id: DimensionGlobalId) -> &Dimension {
         self.workspace
             .dimensions()
             .iter()
-            .find(|dimension| dimension.ulid() == ulid)
+            .find(|dimension| dimension.global_id() == global_id)
             .expect("the representative model has the dimension")
     }
 
@@ -74,7 +74,7 @@ impl Model {
             .chain(results)
             .find(|definition| definition.name == measure)
             .expect("the representative model has the measure")
-            .ulid;
+            .global_id;
         let changed = HashMap::from([(measure, region)]);
         let formula = self
             .workspace

@@ -13,7 +13,7 @@ pub fn evaluate(
     dimensions: &[&Dimension],
 ) -> Result<Measure, EvaluateError> {
     if expression.result_axes() != result.axes {
-        return Err(EvaluateError::ResultAxesChanged(result.ulid));
+        return Err(EvaluateError::ResultAxesChanged(result.global_id));
     }
     for &axis in &result.axes {
         find_dimension(dimensions, axis)?;
@@ -38,15 +38,15 @@ impl<'a> Evaluator<'a> {
     fn node(&self, node: &CheckedNode) -> Result<Cells, EvaluateError> {
         match node {
             CheckedNode::Number(value) => Ok(Cells::number(*value)),
-            CheckedNode::Measure { ulid, axes } => {
+            CheckedNode::Measure { global_id, axes } => {
                 let measure = self
                     .measures
                     .iter()
-                    .find(|measure| measure.ulid() == *ulid)
-                    .ok_or(EvaluateError::MissingMeasure(*ulid))?;
+                    .find(|measure| measure.global_id() == *global_id)
+                    .ok_or(EvaluateError::MissingMeasure(*global_id))?;
                 // Not the resolved axes alone: the columns are laid out by the measure's own axes, which may have changed since the formula was resolved.
                 if measure.definition().axes != *axes {
-                    return Err(EvaluateError::MeasureAxesChanged(*ulid));
+                    return Err(EvaluateError::MeasureAxesChanged(*global_id));
                 }
                 Ok(Cells::from_measure(measure))
             }
@@ -110,7 +110,7 @@ impl<'a> Evaluator<'a> {
                 attribute: Some(
                     find_dimension(self.dimensions, dimension)?
                         .reference_attributes()
-                        .find(|candidate| candidate.ulid() == attribute)
+                        .find(|candidate| candidate.global_id() == attribute)
                         .ok_or(EvaluateError::MissingAttribute(attribute))?,
                 ),
             }),

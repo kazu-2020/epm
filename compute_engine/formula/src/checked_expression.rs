@@ -14,7 +14,7 @@ pub struct CheckedExpression {
 pub enum CheckedNode {
     Number(f64),
     Measure {
-        ulid: MeasureGlobalId,
+        global_id: MeasureGlobalId,
         axes: Vec<DimensionGlobalId>,
     },
     Terms(Vec<Term>),
@@ -97,8 +97,8 @@ impl CheckedExpression {
 fn node(expression: &ResolvedExpression) -> Option<CheckedNode> {
     Some(match &expression.kind {
         ResolvedExpressionKind::Number(value) => CheckedNode::Number(*value),
-        ResolvedExpressionKind::Measure { ulid, axes } => CheckedNode::Measure {
-            ulid: *ulid,
+        ResolvedExpressionKind::Measure { global_id, axes } => CheckedNode::Measure {
+            global_id: *global_id,
             axes: axes.clone(),
         },
         ResolvedExpressionKind::Negate(_)

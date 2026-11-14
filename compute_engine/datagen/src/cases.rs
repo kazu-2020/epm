@@ -250,7 +250,7 @@ impl Default for Fixture {
             "部門",
             &["営業部", "開発部", "管理部"],
             vec![AttributeDefinition {
-                ulid: AttributeGlobalId(Ulid(21)),
+                global_id: AttributeGlobalId(Ulid(21)),
                 name: "事業部".into(),
                 kind: AttributeKind::Reference(DIVISION),
             }],
@@ -374,7 +374,7 @@ pub fn expected(case: &Case) -> Vec<(Vec<u32>, String)> {
 }
 
 fn dimension(
-    ulid: DimensionGlobalId,
+    global_id: DimensionGlobalId,
     name: &str,
     natural_keys: &[&str],
     attributes: Vec<AttributeDefinition>,
@@ -382,23 +382,23 @@ fn dimension(
     targets: &[&Dimension],
 ) -> Dimension {
     let definition = DimensionDefinition::try_new(
-        ulid,
+        global_id,
         name.into(),
-        if ulid == PERIOD {
+        if global_id == PERIOD {
             DimensionKind::Calendar
         } else {
             DimensionKind::Ordinary
         },
-        natural_key_attribute(ulid).ulid,
-        [vec![natural_key_attribute(ulid)], attributes].concat(),
+        natural_key_attribute(global_id).global_id,
+        [vec![natural_key_attribute(global_id)], attributes].concat(),
     )
     .unwrap();
-    let ulids = FixedSizeBinaryArray::try_from_iter(
-        (0..natural_keys.len()).map(|row| Ulid(ulid.0.0 * 100 + row as u128).to_bytes()),
+    let global_ids = FixedSizeBinaryArray::try_from_iter(
+        (0..natural_keys.len()).map(|row| Ulid(global_id.0.0 * 100 + row as u128).to_bytes()),
     )
     .unwrap();
     let mut columns: Vec<ArrayRef> = vec![
-        Arc::new(ulids),
+        Arc::new(global_ids),
         Arc::new(StringArray::from(natural_keys.to_vec())),
     ];
     if definition.attributes().len() > 1 {
@@ -408,9 +408,13 @@ fn dimension(
     Dimension::try_new(definition, batch, targets).unwrap()
 }
 
-fn measure_definition(ulid: u128, name: &str, axes: &[DimensionGlobalId]) -> MeasureDefinition {
+fn measure_definition(
+    global_id: u128,
+    name: &str,
+    axes: &[DimensionGlobalId],
+) -> MeasureDefinition {
     MeasureDefinition {
-        ulid: MeasureGlobalId(Ulid(ulid)),
+        global_id: MeasureGlobalId(Ulid(global_id)),
         name: name.into(),
         axes: axes.to_vec(),
     }

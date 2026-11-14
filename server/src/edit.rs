@@ -112,11 +112,18 @@ mod tests {
 
     #[test]
     fn the_layout_is_fixed() {
-        let ulid = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01\x02";
+        let global_id = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01\x02";
         let members = b"\x02\0\0\0\x03\0\0\0\x05\x04\0\0";
-        let cleared = [&b"\x01"[..], ulid, members, b"\0"].concat();
+        let cleared = [&b"\x01"[..], global_id, members, b"\0"].concat();
         assert_eq!(&encode(&edit(None))[..], cleared);
-        let set = [&b"\x01"[..], ulid, members, b"\x01", &1.5f64.to_le_bytes()].concat();
+        let set = [
+            &b"\x01"[..],
+            global_id,
+            members,
+            b"\x01",
+            &1.5f64.to_le_bytes(),
+        ]
+        .concat();
         assert_eq!(&encode(&edit(Some(1.5)))[..], set);
     }
 

@@ -33,7 +33,7 @@ impl Axes {
             }
             let dimension = dimensions
                 .iter()
-                .find(|dimension| dimension.ulid() == axis)
+                .find(|dimension| dimension.global_id() == axis)
                 .ok_or(MeasureError::MissingDimension(axis))?;
             sorted.push(dimension);
         }
@@ -48,11 +48,14 @@ impl Axes {
                 .map(|&axis| {
                     sorted
                         .iter()
-                        .position(|dimension| dimension.ulid() == axis)
+                        .position(|dimension| dimension.global_id() == axis)
                         .expect("every declared axis was sorted above")
                 })
                 .collect(),
-            dimensions: sorted.iter().map(|dimension| dimension.ulid()).collect(),
+            dimensions: sorted
+                .iter()
+                .map(|dimension| dimension.global_id())
+                .collect(),
         }))
     }
 

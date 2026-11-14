@@ -431,7 +431,7 @@ fn quantity_in(engine: &Engine) -> Option<f64> {
     engine
         .measures()
         .iter()
-        .find(|measure| measure.ulid() == QUANTITY)
+        .find(|measure| measure.global_id() == QUANTITY)
         .expect("the engine holds the quantity")
         .get(&CELL.map(MemberIndex))
         .expect("the cell fits")

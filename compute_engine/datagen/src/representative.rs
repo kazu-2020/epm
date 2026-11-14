@@ -215,7 +215,7 @@ pub fn formulas() -> Vec<Formula> {
         .enumerate()
         .map(|(index, &(name, axes, text))| Formula {
             result: MeasureDefinition {
-                ulid: MeasureGlobalId(Ulid(200 + index as u128)),
+                global_id: MeasureGlobalId(Ulid(200 + index as u128)),
                 name: name.into(),
                 axes: axes.to_vec(),
             },
@@ -233,16 +233,16 @@ struct Representative {
     random: StdRng,
 }
 
-fn attribute(ulid: u128, name: &str, target: DimensionGlobalId) -> AttributeDefinition {
+fn attribute(global_id: u128, name: &str, target: DimensionGlobalId) -> AttributeDefinition {
     AttributeDefinition {
-        ulid: AttributeGlobalId(Ulid(ulid)),
+        global_id: AttributeGlobalId(Ulid(global_id)),
         name: name.into(),
         kind: AttributeKind::Reference(target),
     }
 }
 
 fn dimension(
-    ulid: DimensionGlobalId,
+    global_id: DimensionGlobalId,
     name: &str,
     natural_keys: Vec<String>,
     attribute: Option<(AttributeDefinition, Vec<u32>)>,
@@ -250,26 +250,28 @@ fn dimension(
 ) -> Dimension {
     let (attributes, targets) = attribute.unzip();
     let definition = DimensionDefinition::try_new(
-        ulid,
+        global_id,
         name.into(),
-        match ulid {
+        match global_id {
             PERIOD => DimensionKind::Calendar,
             VERSION => DimensionKind::Version,
             _ => DimensionKind::Ordinary,
         },
-        natural_key_attribute(ulid).ulid,
-        std::iter::once(natural_key_attribute(ulid))
+        natural_key_attribute(global_id).global_id,
+        std::iter::once(natural_key_attribute(global_id))
             .chain(attributes)
             .collect(),
     )
     .expect("the representative dimension definitions are valid");
-    let first_member = ulid.0.0 << 32;
-    let ulids = FixedSizeBinaryArray::try_from_iter(
+    let first_member = global_id.0.0 << 32;
+    let global_ids = FixedSizeBinaryArray::try_from_iter(
         (0..natural_keys.len()).map(|row| Ulid(first_member + row as u128).to_bytes()),
     )
     .expect("every member ULID is 16 bytes");
-    let mut columns: Vec<ArrayRef> =
-        vec![Arc::new(ulids), Arc::new(StringArray::from(natural_keys))];
+    let mut columns: Vec<ArrayRef> = vec![
+        Arc::new(global_ids),
+        Arc::new(StringArray::from(natural_keys)),
+    ];
     if let Some(targets) = targets {
         columns.push(Arc::new(UInt32Array::from(targets)));
     }
@@ -419,7 +421,7 @@ impl Representative {
         let product_columns = self.dense_columns(&product_axes);
         let accounts = dimensions
             .iter()
-            .find(|dimension| dimension.ulid() == ACCOUNT)
+            .find(|dimension| dimension.global_id() == ACCOUNT)
             .expect("the accounts are generated");
         vec![
             self.quantities(references),
@@ -565,11 +567,11 @@ impl Representative {
     ) -> Measure {
         let groups = dimensions
             .iter()
-            .find(|dimension| dimension.ulid() == GROUP)
+            .find(|dimension| dimension.global_id() == GROUP)
             .expect("the groups are generated");
         let categories = dimensions
             .iter()
-            .find(|dimension| dimension.ulid() == CATEGORY)
+            .find(|dimension| dimension.global_id() == CATEGORY)
             .expect("the categories are generated");
         let group_of = accounts
             .reference_attribute("グループ")
@@ -657,7 +659,7 @@ fn measure(
     references: &[&Dimension],
 ) -> Measure {
     let definition = MeasureDefinition {
-        ulid: MeasureGlobalId(Ulid(100 + index)),
+        global_id: MeasureGlobalId(Ulid(100 + index)),
         name: name.into(),
         axes: axes.to_vec(),
     };
