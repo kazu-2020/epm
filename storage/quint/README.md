@@ -12,7 +12,9 @@
 | `seqlog.qnt` | 変更ログの書き方のモデル。Assignee、配置コントローラー(エポックを渡す)、Slot、クライアントの再送。守りは `seqlog_design` の `allGuards` に、サーバー数などの上限は `seqlog` の `pure val` に置く |
 | `seqlog_mutations.qnt` | 守りを1つずつ外したモデル(`{ ...allGuards, deduplication: false }` など)。検査が実際に落ちることを示す。`check.sh` は、ここのモジュールがすべて `breaks` か `holds` に入っているかを確かめる |
 | `seqlog_replay.qnt` | Rust の実装に再生するトレースを作るための `replayStep`。`step` の一部の手順だけを許し、送信と停止にステップを使い切らないようにした |
+| `placement.qnt` | 配置表、App server、ランチャー、読み取りを `seqlog.qnt` に追加したモデル。規則は `placement_design` の `allPlacementGuards` に置く。規則を1個ずつ除外した module と固定の手順も同一ファイルにある(ADR 0012) |
 | `check.sh` | すべての検査をまとめて実行する |
+| `../postgres/epoch_race.py` | PostgreSQL と PgBouncer で、エポックを発行する UPDATE の同時実行を実測する |
 | `../rustfs/conditional_write.py` | S3 互換サーバーで If-None-Match の応答を実測する |
 
 ## 実行
@@ -33,6 +35,13 @@ docker compose -f storage/rustfs/compose.yaml up -d
 AWS_ENDPOINT_URL=http://127.0.0.1:9000 AWS_ACCESS_KEY_ID=demo \
 AWS_SECRET_ACCESS_KEY=demo-secret AWS_REGION=us-east-1 \
 uv run --with boto3 storage/rustfs/conditional_write.py
+```
+
+配置表が前提にする条件付きの UPDATE は、PostgreSQL と PgBouncer で次のように実測する。
+
+```sh
+docker compose -f storage/postgres/compose.yaml up -d
+uv run --with 'psycopg[binary]' storage/postgres/epoch_race.py
 ```
 
 ## Assignee の動き

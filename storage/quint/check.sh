@@ -70,4 +70,44 @@ for module in "${log_safe_without_guard[@]}"; do
   output=$(run seqlog_mutations.qnt "$module" refinesChangeLog)
   report "$module refinesChangeLog" "$(outcome "$output")" "$(broken "$output")" hold
 done
+placement_invariants=(logRefinesChangeLog logSegmentsNeverChange logStaleEpochNeverCommits logSlotsContiguous logOneContentPerSlotPerEpoch logDataWriteNeverSeesOlderEpoch epochStartsOneProcess epochNeverDecreases readSeesAcknowledgedAtLookup neverReadsOtherWorkspace)
+placement_witnesses=(witnessNoReadAfterLostStart witnessNoAddressReuse)
+placement_breaks=(
+  placement_blind_claim:epochStartsOneProcess placement_blind_claim:epochNeverDecreases
+  placement_start_resent:epochStartsOneProcess
+  placement_no_identity_check:neverReadsOtherWorkspace
+)
+# Random simulation does not reach these violations, so a fixed scenario shows each one.
+placement_scenarios=(
+  placement_designed:readAfterHandoverTest
+  placement_start_resent:sameEpochAcknowledgesLostCommitTest
+  placement_read_while_loading:readWhileLoadingMissesCommitTest
+  placement_cached_route:cachedRouteMissesCommitTest
+)
+
+listed=$(printf '%s\n' placement_designed "${placement_breaks[@]%%:*}" "${placement_scenarios[@]%%:*}" | sort -u)
+defined=$(sed -n 's/^module \(placement_[a-z_]*\) {/\1/p' placement.qnt | grep -v '^placement_design$' | sort)
+if [[ "$listed" != "$defined" ]]; then
+  echo "check.sh does not list the same modules as placement.qnt:"
+  diff <(echo "$listed") <(echo "$defined") || true
+  exit 1
+fi
+
+quint typecheck placement.qnt
+for entry in "${placement_scenarios[@]}"; do
+  quint test placement.qnt --main "${entry%%:*}" --match "${entry##*:}"
+done
+
+run_placement() {
+  quint run placement.qnt --main "$1" --init placementInit --step placementStep --invariants "${@:2}" --max-samples "$samples" --max-steps 40 --seed 1 2>&1 || true
+}
+
+output=$(run_placement placement_designed "${placement_invariants[@]}")
+report placement_designed "$(outcome "$output")" "$(broken "$output")" hold
+for witness in "${placement_witnesses[@]}"; do
+  report "placement_designed $witness" "$(outcome "$(run_placement placement_designed "$witness")")" "" break
+done
+for entry in "${placement_breaks[@]}"; do
+  report "${entry%%:*} ${entry##*:}" "$(outcome "$(run_placement "${entry%%:*}" "${entry##*:}")")" "" break
+done
 exit "$status"
