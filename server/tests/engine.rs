@@ -4,7 +4,7 @@ use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::MemberIndex;
 use measure::{MeasureError, MeasureGlobalId};
-use server::{DecodeError, Edit, Engine, EngineAlarm, FormulaError, Invalid};
+use server::{DecodeError, Edit, Engine, EngineAlarm, Invalid};
 use ulid::Ulid;
 use workspace::Workspace;
 
@@ -12,12 +12,10 @@ const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const PRICE: MeasureGlobalId = MeasureGlobalId(Ulid(101));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
 
-fn workspace() -> Workspace {
-    representative::generate(&Size::TINY, 7)
-}
-
 fn engine() -> Engine {
-    Engine::new(workspace()).expect("the representative formulas are valid")
+    let workspace =
+        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace");
+    Engine::new(workspace).expect("the representative formulas are valid")
 }
 
 fn quantity(coordinate: [u32; 5], value: Option<f64>) -> Edit {
@@ -34,7 +32,7 @@ fn commit(sequence: u64, edit: &Edit) -> (Slot, Commit) {
         Commit {
             request_id: RequestId(Bytes::from(format!("r{sequence}"))),
             sequence: Sequence(sequence),
-            payload: edit.encode(),
+            payload: server::edit::encode(edit),
         },
     )
 }
@@ -64,17 +62,6 @@ fn cells(engine: &Engine) -> Vec<Vec<(Vec<u32>, String)>> {
         .collect()
 }
 
-#[test]
-fn a_formula_error_shows_before_any_request() {
-    let mut broken = workspace();
-    broken.formulas[0].text = "'存在しない'".into();
-    let result = broken.formulas[0].result.ulid;
-    assert!(matches!(
-        Engine::new(broken),
-        Err(FormulaError::Resolve { result: found, .. }) if found == result
-    ));
-}
-
 fn check(payload: &Bytes) -> Result<(), Invalid> {
     engine().definitions().check(payload)
 }
@@ -82,21 +69,27 @@ fn check(payload: &Bytes) -> Result<(), Invalid> {
 #[test]
 fn only_a_cell_of_an_input_measure_passes_the_check() {
     assert_eq!(
-        check(&quantity([0, 1, 1, 0, 1], Some(2.5)).encode()),
+        check(&server::edit::encode(&quantity([0, 1, 1, 0, 1], Some(2.5)))),
         Ok(())
     );
-    assert_eq!(check(&quantity([0, 1, 1, 0, 1], None).encode()), Ok(()));
+    assert_eq!(
+        check(&server::edit::encode(&quantity([0, 1, 1, 0, 1], None))),
+        Ok(())
+    );
     assert_eq!(
         check(&Bytes::from_static(b"\x09")),
         Err(Invalid::Undecodable(DecodeError::Version(9)))
     );
     let mut result = quantity([0, 1, 1, 0, 1], Some(2.5));
     result.measure = SALES;
-    assert_eq!(check(&result.encode()), Err(Invalid::NotAnInput(SALES)));
+    assert_eq!(
+        check(&server::edit::encode(&result)),
+        Err(Invalid::NotAnInput(SALES))
+    );
     let mut short = quantity([0, 1, 1, 0, 1], Some(2.5));
     short.coordinate.pop();
     assert_eq!(
-        check(&short.encode()),
+        check(&server::edit::encode(&short)),
         Err(Invalid::Coordinate(MeasureError::CoordinateLength {
             expected: 5,
             found: 4
@@ -104,7 +97,7 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     );
     let versions = 3;
     assert!(matches!(
-        check(&quantity([0, versions, 1, 0, 1], Some(2.5)).encode()),
+        check(&server::edit::encode(&quantity([0, versions, 1, 0, 1], Some(2.5)))),
         Err(Invalid::Coordinate(MeasureError::MemberOutOfRange { member, .. }))
             if member == MemberIndex(versions)
     ));

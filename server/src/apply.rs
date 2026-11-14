@@ -125,11 +125,18 @@ mod tests {
 
     use crate::snapshot::Snapshot;
     use datagen::representative::{self, Size};
+    use workspace::Workspace;
 
     use super::*;
 
     fn engine() -> Arc<Engine> {
-        Arc::new(Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas"))
+        Arc::new(
+            Engine::new(
+                Workspace::try_new(representative::generate(&Size::TINY, 7))
+                    .expect("a valid workspace"),
+            )
+            .expect("valid formulas"),
+        )
     }
 
     fn commit(sequence: u64) -> (Slot, Commit) {
@@ -258,7 +265,7 @@ mod tests {
         (
             Slot(slot),
             Commit {
-                payload: edit.encode(),
+                payload: crate::edit::encode(&edit),
                 ..commit
             },
         )
@@ -330,8 +337,12 @@ mod tests {
             ..Start::default()
         };
         let restored = Arc::new(
-            Engine::resume(representative::generate(&Size::TINY, 7), &start)
-                .expect("valid formulas"),
+            Engine::resume(
+                Workspace::try_new(representative::generate(&Size::TINY, 7))
+                    .expect("a valid workspace"),
+                &start,
+            )
+            .expect("valid formulas"),
         );
         let mut applier = applier(Arc::clone(&restored));
         assert_eq!(written(&published(&mut applier, &restored, 0, 6)), None);

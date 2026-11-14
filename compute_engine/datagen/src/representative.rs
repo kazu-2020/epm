@@ -15,7 +15,7 @@ use rand::{RngExt, SeedableRng};
 use rand_distr::Zipf;
 use rayon::prelude::*;
 use ulid::Ulid;
-use workspace::{Formula, Workspace};
+use workspace::{Formula, UncheckedWorkspace};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Size {
@@ -186,7 +186,7 @@ const FORMULAS: [(&str, &[DimensionGlobalId], &str); 15] = [
     ),
 ];
 
-pub fn generate(size: &Size, seed: u64) -> Workspace {
+pub fn generate(size: &Size, seed: u64) -> UncheckedWorkspace {
     let mut generator = Representative {
         size: *size,
         random: StdRng::seed_from_u64(seed),
@@ -194,7 +194,7 @@ pub fn generate(size: &Size, seed: u64) -> Workspace {
     let dimensions = generator.dimensions();
     let references: Vec<&Dimension> = dimensions.iter().collect();
     let inputs = generator.inputs(&dimensions, &references);
-    Workspace {
+    UncheckedWorkspace {
         dimensions,
         inputs,
         formulas: formulas(),

@@ -1,17 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use dimension::{DimensionGlobalId, MemberIndex};
+use dimension::DimensionGlobalId;
 use measure::CoordinatePacking;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Region {
+pub(crate) struct Region {
     members: BTreeMap<DimensionGlobalId, BTreeSet<u32>>,
 }
 
 impl Region {
-    pub fn of_changes<'c>(
+    #[cfg(test)]
+    pub(crate) fn of_changes<'c>(
         axes: &[DimensionGlobalId],
-        coordinates: impl IntoIterator<Item = &'c [MemberIndex]>,
+        coordinates: impl IntoIterator<Item = &'c [u32]>,
     ) -> Option<Region> {
         let mut region = Region {
             members: axes.iter().map(|&axis| (axis, BTreeSet::new())).collect(),
@@ -22,7 +23,7 @@ impl Region {
                     .members
                     .get_mut(axis)
                     .expect("every axis has a set")
-                    .insert(member.0);
+                    .insert(*member);
             }
         }
         region.non_empty()
@@ -59,7 +60,7 @@ impl Region {
         .non_empty()
     }
 
-    pub fn members(&self, dimension: DimensionGlobalId) -> Option<&BTreeSet<u32>> {
+    pub(crate) fn members(&self, dimension: DimensionGlobalId) -> Option<&BTreeSet<u32>> {
         self.members.get(&dimension)
     }
 
@@ -105,13 +106,10 @@ mod tests {
             DimensionGlobalId(ulid::Ulid(2)),
         ];
         let packing = CoordinatePacking::new(&[8, 8]).expect("6 bits fit in a packed coordinate");
-        let coordinates = [
-            [MemberIndex(1), MemberIndex(5)],
-            [MemberIndex(3), MemberIndex(5)],
-        ];
+        let coordinates = [[1, 5], [3, 5]];
         let packed_coordinates: Vec<u64> = coordinates
             .iter()
-            .map(|coordinate| packing.pack(coordinate.iter().map(|member| member.0)))
+            .map(|coordinate| packing.pack(coordinate.iter().copied()))
             .collect();
 
         let region = Region::of_packed(&axes, &packing, &packed_coordinates);

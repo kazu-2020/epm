@@ -1,14 +1,8 @@
-use dimension::Dimension;
-use measure::{Measure, MeasureDefinition};
+mod calculated;
+mod compile;
+mod dependency_order;
+mod workspace;
 
-pub struct Workspace {
-    pub dimensions: Vec<Dimension>,
-    pub inputs: Vec<Measure>,
-    pub formulas: Vec<Formula>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Formula {
-    pub result: MeasureDefinition,
-    pub text: String,
-}
+pub use crate::calculated::{CalculateError, Calculated, Edit, EditCheck, EditError, Edits};
+pub use crate::compile::{CompiledFormula, Formula, FormulaError, compile};
+pub use crate::workspace::{UncheckedWorkspace, Workspace, WorkspaceError};

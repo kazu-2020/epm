@@ -305,7 +305,7 @@ impl Handle {
         request_id: RequestId,
         edit: &Edit,
     ) -> Result<Sequence, SubmitError> {
-        let payload = edit.encode();
+        let payload = crate::edit::encode(edit);
         #[cfg(feature = "apply_before_commit")]
         let _ = self.commit_sender.send((
             self.engine_receiver.borrow().slot,
@@ -379,7 +379,7 @@ fn values(
         .iter()
         .map(|(measure, coordinate)| {
             engine
-                .measures
+                .measures()
                 .iter()
                 .find(|candidate| candidate.ulid() == *measure)
                 .ok_or(ReadError::NoMeasure(*measure))?

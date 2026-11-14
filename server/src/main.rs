@@ -9,6 +9,7 @@ use server::Settings;
 use server::http::Stopped;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
+use workspace::Workspace;
 
 // shortcut: the workspace definition is fixed in code because the log does not hold it, put it in the log when users define their own.
 const SIZE: Size = Size::TINY;
@@ -69,7 +70,7 @@ async fn main() -> ExitCode {
         let (engine, start) = server::restore(
             store.as_ref(),
             &arguments.workspace,
-            representative::generate(&SIZE, SEED),
+            Workspace::try_new(representative::generate(&SIZE, SEED)).expect("a valid workspace"),
         )
         .await
         .expect("valid formulas");

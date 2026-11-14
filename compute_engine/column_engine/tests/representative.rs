@@ -103,17 +103,8 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
         .collect();
     let mut measures: Vec<Measure> = workspace.inputs.clone();
     for formula in &workspace.formulas {
-        let parsed = formula::parse(&formula.text);
-        assert!(
-            parsed.errors.is_empty(),
-            "{}: {:?}",
-            formula.text,
-            parsed.errors
-        );
-        let resolved = formula::resolve(&parsed.expression, &definitions, &dimensions);
-        let checked = formula::check_axes(&resolved.expression, &formula.result.axes)
-            .checked
-            .expect("the representative formulas are checked");
+        let checked = workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", formula.text));
         let references: Vec<&Measure> = measures.iter().collect();
         let expected = evaluator::evaluate(&checked, &formula.result, &references, &dimensions)
             .expect("the evaluator evaluates the formula");

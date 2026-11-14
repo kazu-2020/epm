@@ -283,7 +283,7 @@ impl Default for Fixture {
             ),
             (
                 measure_definition(16, "桁落ち", &[DEPARTMENT, PERIOD]),
-                // Not stored in coordinate order: the rows are laid out by 部門 first, so adding them as stored rounds 1 away next to 1e16, while 期間 first cancels the two large values before 1.
+                // Not declared in packing order: adding the cells by 部門 first, as declared, rounds 1 away next to 1e16, while 期間 first cancels the two large values before 1.
                 &[(&[0, 0], 1e16), (&[0, 1], 1.0), (&[1, 0], -1e16)],
             ),
         ];
@@ -342,21 +342,28 @@ impl Fixture {
     }
 
     pub fn check(&self, source: &str, result: &str) -> CheckedExpression {
-        let check = formula::check_axes(&self.resolve(source), &self.definition(result).axes);
-        assert_eq!(check.errors, [], "{source}");
-        check.checked.expect("a formula without errors is checked")
+        let compiled = workspace::compile(
+            source,
+            self.definition(result),
+            &self.measure_definitions,
+            &self.dimensions.iter().collect::<Vec<_>>(),
+        );
+        compiled.unwrap_or_else(|error| panic!("{source}: {error:?}"))
     }
 }
 
 pub fn exact(cells: &[(Vec<MemberIndex>, f64)]) -> Vec<(Vec<u32>, String)> {
     // Not the f64 itself: 0.0 == -0.0, and the cases must tell them apart.
-    cells
+    let mut cells: Vec<(Vec<u32>, String)> = cells
         .iter()
         .map(|(coordinate, value)| {
             let members = coordinate.iter().map(|member| member.0).collect();
             (members, format!("{value:?}"))
         })
-        .collect()
+        .collect();
+    // Not the given order: a measure lists its cells in packing order, and the cases and the oracle list them by the declared axes.
+    cells.sort();
+    cells
 }
 
 pub fn expected(case: &Case) -> Vec<(Vec<u32>, String)> {

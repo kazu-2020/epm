@@ -13,3 +13,4 @@ evaluator = { path = "../evaluator" }
 formula = { path = "../formula" }
 measure = { path = "../measure" }
 ulid = "3.0.0"
+workspace = { path = "../workspace" }

@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use server::{Calculation, Engine, Settings};
 use tower::ServiceExt;
 use ulid::Ulid;
+use workspace::Workspace;
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
@@ -24,7 +25,10 @@ struct App {
 }
 
 fn app(settings: Settings) -> App {
-    let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
+    let engine = Engine::new(
+        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
+    )
+    .expect("valid formulas");
     let (coordinate, quantity) = engine
         .measures()
         .iter()

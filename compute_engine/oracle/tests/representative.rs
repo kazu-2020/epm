@@ -31,13 +31,8 @@ fn every_engine_computes_the_small_representative_model_bit_for_bit_alike() {
         .expect("the oracle loads the workspace");
     let mut measures: Vec<Measure> = workspace.inputs.clone();
     for formula in &workspace.formulas {
-        let parsed = formula::parse(&formula.text);
-        assert_eq!(parsed.errors, [], "{}", formula.text);
-        let resolved = formula::resolve(&parsed.expression, &definitions, &dimensions);
-        assert_eq!(resolved.errors, [], "{}", formula.text);
-        let check = formula::check_axes(&resolved.expression, &formula.result.axes);
-        assert_eq!(check.errors, [], "{}", formula.text);
-        let checked = check.checked.expect("a formula without errors is checked");
+        let checked = workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", formula.text));
         let references: Vec<&Measure> = measures.iter().collect();
         let evaluated = evaluator::evaluate(&checked, &formula.result, &references, &dimensions)
             .expect("the evaluator evaluates the formula");

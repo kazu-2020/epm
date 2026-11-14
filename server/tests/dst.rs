@@ -12,7 +12,6 @@ use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
 use dimension::{Dimension, MemberIndex};
-use formula::CheckedExpression;
 use futures_util::{FutureExt, StreamExt, TryStreamExt, stream};
 use measure::{Measure, MeasureDefinition};
 use object_store::memory::InMemory;
@@ -29,55 +28,32 @@ const CALCULATION: Duration = Duration::from_millis(250);
 
 struct Model {
     workspace: Workspace,
-    checked: Vec<(MeasureDefinition, CheckedExpression)>,
     engine: Engine,
 }
 
 impl Model {
     fn new() -> Model {
-        let workspace = representative::generate(&Size::TINY, 7);
-        let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
-        let definitions: Vec<MeasureDefinition> = workspace
-            .inputs
-            .iter()
-            .map(|input| input.definition().clone())
-            .chain(
-                workspace
-                    .formulas
-                    .iter()
-                    .map(|formula| formula.result.clone()),
-            )
-            .collect();
-        let checked = workspace
-            .formulas
-            .iter()
-            .map(|formula| {
-                let parsed = formula::parse(&formula.text);
-                let resolved = formula::resolve(&parsed.expression, &definitions, &dimensions);
-                let checked = formula::check_axes(&resolved.expression, &formula.result.axes)
-                    .checked
-                    .expect("the representative formulas are checked");
-                (formula.result.clone(), checked)
-            })
-            .collect();
-        Model {
-            workspace,
-            checked,
-            engine,
-        }
+        let workspace = Workspace::try_new(representative::generate(&Size::TINY, 7))
+            .expect("a valid workspace");
+        let engine = Engine::new(
+            Workspace::try_new(representative::generate(&Size::TINY, 7))
+                .expect("a valid workspace"),
+        )
+        .expect("valid formulas");
+        Model { workspace, engine }
     }
 
     fn dimensions(&self) -> Vec<&Dimension> {
-        self.workspace.dimensions.iter().collect()
+        self.workspace.dimensions().iter().collect()
     }
 
     fn fold(&self, log: &[Commit]) -> Option<Vec<Measure>> {
-        let inputs = &self.workspace.inputs;
+        let inputs = self.workspace.inputs();
         let mut cells: Vec<BTreeMap<Vec<MemberIndex>, f64>> =
             inputs.iter().map(|input| input.cells().collect()).collect();
         for commit in log {
-            let edit = Edit::decode(commit.payload.clone()).expect("the log holds cell edits");
+            let edit =
+                server::edit::decode(commit.payload.clone()).expect("the log holds cell edits");
             let input = inputs
                 .iter()
                 .position(|input| input.ulid() == edit.measure)?;
@@ -99,8 +75,9 @@ impl Model {
     fn recalculate_all(&self, inputs: Vec<Measure>) -> Vec<Measure> {
         let dimensions = self.dimensions();
         let mut measures = inputs;
-        for (result, expression) in &self.checked {
+        for formula in self.workspace.formulas() {
             let references: Vec<&Measure> = measures.iter().collect();
+            let (result, expression) = (formula.result(), formula.expression());
             let measure = column_engine::evaluate(expression, result, &references, &dimensions)
                 .expect("the formula evaluates");
             measures.push(measure);
@@ -138,7 +115,8 @@ impl common::Server for Owners {
         let handle = handle.map(Result::ok).shared();
         let restored = Arc::clone(&self.restored);
         let exit = async move {
-            let definition = representative::generate(&Size::TINY, 7);
+            let definition = Workspace::try_new(representative::generate(&Size::TINY, 7))
+                .expect("a valid workspace");
             let (engine, start) = server::restore(store.as_ref(), &workspace, definition)
                 .await
                 .map_err(|error| format!("{error:?}"))?;
@@ -173,7 +151,8 @@ impl common::Server for Owners {
             let handle = handle.clone();
             async move {
                 let handle = handle.await?;
-                let edit = Edit::decode(request.payload).expect("the simulation sends edits");
+                let edit =
+                    server::edit::decode(request.payload).expect("the simulation sends edits");
                 match handle.submit(request.request_id, &edit).await {
                     Ok(sequence) => Some(Ok(sequence)),
                     Err(SubmitError::Rejected(Rejection::Busy { .. })) => {
@@ -208,12 +187,11 @@ impl common::Server for Owners {
             1 => (input, input.axes.len() + 1),
             _ => (input, input.axes.len()),
         };
-        Edit {
+        server::edit::encode(&Edit {
             measure: measure.ulid,
             coordinate: vec![member; axes],
             value,
-        }
-        .encode()
+        })
     }
 }
 
@@ -222,15 +200,15 @@ fn simulate(model: &Model, seed: u64) -> Run {
     let owners = Owners {
         inputs: model
             .workspace
-            .inputs
+            .inputs()
             .iter()
             .map(|input| input.definition().clone())
             .collect(),
         results: model
             .workspace
-            .formulas
+            .formulas()
             .iter()
-            .map(|formula| formula.result.clone())
+            .map(|formula| formula.result().clone())
             .collect(),
         seed,
         restored: Arc::clone(&restored),
@@ -382,7 +360,7 @@ fn snapshots_match_log(model: &Model, run: &Run) -> common::Violations {
     let (segments, log) = common::replay(&run.outcome.store);
     let definitions: Vec<MeasureDefinition> = model
         .workspace
-        .inputs
+        .inputs()
         .iter()
         .map(|input| input.definition().clone())
         .collect();
@@ -593,9 +571,10 @@ fn final_values_agree_with_duckdb() {
         for (input, expected) in engine_inputs.iter().zip(&inputs) {
             assert_eq!(cells(input), cells(expected), "seed {seed}");
         }
-        for ((result, expression), measure) in model.checked.iter().zip(results) {
+        for (formula, measure) in model.workspace.formulas().iter().zip(results) {
+            let result = formula.result();
             let expected = oracle
-                .evaluate(expression, result.ulid)
+                .evaluate(formula.expression(), result.ulid)
                 .expect("DuckDB evaluates the formula");
             assert_eq!(
                 cells(measure),

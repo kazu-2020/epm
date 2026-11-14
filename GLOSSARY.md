@@ -68,7 +68,7 @@ _Avoid_: タイル、指標、メトリクス、モジュール、キューブ
 _Avoid_: キー、Natural Key
 
 **詰めた座標**:
-column engine が座標を u64 1つに詰めた形(packed coordinate)。各軸のメンバーの番号を、詰める順(packing order)に上位のビットから並べる。詰めた座標の大小は座標の順と同じになる(ADR 0004、ADR 0005)。
+column engine が座標を u64 1つに詰めた形(packed coordinate)。各軸のメンバーの番号を、詰める順(packing order)に上位のビットから並べる。詰めた座標の大小は座標の順と同じになる(ADR 0004、ADR 0005)。メジャーの宣言の軸の順には依存しない。
 _Avoid_: キー、セルのキー
 
 ## 明細

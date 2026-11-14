@@ -1,6 +1,7 @@
 mod axis_check;
 mod axis_error;
 mod checked_expression;
+mod evaluate_error;
 mod expression;
 mod lexer;
 mod parser;
@@ -14,6 +15,7 @@ pub use axis_error::{AxisError, AxisErrorKind};
 pub use checked_expression::{
     CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign, Term,
 };
+pub use evaluate_error::EvaluateError;
 pub use expression::{Axis, BinaryOperator, Expression, ExpressionKind, QuotedName};
 pub use parser::{MAXIMUM_DEPTH, Parsed, parse};
 pub use resolve::{Resolved, resolve};

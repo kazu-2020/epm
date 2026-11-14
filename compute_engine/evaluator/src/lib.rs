@@ -1,12 +1,10 @@
 mod cells;
-mod evaluate_error;
 
 use dimension::{Dimension, DimensionGlobalId};
-use formula::{CheckedAxis, CheckedExpression, CheckedNode};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError};
 use measure::{Measure, MeasureDefinition};
 
 use crate::cells::{ByAxis, Cells, find_dimension};
-pub use crate::evaluate_error::EvaluateError;
 
 pub fn evaluate(
     expression: &CheckedExpression,

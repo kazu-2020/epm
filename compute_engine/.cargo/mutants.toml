@@ -23,7 +23,7 @@ exclude_re = [
     "replace match guard searched\\(members\\) with (true|false) in (Columns::)?narrow",
     # Not tested: the arms are equivalent here. Equal packed coordinates take the arm before, and the axes of a packed coordinate never overlap, so | and ^ give the same packed coordinate.
     "replace < with <= in merge$",
-    "replace \\| with \\^ in CoordinatePacking::pack",
+    "replace \\| with \\^ in (CoordinatePacking::pack|Axes::pack_members)",
     # Not tested: these only read more cells than the region needs, and restrict at the end keeps the same cells.
     "replace Evaluator<[^>]*>::source_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",
     "replace Evaluator<[^>]*>::operand_region -> Result<Region, EvaluateError> with Ok\\(Default::default\\(\\)\\)",

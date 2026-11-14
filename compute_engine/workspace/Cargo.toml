@@ -4,5 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+column_engine = { path = "../column_engine" }
 dimension = { path = "../dimension" }
+formula = { path = "../formula" }
 measure = { path = "../measure" }
+
+[dev-dependencies]
+arrow-array = "60.1.0"
+datagen = { path = "../datagen" }
+ulid = "3.0.0"

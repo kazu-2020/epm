@@ -22,6 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, oneshot};
 use ulid::Ulid;
+use workspace::Workspace;
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 
@@ -105,7 +106,10 @@ struct Running {
 }
 
 async fn run(deadline: Duration) -> Running {
-    let engine = Engine::new(representative::generate(&Size::TINY, 7)).expect("valid formulas");
+    let engine = Engine::new(
+        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
+    )
+    .expect("valid formulas");
     let store = Arc::new(Gate::default());
     let (handle, owner) = server::start(
         engine,

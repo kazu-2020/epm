@@ -1,26 +1,24 @@
 mod apply;
-mod edit;
 mod owner;
 mod restore;
 
+pub mod edit;
 pub mod http;
 pub mod snapshot;
 
-use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence, Slot, Start};
 use dimension::Dimension;
-use evaluator::EvaluateError;
-use formula::{AxisError, CheckedExpression, ResolveError, SyntaxError};
-use measure::{Delta, Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
-use workspace::Workspace;
+use formula::EvaluateError;
+use measure::{Measure, MeasureError, MeasureGlobalId};
+use workspace::{CalculateError, Calculated, EditCheck, EditError, Edits, Workspace};
 
-pub use crate::edit::{DecodeError, Edit};
+pub use crate::edit::DecodeError;
 pub use crate::owner::{Calculation, Handle, Lag, ReadError, Settings, SubmitError, start};
 pub use crate::restore::restore;
+pub use workspace::Edit;
 
 #[derive(Debug, PartialEq)]
 pub enum Exit {
@@ -30,9 +28,7 @@ pub enum Exit {
 
 #[derive(Clone, Debug)]
 pub struct Engine {
-    dimensions: Arc<[Dimension]>,
-    measures: Vec<Measure>,
-    formulas: Arc<[(MeasureGlobalId, CheckedExpression)]>,
+    calculated: Calculated,
     definitions: Definitions,
     next: Sequence,
     slot: Slot,
@@ -40,27 +36,7 @@ pub struct Engine {
 
 #[derive(Clone, Debug)]
 pub struct Definitions {
-    inputs: BTreeMap<MeasureGlobalId, Delta>,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum FormulaError {
-    Syntax {
-        result: MeasureGlobalId,
-        errors: Vec<SyntaxError>,
-    },
-    Resolve {
-        result: MeasureGlobalId,
-        errors: Vec<ResolveError>,
-    },
-    Axes {
-        result: MeasureGlobalId,
-        errors: Vec<AxisError>,
-    },
-    Evaluate {
-        result: MeasureGlobalId,
-        error: EvaluateError,
-    },
+    inputs: EditCheck,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -96,66 +72,24 @@ pub enum EngineAlarm {
 }
 
 impl Engine {
-    pub fn new(workspace: Workspace) -> Result<Engine, FormulaError> {
+    pub fn new(workspace: Workspace) -> Result<Engine, CalculateError> {
         Engine::resume(workspace, &Start::default())
     }
 
-    pub fn resume(workspace: Workspace, start: &Start) -> Result<Engine, FormulaError> {
-        let Workspace {
-            dimensions,
-            inputs,
-            formulas,
-        } = workspace;
-        let references: Vec<&Dimension> = dimensions.iter().collect();
-        let definitions: Vec<MeasureDefinition> = inputs
-            .iter()
-            .map(|input| input.definition().clone())
-            .chain(formulas.iter().map(|formula| formula.result.clone()))
-            .collect();
-        let input_definitions = Definitions {
-            inputs: inputs
-                .iter()
-                .map(|input| (input.ulid(), input.delta()))
-                .collect(),
-        };
-        let mut measures = inputs;
-        let mut checked = Vec::with_capacity(formulas.len());
-        for formula in &formulas {
-            let result = formula.result.ulid;
-            let parsed = formula::parse(&formula.text);
-            if !parsed.errors.is_empty() {
-                let errors = parsed.errors;
-                return Err(FormulaError::Syntax { result, errors });
-            }
-            let resolved = formula::resolve(&parsed.expression, &definitions, &references);
-            if !resolved.errors.is_empty() {
-                let errors = resolved.errors;
-                return Err(FormulaError::Resolve { result, errors });
-            }
-            let axes = formula::check_axes(&resolved.expression, &formula.result.axes);
-            let Some(expression) = axes.checked else {
-                let errors = axes.errors;
-                return Err(FormulaError::Axes { result, errors });
-            };
-            let sources: Vec<&Measure> = measures.iter().collect();
-            let evaluated =
-                column_engine::evaluate(&expression, &formula.result, &sources, &references)
-                    .map_err(|error| FormulaError::Evaluate { result, error })?;
-            measures.push(evaluated);
-            checked.push((result, expression));
-        }
+    pub fn resume(workspace: Workspace, start: &Start) -> Result<Engine, CalculateError> {
+        let calculated = Calculated::new(workspace)?;
         Ok(Engine {
-            dimensions: dimensions.into(),
-            measures,
-            formulas: checked.into(),
-            definitions: input_definitions,
+            definitions: Definitions {
+                inputs: calculated.edit_check().clone(),
+            },
+            calculated,
             next: Sequence(u64::try_from(start.request_ids.len()).expect("a count fits in u64")),
             slot: start.slot,
         })
     }
 
     pub fn dimensions(&self) -> &[Dimension] {
-        &self.dimensions
+        self.calculated.dimensions()
     }
 
     pub fn definitions(&self) -> &Definitions {
@@ -167,7 +101,7 @@ impl Engine {
             return Ok(self.clone());
         };
         let mut next = self.next;
-        let mut deltas = BTreeMap::new();
+        let mut edits = Edits::default();
         for (_, commit) in commits {
             let sequence = commit.sequence;
             if sequence != next {
@@ -177,28 +111,19 @@ impl Engine {
                 });
             }
             self.definitions
-                .add(&commit.payload, &mut deltas)
+                .add(&commit.payload, &mut edits)
                 .map_err(|invalid| EngineAlarm::Invalid { sequence, invalid })?;
             next = sequence.next();
         }
-        let dimensions: Vec<&Dimension> = self.dimensions.iter().collect();
-        let formulas: Vec<(MeasureGlobalId, &CheckedExpression)> = self
-            .formulas
-            .iter()
-            .map(|(result, expression)| (*result, expression))
-            .collect();
-        let measures = column_engine::edit(&self.measures, deltas, &formulas, &dimensions)
+        let calculated = self
+            .calculated
+            .apply(edits)
             .map_err(|error| EngineAlarm::Failed {
                 sequences: first.sequence..=last.sequence,
                 error,
-            })?
-            .iter()
-            .map(Measure::fold_deltas)
-            .collect();
+            })?;
         Ok(Engine {
-            dimensions: Arc::clone(&self.dimensions),
-            measures,
-            formulas: Arc::clone(&self.formulas),
+            calculated,
             definitions: self.definitions.clone(),
             next,
             slot: *slot,
@@ -206,7 +131,7 @@ impl Engine {
     }
 
     pub fn measures(&self) -> &[Measure] {
-        &self.measures
+        self.calculated.measures()
     }
 
     pub fn recalculated(&self) -> Option<Sequence> {
@@ -225,35 +150,25 @@ impl Engine {
                     request_ids[..self.next.index()].to_vec()
                 },
             },
-            inputs: self.measures[..self.definitions.inputs.len()].to_vec(),
+            inputs: self.calculated.inputs().to_vec(),
         }
     }
 }
 
 impl Definitions {
     pub fn is_input(&self, measure: MeasureGlobalId) -> bool {
-        self.inputs.contains_key(&measure)
+        self.inputs.is_input(measure)
     }
 
     pub fn check(&self, payload: &Bytes) -> Result<(), Invalid> {
-        self.add(payload, &mut BTreeMap::new())
+        self.add(payload, &mut Edits::default())
     }
 
-    fn add(
-        &self,
-        payload: &Bytes,
-        deltas: &mut BTreeMap<MeasureGlobalId, Delta>,
-    ) -> Result<(), Invalid> {
-        let edit = Edit::decode(payload.clone()).map_err(Invalid::Undecodable)?;
-        let empty = self
-            .inputs
-            .get(&edit.measure)
-            .ok_or(Invalid::NotAnInput(edit.measure))?;
-        let delta = deltas.entry(edit.measure).or_insert_with(|| empty.clone());
-        match edit.value {
-            Some(value) => delta.set(&edit.coordinate, value),
-            None => delta.delete(&edit.coordinate),
-        }
-        .map_err(Invalid::Coordinate)
+    fn add(&self, payload: &Bytes, edits: &mut Edits) -> Result<(), Invalid> {
+        let edit = edit::decode(payload.clone()).map_err(Invalid::Undecodable)?;
+        self.inputs.add(&edit, edits).map_err(|error| match error {
+            EditError::NotAnInput(measure) => Invalid::NotAnInput(measure),
+            EditError::Coordinate(error) => Invalid::Coordinate(error),
+        })
     }
 }
