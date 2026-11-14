@@ -2,7 +2,7 @@
 
 変更ログの S3 への書き方が、Assignee の交代、クラッシュ、応答の消失、再送が重なっても壊れないかを確かめるモデル。変更ログは、`<ws>/log/<Slot>` に Slot の順に並ぶセグメントの列である。Assignee は次の Slot に If-None-Match で PUT し、200 なら ACK する。
 
-範囲は「ログとフェンシング」だけにした。スナップショット、GC、複数のワークスペースは入れていない。
+`seqlog.qnt` の範囲は「ログとフェンシング」だけにした。スナップショットと GC は入れていない。`placement.qnt` は、配置表、App server、読み取りを加えたモデルで、ほかのワークスペースの Assignee がアドレスを再利用する場合も含む。
 
 ## ファイル
 
@@ -28,7 +28,16 @@ storage/quint/check.sh          # 1モジュールあたり5万回のランダ�
 storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少ないと変異が反例に届かず落ちることがあるので、そのときは既定の回数で実行し直す
 ```
 
-終了コードが 1 なら、次のどれかが起きた。設計どおりのモデル(`seqlog_designed`)で性質が破れた。到達するはずの状態に届かなかった。守りを外したモデルで、`check.sh` の `breaks` に書いた性質が破れなかった、または `holds` と `log_safe_without_guard` の性質が破れた。反例の手順は `quint run seqlog.qnt --main seqlog_designed --invariant <性質> --mbt` で確認する。`mbt::actionTaken` に各ステップの操作が出る。
+終了コードが 1 なら、次のどれかが起きた。設計どおりのモデル(`seqlog_designed`)で性質が破れた。到達するはずの状態に届かなかった。守りを外したモデルで、`check.sh` の `breaks` に書いた性質が破れなかった、または `holds` と `log_safe_without_guard` の性質が破れた。
+
+placement の失敗は次の4種類である。
+
+- 設計どおりのモデル(`placement_designed`)か、PostgreSQL の切り替えを含むモデル(`placement_failover`)で性質が破れた。
+- `placement_designed` の witness が届かなかった。
+- 固定の手順(`quint test`)が失敗した。
+- `placement_breaks` の性質が破れなかった。
+
+反例の手順は `quint run seqlog.qnt --main seqlog_designed --invariant <性質> --mbt` で確認する。placement では、`--init placementInit --step placementStep` を付けて `placement.qnt` を実行する。`mbt::actionTaken` に各ステップの操作が出る。
 
 モデルが前提にする条件付き書き込みの応答は、RustFS で次のように実測する。
 
@@ -42,7 +51,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 配置表が前提にする条件付きの UPDATE は、PostgreSQL と PgBouncer で次のように実測する。
 
 ```sh
-docker compose -f storage/postgres/compose.yaml up -d
+docker compose -f storage/postgres/compose.yaml up -d --wait
 uv run --with 'psycopg[binary]' storage/postgres/epoch_race.py
 uv run --with 'psycopg[binary]' storage/postgres/claim_rules.py
 ```
@@ -59,10 +68,16 @@ Assignee の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-
 | `segmentsNeverChange` | 一度書いた Slot の中身は変わらない。同じ中身での上書きはログを変えないので、`refinesChangeLog` とは別に見る |
 | `staleEpochNeverCommits` | Slot の順にエポックが減らない。古いエポックの Assignee は、新しいエポックのあとに確定できない |
 | `slotsContiguous` | 最大の Slot より下に穴がない |
-| `newestAssigneeSeesAcknowledged` | いちばん新しいエポックを持つ受理中の Assignee は、ACK 済みのコミットをすべて見ている。縛るのはこの Assignee だけで、交代を知らずに受理を続ける古い Assignee は縛らない。読み取りの操作もモデルにない |
+| `newestAssigneeSeesAcknowledged` | いちばん新しいエポックを持つ受理中の Assignee は、ACK 済みのコミットをすべて見ている。縛るのはこの Assignee だけで、交代を知らずに受理を続ける古い Assignee は縛らない。`seqlog.qnt` に読み取りの操作はなく、読み取りは `placement.qnt` の `readSeesAcknowledgedAtLookup` が検査する |
 | `oneContentPerSlotPerEpoch` | 1つのエポックは1つの Slot に1つの中身しか書かない |
 | `dataWriteNeverSeesOlderEpoch` | データの書き込みが 412 のあとに自分より古いエポックを見ることはない |
+| `epochStartsOneProcess` | `placement.qnt`。1個のエポックで起動するプロセスは高々1個である |
+| `epochNeverDecreases` | `placement.qnt`。配置表のエポックは減少しない |
+| `readSeesAcknowledgedAtLookup` | `placement.qnt`。読み取りの応答は、App server が配置表を参照した時点で ACK 済みのコミットをすべて含む |
+| `neverReadsOtherWorkspace` | `placement.qnt`。要求は、ほかのワークスペースの Assignee から応答を受領しない |
 | `viewIsLogPrefix` | いちばん新しいエポックを持つ受理中の Assignee の `view`(Rust の `Effect::Committed` で渡した列)は、ログの先頭部分に一致する。ACK 済みの集合では見えない、順序の入れ替わりも反例になる |
+
+`placement.qnt` の `log` で始まる性質(`logRefinesChangeLog` など)は、上の同名の性質を配置のモデルで検査する。
 
 `witness` で始まる4つは、到達するはずの状態に本当に届くかの確認。その状態は、2件の ACK、交代後の Assignee が書いた Slot、自分の再送が先に通ったための 412、古い Assignee の停止である。届かないと、上の性質は何も調べずに通ってしまう。
 
@@ -89,7 +104,7 @@ Assignee の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-
 ## 入れていないもの
 
 - スナップショット、GC、再計算済み番号、Request ID の窓。
-- 複数のワークスペース、テナントの混入。キーの命名、ワークスペースごとのデータ鍵、IAM で守る。
+- 複数のワークスペースの変更ログ、テナントの混入。キーの命名、ワークスペースごとのデータ鍵、IAM で守る。`placement.qnt` が扱うのは、アドレスの再利用でほかのワークスペースの Assignee へ要求が届く場合だけである。
 - 活性(いつか確定する、交代後にいつか書ける)。ランダムシミュレーションは活性を検査しない。
 - グループコミットにまとめる件数、ハッシュの鎖、Event ID、3分の打ち切り。
 
