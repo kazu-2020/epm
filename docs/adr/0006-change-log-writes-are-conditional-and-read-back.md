@@ -22,7 +22,7 @@
 - If-None-Match を外すと、遅れて届いた古い PUT が確定済みの Slot を上書きする(`refinesChangeLog`、`segmentsNeverChange`)。
 - Assignee が手元の集合だけで重複を排除すると、交代後に同じ Request ID が2回入る。PUT 中の Request ID を集合に入れないと、flush の後に同じ Request ID が次の Slot へ再度入る(どちらも `refinesChangeLog`)。
 - フェンスを外してもログの整合性は失われない。それでも必要な理由は次のとおり。フェンスがないと、新しい Assignee の受理開始後も古い Assignee がコミットと ACK を続ける。新しい Assignee はそのコミットを見ないまま読み込みに応じる(`newestAssigneeSeesAcknowledged`)。
-- フェンスの識別子を比較しないと、同一のエポックのプロセス2個が、相手のフェンスを「自分の書き込み」と判定する。双方が受理を開始し、一方は他方のコミットを保持しない状態で読み取りに応答する。データの書き込みでも、相手のセグメントを「自分の書き込み」と判定して ACK する。根拠は `placement.qnt` の固定の手順である(`sameEpochAcknowledgesLostCommitTest` ほか)。
+- フェンスの識別子を比較しないと、同一のエポックのプロセス2個が、相手のフェンスを「自分の書き込み」と判定する。双方が受理を開始し、一方は他方のコミットを保持しない状態で読み取りに応答する。データの書き込みでも、相手のセグメントを「自分の書き込み」と判定して ACK する。根拠は `placement_mutations.qnt` の固定の手順である(`sameEpochAcknowledgesLostCommitTest` ほか)。
 - 末尾のエポックの検査を外すと、古い Assignee が新しいエポックのあとに確定できる(`staleEpochNeverCommits`)。
 - PUT を同時に2つ送ると、Slot N+1 が N より先に入る。すると N が空いたまま N+1 の batch を ACK する(`refinesChangeLog`、`slotsContiguous`)。
 - 読み込み直すときに同じエポックを使うと、前の PUT が遅れて届いたとき、自分のエポックの Slot に知らないコミットが入る。新しいエポックを取得すれば、その Slot は古いエポックとして扱われ、中身を view へ追加する経路に入る。
