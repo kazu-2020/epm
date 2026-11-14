@@ -5,3 +5,11 @@ rules:
     specs:
       - from: 新しい版
         to: 新しいバージョン
+  - expected: Packed Coordinate
+    pattern: 詰めた座標
+  - expected: Packing Order
+    pattern: 詰める順
+  - expected: 受理
+    pattern: 受け付け
+  - expected: リマップ
+    pattern: 付け替え
