@@ -132,6 +132,20 @@ fn reading_a_member_outside_the_dimension_is_an_error_like_writing_it() {
 }
 
 #[test]
+fn coordinate_errors_tell_the_client_what_is_wrong() {
+    let measure = sales();
+
+    assert_eq!(
+        measure.get(&[MemberIndex(0)]).unwrap_err().to_string(),
+        "the coordinate needs 2 members, but it has 1"
+    );
+    assert_eq!(
+        measure.get(&coordinate(0, 2)).unwrap_err().to_string(),
+        format!("member 2 is not in dimension {}", DEPARTMENT.0)
+    );
+}
+
+#[test]
 fn measure_without_cells_is_valid() {
     let measure = try_sales(&[]).unwrap();
     assert_eq!(
