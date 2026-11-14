@@ -47,10 +47,10 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 | `segmentsNeverChange` | 一度書いた Slot の中身は変わらない。同じ中身での上書きはログを変えないので、`refinesChangeLog` とは別に見る |
 | `staleEpochNeverCommits` | Slot の順にエポックが減らない。古いエポックの担当は、新しいエポックのあとに確定できない |
 | `slotsContiguous` | 最大の Slot より下に穴がない |
-| `newestOwnerSeesAcknowledged` | いちばん新しいエポックを持つ受け付け中の担当は、ACK 済みのコミットをすべて見ている。縛るのはこの担当だけで、交代を知らずに受け付けを続ける古い担当は縛らない。読み取りの操作もモデルにない |
+| `newestOwnerSeesAcknowledged` | いちばん新しいエポックを持つ受理中の担当は、ACK 済みのコミットをすべて見ている。縛るのはこの担当だけで、交代を知らずに受理を続ける古い担当は縛らない。読み取りの操作もモデルにない |
 | `oneContentPerSlotPerEpoch` | 1つのエポックは1つの Slot に1つの中身しか書かない |
 | `dataWriteNeverSeesOlderEpoch` | データの書き込みが 412 のあとに自分より古いエポックを見ることはない |
-| `viewIsLogPrefix` | いちばん新しいエポックを持つ受け付け中の担当の `view`(Rust の `Effect::Committed` で渡した列)は、ログの先頭部分に一致する。ACK 済みの集合では見えない、順序の入れ替わりも反例になる |
+| `viewIsLogPrefix` | いちばん新しいエポックを持つ受理中の担当の `view`(Rust の `Effect::Committed` で渡した列)は、ログの先頭部分に一致する。ACK 済みの集合では見えない、順序の入れ替わりも反例になる |
 
 `witness` で始まる4つは、到達するはずの状態(2件の ACK、担当交代後の担当が書いた Slot、自分の再送が先に通ったための 412、古い担当の停止)に本当に届くかの確認。届かないと、上の性質は何も調べずに通ってしまう。
 
