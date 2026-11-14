@@ -1,9 +1,14 @@
 module placement_design {
   type PlacementGuards = {
     conditionalClaim: bool, startOnce: bool, workspaceCheck: bool, epochCheck: bool, lookupPerRequest: bool, routedWrites: bool,
+    recordChecksNode: bool, rejectsDuplicateStart: bool,
+    // Not guards: the size of the scenario. One node with every address shows what a node does with two starts of one epoch.
+    oneNode: bool, maxFailovers: int,
   }
   pure val allPlacementGuards: PlacementGuards = {
     conditionalClaim: true, startOnce: true, workspaceCheck: true, epochCheck: true, lookupPerRequest: true, routedWrites: true,
+    recordChecksNode: true, rejectsDuplicateStart: true,
+    oneNode: false, maxFailovers: 0,
   }
 }
 
@@ -18,7 +23,9 @@ module placement {
 
   pure val Apps = Set("X", "Y")
 
-  type Start = { epoch: int, by: str }
+  type Start = { epoch: int, by: str, node: str }
+  type Replica = { epoch: int, node: str, serving: Route }
+  type Row = { node: str, replica: Replica, failovers: int }
   type Route = { server: str, epoch: int }
   type RoutedWrite = { server: str, epoch: int, request: str }
   type Read = { server: str, epoch: int, mustSee: Set[str] }
@@ -35,10 +42,14 @@ module placement {
   var served: Served
   var startLost: int
   var previousGrantedEpoch: int
+  var row: Row
+
+  def nodeOf(server: str): str = if (placementGuards.oneNode) "n" else server
+  def isRunning(server: str): bool = servers.get(server).phase != Down and servers.get(server).phase != Stopped
 
   action keepPlacement = all {
     serving' = serving, writes' = writes, seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
-    route' = route, reads' = reads, served' = served, startLost' = startLost,
+    route' = route, reads' = reads, served' = served, startLost' = startLost, row' = row,
   }
 
   action keepLog = all { store' = store, servers' = servers, grantedEpoch' = grantedEpoch, clients' = clients }
@@ -48,28 +59,54 @@ module placement {
     serving' = { server: "", epoch: 0 }, writes' = Set(), seen' = Apps.mapBy(_ => 0), starts' = Set(), spawned' = List(), otherWorkspace' = Set(),
     route' = { server: "", epoch: 0 }, reads' = Set(),
     served' = { epoch: 0, view: Set(), mustSee: Set(), otherWorkspace: false }, startLost' = 0, previousGrantedEpoch' = 0,
+    row' = { node: "", replica: { epoch: 0, node: "", serving: { server: "", epoch: 0 } }, failovers: 0 },
   }
 
   action readRow(app: str): bool = all {
     seen' = seen.set(app, grantedEpoch),
     keepLog,
     serving' = serving, writes' = writes, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
-    route' = route, reads' = reads, served' = served, startLost' = startLost,
+    route' = route, reads' = reads, served' = served, startLost' = startLost, row' = row,
   }
 
   // An app server can claim at any time: a failed connection, a false suspicion and a start that takes too long look the same.
-  action claim(app: str): bool = {
+  action claimOn(app: str, node: str): bool = {
     val epoch = seen.get(app) + 1
     all {
       epoch <= MaxEpoch,
       placementGuards.conditionalClaim implies seen.get(app) == grantedEpoch,
       grantedEpoch' = epoch,
       serving' = serving, writes' = writes,
-      starts' = starts.union(Set({ epoch: epoch, by: app })),
+      starts' = starts.union(Set({ epoch: epoch, by: app, node: node })),
       store' = store, servers' = servers, clients' = clients,
       seen' = seen, spawned' = spawned, otherWorkspace' = otherWorkspace,
-      route' = route, reads' = reads, served' = served, startLost' = startLost,
+      route' = route, reads' = reads, served' = served, startLost' = startLost, row' = { ...row, node: node },
     }
+  }
+
+  action claim(app: str): bool = {
+    nondet server = Servers.oneOf()
+    claimOn(app, nodeOf(server))
+  }
+
+  // The replica follows the primary with a lag, so a failover returns the row to an earlier state.
+  action replicate: bool = all {
+    placementGuards.maxFailovers > 0,
+    row' = { ...row, replica: { epoch: grantedEpoch, node: row.node, serving: serving } },
+    keepLog,
+    serving' = serving, writes' = writes, seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
+    route' = route, reads' = reads, served' = served, startLost' = startLost,
+  }
+
+  action failover: bool = all {
+    row.failovers < placementGuards.maxFailovers,
+    row.replica != { epoch: grantedEpoch, node: row.node, serving: serving },
+    grantedEpoch' = row.replica.epoch,
+    serving' = row.replica.serving,
+    row' = { ...row, node: row.replica.node, failovers: row.failovers + 1 },
+    store' = store, servers' = servers, clients' = clients,
+    writes' = writes, seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
+    route' = route, reads' = reads, served' = served, startLost' = startLost,
   }
 
   action loseStart(start: Start): bool = all {
@@ -78,28 +115,32 @@ module placement {
     startLost' = if (start.epoch > startLost) start.epoch else startLost,
     keepLog,
     serving' = serving, writes' = writes, seen' = seen, spawned' = spawned, otherWorkspace' = otherWorkspace,
-    route' = route, reads' = reads, served' = served,
+    route' = route, reads' = reads, served' = served, row' = row,
   }
 
   action spawn(start: Start, server: str): bool = all {
     starts.contains(start),
     servers.get(server).phase == Down,
     not(otherWorkspace.contains(server)),
+    nodeOf(server) == start.node,
+    placementGuards.rejectsDuplicateStart implies not(Servers.exists(other =>
+      nodeOf(other) == start.node and isRunning(other) and servers.get(other).epoch == start.epoch)),
     servers' = servers.set(server, loading(start.epoch, spawned.length() + 1)),
     starts' = if (placementGuards.startOnce) starts.exclude(Set(start)) else starts,
     spawned' = spawned.append(start.epoch),
     store' = store, grantedEpoch' = grantedEpoch, clients' = clients,
     serving' = serving, writes' = writes, seen' = seen, otherWorkspace' = otherWorkspace,
-    route' = route, reads' = reads, served' = served, startLost' = startLost,
+    route' = route, reads' = reads, served' = served, startLost' = startLost, row' = row,
   }
 
   action record(server: str): bool = all {
     servers.get(server).phase == Ready,
     servers.get(server).epoch == grantedEpoch,
+    placementGuards.recordChecksNode implies nodeOf(server) == row.node,
     serving' = { server: server, epoch: grantedEpoch }, writes' = writes,
     keepLog,
     seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
-    route' = route, reads' = reads, served' = served, startLost' = startLost,
+    route' = route, reads' = reads, served' = served, startLost' = startLost, row' = row,
   }
 
   action takeAddress(server: str): bool = all {
@@ -107,7 +148,7 @@ module placement {
     otherWorkspace' = otherWorkspace.union(Set(server)),
     keepLog,
     serving' = serving, writes' = writes, seen' = seen, starts' = starts, spawned' = spawned,
-    route' = route, reads' = reads, served' = served, startLost' = startLost,
+    route' = route, reads' = reads, served' = served, startLost' = startLost, row' = row,
   }
 
   action leaveAddress(server: str): bool = all {
@@ -115,7 +156,7 @@ module placement {
     otherWorkspace' = otherWorkspace.exclude(Set(server)),
     keepLog,
     serving' = serving, writes' = writes, seen' = seen, starts' = starts, spawned' = spawned,
-    route' = route, reads' = reads, served' = served, startLost' = startLost,
+    route' = route, reads' = reads, served' = served, startLost' = startLost, row' = row,
   }
 
   action lookupWith(chosen: Route): bool = all {
@@ -125,7 +166,7 @@ module placement {
     route' = chosen,
     keepLog,
     serving' = serving, writes' = writes, seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
-    served' = served, startLost' = startLost,
+    served' = served, startLost' = startLost, row' = row,
   }
 
   action lookup: bool = {
@@ -148,7 +189,7 @@ module placement {
         else served,
       keepLog,
       serving' = serving, writes' = writes, seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
-      route' = route, startLost' = startLost,
+      route' = route, startLost' = startLost, row' = row,
     }
   }
 
@@ -166,7 +207,7 @@ module placement {
     writes' = writes.union(Set({ server: chosen.server, epoch: chosen.epoch, request: request })),
     keepLog,
     serving' = serving, seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
-    route' = route, reads' = reads, served' = served, startLost' = startLost,
+    route' = route, reads' = reads, served' = served, startLost' = startLost, row' = row,
   }
 
   action routeWrite(request: str): bool = {
@@ -184,7 +225,7 @@ module placement {
       writes' = writes.exclude(Set(write)),
       if (accepted and self.phase != Down) send(write.server, write.request) else keepLog,
       serving' = serving, seen' = seen, starts' = starts, spawned' = spawned, otherWorkspace' = otherWorkspace,
-      route' = route, reads' = reads, served' = served, startLost' = startLost,
+      route' = route, reads' = reads, served' = served, startLost' = startLost, row' = row,
     }
   }
 
@@ -204,6 +245,8 @@ module placement {
       nondet server = Servers.oneOf() any { record(server), takeAddress(server), leaveAddress(server) },
       lookup,
       nondet read = reads.oneOf() serve(read),
+      replicate,
+      failover,
     },
   }
 
@@ -242,7 +285,9 @@ module placement {
     placementGhost,
     any {
       all { kind == "readRow", readRow(app) },
-      all { kind == "claim", claim(app) },
+      all { kind == "claim", claimOn(app, nodeOf(server)) },
+      all { kind == "replicate", replicate },
+      all { kind == "failover", failover },
       all { kind == "spawn", nondet start = starts.oneOf() spawn(start, server) },
       all { kind == "record", record(server) },
     },
@@ -256,7 +301,7 @@ module placement {
   def isStopped(server: str): bool = servers.get(server).phase == Stopped
 
   run started(app: str, server: str): bool =
-    table("readRow", app, "").then(table("claim", app, "")).then(table("spawn", "", server)).then(fenced(server)).then(table("record", "", server))
+    table("readRow", app, "").then(table("claim", app, server)).then(table("spawn", "", server)).then(fenced(server)).then(table("record", "", server))
 
   run fenced(server: str): bool =
     onLog(server, "load", "").then(onLog(server, "apply", "")).then(onLog(server, "reply", ""))
@@ -290,7 +335,7 @@ module placement {
   run warmStarted =
     placementInit
       .then(started("X", "A")).then(committed("A", "r1"))
-      .then(table("readRow", "Y", "")).then(table("claim", "Y", "")).then(table("spawn", "", "B")).then(fenced("B"))
+      .then(table("readRow", "Y", "")).then(table("claim", "Y", "B")).then(table("spawn", "", "B")).then(fenced("B"))
       .expect(isReady("A") and isReady("B") and serving == { server: "A", epoch: 1 })
 
   run warmHandoverTest =
@@ -320,11 +365,11 @@ module placement_blind_claim {
 module placement_start_resent {
   import placement_design.*
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, startOnce: false }, logGuards = allGuards).*
+  import placement(placementGuards = { ...allPlacementGuards, startOnce: false, rejectsDuplicateStart: false, oneNode: true }, logGuards = allGuards).*
 
   run sameEpochOtherProcessStopsTest =
     placementInit
-      .then(table("readRow", "X", "")).then(table("claim", "X", ""))
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A"))
       .then(table("spawn", "", "A")).then(table("spawn", "", "B"))
       .then(onLog("A", "load", "")).then(onLog("B", "load", ""))
       .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
@@ -338,11 +383,11 @@ module placement_start_resent {
 module placement_start_resent_no_process_check {
   import placement_design.*
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, startOnce: false }, logGuards = { ...allGuards, processCheck: false }).*
+  import placement(placementGuards = { ...allPlacementGuards, startOnce: false, rejectsDuplicateStart: false, oneNode: true }, logGuards = { ...allGuards, processCheck: false }).*
 
   run sameEpochAcknowledgesLostCommitTest =
     placementInit
-      .then(table("readRow", "X", "")).then(table("claim", "X", ""))
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A"))
       .then(table("spawn", "", "A")).then(table("spawn", "", "B"))
       .then(onLog("A", "load", "")).then(onLog("B", "load", ""))
       .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
@@ -373,7 +418,7 @@ module placement_no_epoch_check {
       .then(routes({ server: "A", epoch: 1 }, "r1"))
       .then(onLog("A", "stop", ""))
       .then(started("Y", "B"))
-      .then(table("readRow", "X", "")).then(table("claim", "X", "")).then(table("spawn", "", "A")).then(fenced("A"))
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A")).then(table("spawn", "", "A")).then(fenced("A"))
       .then(delivers).then(onLog("A", "receive", "r1")).then(onLog("A", "flush", "")).then(onLog("A", "apply", "")).then(onLog("A", "reply", ""))
       .expect(acknowledged == Set("r1") and isReady("B"))
       .then(looksUp({ server: "B", epoch: 2 })).then(servedOne)
@@ -404,4 +449,96 @@ module placement_unrouted_write {
       .then(onLog("B", "flush", "")).then(onLog("B", "apply", "")).then(onLog("B", "reply", ""))
       .then(looksUp({ server: "A", epoch: 1 })).then(servedOne)
       .expect(served.epoch == 1 and served.mustSee == Set("r1", "r2") and not(readSeesAcknowledgedAtLookup))
+}
+
+// The claim of epoch 1 is lost in a failover, so epoch 1 is claimed two times.
+module placement_failover {
+  import placement_design.*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, maxFailovers: 2 }, logGuards = allGuards).*
+
+  run reclaimedEpochOtherProcessStopsTest =
+    placementInit
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A")).then(table("spawn", "", "A"))
+      .then(table("failover", "", ""))
+      .then(table("readRow", "Y", "")).then(table("claim", "Y", "B")).then(table("spawn", "", "B"))
+      .then(onLog("A", "load", "")).then(onLog("B", "load", ""))
+      .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
+      .then(onLog("A", "reply", "")).then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
+      .expect(isReady("A") and isStopped("B"))
+      .then(table("failover", "", ""))
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A"))
+      .then(table("record", "", "A")).then(committed("A", "r1"))
+      .then(looksUp(serving)).then(servedOne)
+      .expect(served == { epoch: 1, view: Set("r1"), mustSee: Set("r1"), otherWorkspace: false } and logRefinesChangeLog)
+
+  // No guard of this design stops this read: the fence is in the store, and the row no longer shows the later epoch.
+  run failoverReturnsToFencedAssigneeTest =
+    placementInit
+      .then(started("X", "A")).then(table("replicate", "", ""))
+      .then(started("Y", "B")).then(committed("B", "r1"))
+      .then(table("failover", "", ""))
+      .expect(serving == { server: "A", epoch: 1 } and isReady("A"))
+      .then(looksUp(serving)).then(servedOne)
+      .expect(served.epoch == 1 and served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
+}
+
+module placement_failover_no_process_check {
+  import placement_design.*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, maxFailovers: 2 }, logGuards = { ...allGuards, processCheck: false }).*
+
+  run secondFailoverRecordsStaleProcessTest =
+    placementInit
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A")).then(table("spawn", "", "A"))
+      .then(table("failover", "", ""))
+      .then(table("readRow", "Y", "")).then(table("claim", "Y", "B")).then(table("spawn", "", "B"))
+      .then(onLog("A", "load", "")).then(onLog("B", "load", ""))
+      .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
+      .then(onLog("A", "reply", "")).then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
+      .expect(isReady("A") and isReady("B"))
+      .then(table("record", "", "B")).then(committed("B", "r1"))
+      .then(table("failover", "", ""))
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A"))
+      .then(table("record", "", "A"))
+      .then(looksUp(serving)).then(servedOne)
+      .expect(served.epoch == 1 and served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
+}
+
+module placement_failover_no_node_check {
+  import placement_design.*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, recordChecksNode: false, maxFailovers: 1 }, logGuards = { ...allGuards, processCheck: false }).*
+
+  run lateRecordMissesCommitTest =
+    placementInit
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A")).then(table("spawn", "", "A"))
+      .then(table("failover", "", ""))
+      .then(table("readRow", "Y", "")).then(table("claim", "Y", "B")).then(table("spawn", "", "B"))
+      .then(onLog("A", "load", "")).then(onLog("B", "load", ""))
+      .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
+      .then(onLog("A", "reply", "")).then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
+      .then(table("record", "", "B")).then(committed("B", "r1"))
+      .then(table("record", "", "A"))
+      .then(looksUp(serving)).then(servedOne)
+      .expect(served.epoch == 1 and served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
+}
+
+module placement_failover_duplicate_start {
+  import placement_design.*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, rejectsDuplicateStart: false, oneNode: true, maxFailovers: 1 }, logGuards = { ...allGuards, processCheck: false }).*
+
+  run duplicateStartRecordsStaleProcessTest =
+    placementInit
+      .then(table("readRow", "X", "")).then(table("claim", "X", "A")).then(table("spawn", "", "A"))
+      .then(table("failover", "", ""))
+      .then(table("readRow", "Y", "")).then(table("claim", "Y", "B")).then(table("spawn", "", "B"))
+      .then(onLog("A", "load", "")).then(onLog("B", "load", ""))
+      .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
+      .then(onLog("A", "reply", "")).then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
+      .then(table("record", "", "B")).then(committed("B", "r1"))
+      .then(table("record", "", "A"))
+      .then(looksUp(serving)).then(servedOne)
+      .expect(served.epoch == 1 and served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
 }
