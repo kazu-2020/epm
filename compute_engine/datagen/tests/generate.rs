@@ -95,7 +95,7 @@ fn a_few_members_hold_most_cells() {
     let members = workspace
         .dimensions
         .iter()
-        .find(|dimension| dimension.ulid() == input.definition().axes[0])
+        .find(|dimension| dimension.global_id() == input.definition().axes[0])
         .expect("the axis is a generated dimension")
         .len() as usize;
     let mut cells_per_member: HashMap<u32, usize> = HashMap::new();
@@ -131,7 +131,7 @@ fn the_representative_model_declares_its_axes_in_packing_order() {
         workspace
             .dimensions
             .iter()
-            .find(|dimension| dimension.ulid() == axis)
+            .find(|dimension| dimension.global_id() == axis)
             .expect("every axis is a dimension")
             .packing_order()
     };

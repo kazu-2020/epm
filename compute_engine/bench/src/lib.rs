@@ -17,10 +17,10 @@ const NAME_KEY: &str = "name";
 pub fn write_measure(directory: &Path, measure: &Measure) -> std::io::Result<()> {
     let definition = measure.definition();
     let schema = Arc::new(definition.schema().with_metadata(HashMap::from([
-        (ULID_KEY.to_string(), definition.ulid.0.to_string()),
+        (ULID_KEY.to_string(), definition.global_id.0.to_string()),
         (NAME_KEY.to_string(), definition.name.clone()),
     ])));
-    let file = File::create(directory.join(format!("{}.arrow", definition.ulid.0)))?;
+    let file = File::create(directory.join(format!("{}.arrow", definition.global_id.0)))?;
     let mut writer = FileWriter::try_new(file, &schema).map_err(std::io::Error::other)?;
     let batch = measure
         .to_record_batch()
@@ -48,7 +48,7 @@ pub fn read_measures(directory: &Path, dimensions: &[&Dimension]) -> std::io::Re
             let metadata = schema.metadata();
             let parse = |text: &str| Ulid::from_string(text).map_err(std::io::Error::other);
             let definition = MeasureDefinition {
-                ulid: MeasureGlobalId(parse(&metadata[ULID_KEY])?),
+                global_id: MeasureGlobalId(parse(&metadata[ULID_KEY])?),
                 name: metadata[NAME_KEY].clone(),
                 axes: schema.fields()[..schema.fields().len() - 1]
                     .iter()

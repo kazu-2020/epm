@@ -34,7 +34,7 @@ pub enum DimensionKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttributeDefinition {
-    pub ulid: AttributeGlobalId,
+    pub global_id: AttributeGlobalId,
     pub name: String,
     pub kind: AttributeKind,
 }
@@ -47,7 +47,7 @@ pub enum AttributeKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DimensionDefinition {
-    ulid: DimensionGlobalId,
+    global_id: DimensionGlobalId,
     name: String,
     kind: DimensionKind,
     attributes: Vec<AttributeDefinition>,
@@ -57,7 +57,7 @@ pub struct DimensionDefinition {
 #[derive(Debug, PartialEq)]
 pub enum DefinitionError {
     DuplicateAttributeName(String),
-    DuplicateAttributeUlid(AttributeGlobalId),
+    DuplicateAttributeGlobalId(AttributeGlobalId),
     AttributeTargetsItself(String),
     MissingNaturalKey(AttributeGlobalId),
     NaturalKeyIsNotATextAttribute(AttributeGlobalId),
@@ -73,24 +73,26 @@ impl std::error::Error for DefinitionError {}
 
 impl DimensionDefinition {
     pub fn try_new(
-        ulid: DimensionGlobalId,
+        global_id: DimensionGlobalId,
         name: String,
         kind: DimensionKind,
         natural_key_attribute: AttributeGlobalId,
         attributes: Vec<AttributeDefinition>,
     ) -> Result<Self, DefinitionError> {
         let mut attribute_names = HashSet::new();
-        let mut attribute_ulids = HashSet::new();
+        let mut attribute_global_ids = HashSet::new();
         for attribute in &attributes {
             if !attribute_names.insert(attribute.name.as_str()) {
                 return Err(DefinitionError::DuplicateAttributeName(
                     attribute.name.clone(),
                 ));
             }
-            if !attribute_ulids.insert(attribute.ulid) {
-                return Err(DefinitionError::DuplicateAttributeUlid(attribute.ulid));
+            if !attribute_global_ids.insert(attribute.global_id) {
+                return Err(DefinitionError::DuplicateAttributeGlobalId(
+                    attribute.global_id,
+                ));
             }
-            if attribute.kind == AttributeKind::Reference(ulid) {
+            if attribute.kind == AttributeKind::Reference(global_id) {
                 return Err(DefinitionError::AttributeTargetsItself(
                     attribute.name.clone(),
                 ));
@@ -98,7 +100,7 @@ impl DimensionDefinition {
         }
         let natural_key_position = attributes
             .iter()
-            .position(|attribute| attribute.ulid == natural_key_attribute)
+            .position(|attribute| attribute.global_id == natural_key_attribute)
             .ok_or(DefinitionError::MissingNaturalKey(natural_key_attribute))?;
         if attributes[natural_key_position].kind != AttributeKind::Text {
             return Err(DefinitionError::NaturalKeyIsNotATextAttribute(
@@ -106,7 +108,7 @@ impl DimensionDefinition {
             ));
         }
         Ok(Self {
-            ulid,
+            global_id,
             name,
             kind,
             attributes,
@@ -114,8 +116,8 @@ impl DimensionDefinition {
         })
     }
 
-    pub fn ulid(&self) -> DimensionGlobalId {
-        self.ulid
+    pub fn global_id(&self) -> DimensionGlobalId {
+        self.global_id
     }
 
     pub fn name(&self) -> &str {
@@ -146,7 +148,7 @@ impl DimensionDefinition {
                 AttributeKind::Reference(_) => DataType::UInt32,
             };
             fields.push(Field::new(
-                attribute.ulid.0.to_string(),
+                attribute.global_id.0.to_string(),
                 data_type,
                 position != self.natural_key_position,
             ));
@@ -159,7 +161,7 @@ impl DimensionDefinition {
 pub struct Dimension {
     definition: DimensionDefinition,
     members: RecordBatch,
-    by_ulid: UniqueIndex,
+    by_global_id: UniqueIndex,
     by_natural_key: UniqueIndex,
 }
 
@@ -209,8 +211,8 @@ pub enum DimensionError {
         expected: SchemaRef,
         found: SchemaRef,
     },
-    NullUlid(MemberIndex),
-    DuplicateUlid(MemberGlobalId),
+    NullGlobalId(MemberIndex),
+    DuplicateGlobalId(MemberGlobalId),
     NullNaturalKey(MemberIndex),
     EmptyNaturalKey(MemberIndex),
     DuplicateNaturalKey(String),
@@ -262,7 +264,7 @@ impl Dimension {
         for attribute in reference_attributes(&definition, &members) {
             let target_dimension = targets
                 .iter()
-                .find(|candidate| candidate.ulid() == attribute.target)
+                .find(|candidate| candidate.global_id() == attribute.target)
                 .ok_or_else(|| DimensionError::MissingTarget {
                     attribute: attribute.name().into(),
                     target: attribute.target,
@@ -280,12 +282,12 @@ impl Dimension {
             }
         }
 
-        let ulids = ulid_column(&members);
+        let global_ids = global_id_column(&members);
         let natural_keys = natural_key_column(&definition, &members);
         for row in 0..rows {
             let member = MemberIndex(row as u32);
-            if ulids.is_null(row) {
-                return Err(DimensionError::NullUlid(member));
+            if global_ids.is_null(row) {
+                return Err(DimensionError::NullGlobalId(member));
             }
             if natural_keys.is_null(row) {
                 return Err(DimensionError::NullNaturalKey(member));
@@ -294,14 +296,14 @@ impl Dimension {
                 return Err(DimensionError::EmptyNaturalKey(member));
             }
         }
-        let by_ulid = UniqueIndex::new(rows, |row| ulid_at(ulids, row))
-            .map_err(|ulid| DimensionError::DuplicateUlid(MemberGlobalId(ulid)))?;
+        let by_global_id = UniqueIndex::new(rows, |row| global_id_at(global_ids, row))
+            .map_err(|global_id| DimensionError::DuplicateGlobalId(MemberGlobalId(global_id)))?;
         let by_natural_key = UniqueIndex::new(rows, |row| natural_keys.value(row))
             .map_err(|natural_key| DimensionError::DuplicateNaturalKey(natural_key.into()))?;
         Ok(Self {
             definition,
             members,
-            by_ulid,
+            by_global_id,
             by_natural_key,
         })
     }
@@ -310,8 +312,8 @@ impl Dimension {
         &self.definition
     }
 
-    pub fn ulid(&self) -> DimensionGlobalId {
-        self.definition.ulid
+    pub fn global_id(&self) -> DimensionGlobalId {
+        self.definition.global_id
     }
 
     pub fn name(&self) -> &str {
@@ -320,7 +322,7 @@ impl Dimension {
 
     // Not the ULID alone: with the calendar and the version first, one period or version is one range of sorted packed coordinates.
     pub fn packing_order(&self) -> (DimensionKind, DimensionGlobalId) {
-        (self.definition.kind, self.definition.ulid)
+        (self.definition.kind, self.definition.global_id)
     }
 
     pub fn len(&self) -> u32 {
@@ -342,9 +344,11 @@ impl Dimension {
         })
     }
 
-    pub fn member_by_ulid(&self, ulid: MemberGlobalId) -> Option<Member<'_>> {
-        let ulids = ulid_column(&self.members);
-        let id = self.by_ulid.find(ulid.0, |row| ulid_at(ulids, row))?;
+    pub fn member_by_global_id(&self, global_id: MemberGlobalId) -> Option<Member<'_>> {
+        let global_ids = global_id_column(&self.members);
+        let id = self
+            .by_global_id
+            .find(global_id.0, |row| global_id_at(global_ids, row))?;
         self.member(id)
     }
 
@@ -413,7 +417,7 @@ fn attribute_columns<'d>(
     definition.attributes.iter().zip(&members.columns()[1..])
 }
 
-fn ulid_column(members: &RecordBatch) -> &FixedSizeBinaryArray {
+fn global_id_column(members: &RecordBatch) -> &FixedSizeBinaryArray {
     members.column(0).as_fixed_size_binary()
 }
 
@@ -437,9 +441,9 @@ impl<'d> Member<'d> {
         self.id
     }
 
-    pub fn ulid(self) -> MemberGlobalId {
-        MemberGlobalId(ulid_at(
-            ulid_column(&self.dimension.members),
+    pub fn global_id(self) -> MemberGlobalId {
+        MemberGlobalId(global_id_at(
+            global_id_column(&self.dimension.members),
             self.id.0 as usize,
         ))
     }
@@ -457,8 +461,8 @@ pub struct TextAttribute<'d> {
 }
 
 impl<'d> TextAttribute<'d> {
-    pub fn ulid(self) -> AttributeGlobalId {
-        self.definition.ulid
+    pub fn global_id(self) -> AttributeGlobalId {
+        self.definition.global_id
     }
 
     pub fn name(self) -> &'d str {
@@ -479,8 +483,8 @@ pub struct ReferenceAttribute<'d> {
 }
 
 impl<'d> ReferenceAttribute<'d> {
-    pub fn ulid(self) -> AttributeGlobalId {
-        self.definition.ulid
+    pub fn global_id(self) -> AttributeGlobalId {
+        self.definition.global_id
     }
 
     pub fn name(self) -> &'d str {
@@ -502,7 +506,7 @@ impl fmt::Debug for Member<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Member")
             .field("id", &self.id)
-            .field("ulid", &self.ulid())
+            .field("global_id", &self.global_id())
             .finish()
     }
 }
@@ -519,8 +523,8 @@ impl fmt::Debug for ReferenceAttribute<'_> {
     }
 }
 
-fn ulid_at(ulids: &FixedSizeBinaryArray, row: usize) -> Ulid {
-    let bytes: [u8; 16] = ulids
+fn global_id_at(global_ids: &FixedSizeBinaryArray, row: usize) -> Ulid {
+    let bytes: [u8; 16] = global_ids
         .value(row)
         .try_into()
         .expect("FixedSizeBinary(16) values are 16 bytes");

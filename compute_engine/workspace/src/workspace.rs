@@ -52,16 +52,16 @@ impl Workspace {
         let mut dimension_ids = HashSet::new();
         if let Some(duplicate) = dimensions
             .iter()
-            .find(|dimension| !dimension_ids.insert(dimension.ulid()))
+            .find(|dimension| !dimension_ids.insert(dimension.global_id()))
         {
-            return Err(WorkspaceError::DuplicateDimension(duplicate.ulid()));
+            return Err(WorkspaceError::DuplicateDimension(duplicate.global_id()));
         }
         let mut measure_ids = HashSet::new();
         if let Some(duplicate) = definitions
             .iter()
-            .find(|definition| !measure_ids.insert(definition.ulid))
+            .find(|definition| !measure_ids.insert(definition.global_id))
         {
-            return Err(WorkspaceError::DuplicateMeasure(duplicate.ulid));
+            return Err(WorkspaceError::DuplicateMeasure(duplicate.global_id));
         }
         // Not one set of names for each kind: a formula names a dimension and a measure in the same way, so the same name for both would pick one by its place in the formula.
         let mut names = HashSet::new();
@@ -82,17 +82,17 @@ impl Workspace {
                 .find(|attribute| !inside_target(dimension, *attribute, &references))
             {
                 return Err(WorkspaceError::ReferenceOutsideTarget {
-                    dimension: dimension.ulid(),
-                    attribute: attribute.ulid(),
+                    dimension: dimension.global_id(),
+                    attribute: attribute.global_id(),
                 });
             }
         }
         if let Some(input) = inputs.iter().find(|input| !made_from(input, &references)) {
-            return Err(WorkspaceError::InputOfOtherDimensions(input.ulid()));
+            return Err(WorkspaceError::InputOfOtherDimensions(input.global_id()));
         }
         let mut compiled = BTreeMap::new();
         for formula in formulas {
-            let result = formula.result.ulid;
+            let result = formula.result.global_id;
             let formula = CompiledFormula::new(formula, &definitions, &references)
                 .map_err(|error| WorkspaceError::Formula { result, error })?;
             compiled.insert(result, formula);
@@ -130,7 +130,7 @@ impl Workspace {
         inputs.sort_by_key(|input| {
             self.inputs
                 .iter()
-                .position(|declared| declared.ulid() == input.ulid())
+                .position(|declared| declared.global_id() == input.global_id())
         });
         let references: Vec<&Dimension> = self.dimensions.iter().collect();
         let same_definitions = inputs
@@ -155,7 +155,7 @@ fn made_from(input: &Measure, dimensions: &[&Dimension]) -> bool {
             dimensions
                 .iter()
                 .copied()
-                .find(|dimension| dimension.ulid() == axis && dimension.len() == member_count)
+                .find(|dimension| dimension.global_id() == axis && dimension.len() == member_count)
         })
         .collect();
     // Not the member counts alone: a dimension of another kind packs at another place, so the packed coordinates would read as other cells (ADR 0005).
@@ -169,7 +169,7 @@ fn inside_target(
 ) -> bool {
     dimensions
         .iter()
-        .find(|target| target.ulid() == attribute.target())
+        .find(|target| target.global_id() == attribute.target())
         .is_some_and(|target| {
             (0..dimension.len())
                 .filter_map(|member| attribute.value(MemberIndex(member)))

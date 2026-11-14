@@ -29,7 +29,7 @@ fn main() -> std::io::Result<()> {
             let checked =
                 workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
                     .expect("the representative formulas pass the check");
-            (formula.result.ulid, checked)
+            (formula.result.global_id, checked)
         })
         .collect();
     for (formula, (_, expression)) in formulas.iter().zip(&checked) {
@@ -40,7 +40,7 @@ fn main() -> std::io::Result<()> {
     }
     let order: Vec<(MeasureGlobalId, &CheckedExpression)> = checked
         .iter()
-        .map(|(ulid, expression)| (*ulid, expression))
+        .map(|(global_id, expression)| (*global_id, expression))
         .collect();
     let mut all = Vec::new();
     for input in 0..inputs {
@@ -57,9 +57,9 @@ fn main() -> std::io::Result<()> {
                     vec![Some(measure.base_values()[row] * 1.01 + 1.0)],
                 )
                 .expect("a packed coordinate of the base fits the measure");
-            let ulid = measures[input].ulid();
+            let global_id = measures[input].global_id();
             let started = Instant::now();
-            measures = column_engine::edit(&measures, [(ulid, delta)], &order, &dimensions)
+            measures = column_engine::edit(&measures, [(global_id, delta)], &order, &dimensions)
                 .expect("the edit recalculates");
             times.push(started.elapsed());
             eprintln!("{name}\t{edit}\t{:.3}s", started.elapsed().as_secs_f64());

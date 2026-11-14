@@ -42,7 +42,7 @@ fn cell(engine: &Engine, measure: MeasureGlobalId, coordinate: &[u32]) -> Option
     engine
         .measures()
         .iter()
-        .find(|candidate| candidate.ulid() == measure)
+        .find(|candidate| candidate.global_id() == measure)
         .expect("the engine holds the measure")
         .get(&coordinate)
         .expect("the coordinate fits")
@@ -188,7 +188,7 @@ fn edits_to_one_cell_keep_one_delta_entry_however_many_batches_arrive() {
     let input = engine
         .measures()
         .iter()
-        .find(|candidate| candidate.ulid() == QUANTITY)
+        .find(|candidate| candidate.global_id() == QUANTITY)
         .expect("the engine holds the measure");
     assert_eq!(input.delta_len(), 1);
     assert_eq!(cell(&engine, QUANTITY, &coordinate), Some(19.0));

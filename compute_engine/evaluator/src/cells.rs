@@ -22,13 +22,13 @@ enum Source {
 
 pub(crate) fn find_dimension<'d>(
     dimensions: &[&'d Dimension],
-    ulid: DimensionGlobalId,
+    global_id: DimensionGlobalId,
 ) -> Result<&'d Dimension, EvaluateError> {
     dimensions
         .iter()
-        .find(|dimension| dimension.ulid() == ulid)
+        .find(|dimension| dimension.global_id() == global_id)
         .copied()
-        .ok_or(EvaluateError::MissingDimension(ulid))
+        .ok_or(EvaluateError::MissingDimension(global_id))
 }
 
 fn normalized(

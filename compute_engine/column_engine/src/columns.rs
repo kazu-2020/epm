@@ -41,13 +41,13 @@ enum Source<'c> {
 
 pub(crate) fn find_dimension<'d>(
     dimensions: &[&'d Dimension],
-    ulid: DimensionGlobalId,
+    global_id: DimensionGlobalId,
 ) -> Result<&'d Dimension, EvaluateError> {
     dimensions
         .iter()
-        .find(|dimension| dimension.ulid() == ulid)
+        .find(|dimension| dimension.global_id() == global_id)
         .copied()
-        .ok_or(EvaluateError::MissingDimension(ulid))
+        .ok_or(EvaluateError::MissingDimension(global_id))
 }
 
 pub(crate) fn sort_in_packing_order<T>(
@@ -976,7 +976,7 @@ mod tests {
     fn adding_terms_on_the_same_coordinates_keeps_their_packed_coordinates() {
         let fixture = datagen::cases::Fixture::default();
         let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
-        let axis = dimensions[1].ulid();
+        let axis = dimensions[1].global_id();
         let packing = CoordinatePacking::new(&[3]).expect("2 bits fit in a packed coordinate");
         let sales = Columns::from_packed(
             vec![axis],

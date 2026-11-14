@@ -80,7 +80,7 @@ impl Calculated {
             empty: Arc::new(
                 inputs
                     .iter()
-                    .map(|input| (input.ulid(), input.delta()))
+                    .map(|input| (input.global_id(), input.delta()))
                     .collect(),
             ),
         };
@@ -95,7 +95,7 @@ impl Calculated {
                 &references,
             )
             .map_err(|error| CalculateError {
-                result: formula.result().ulid,
+                result: formula.result().global_id,
                 error,
             })?;
             measures.push(result);
@@ -130,7 +130,7 @@ impl Calculated {
         let formulas: Vec<(MeasureGlobalId, &CheckedExpression)> = self
             .formulas
             .iter()
-            .map(|formula| (formula.result().ulid, formula.expression()))
+            .map(|formula| (formula.result().global_id, formula.expression()))
             .collect();
         let measures = column_engine::edit(&self.measures, edits.deltas, &formulas, &dimensions)?
             .iter()

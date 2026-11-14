@@ -56,7 +56,7 @@ impl Model {
                 server::edit::decode(commit.payload.clone()).expect("the log holds cell edits");
             let input = inputs
                 .iter()
-                .position(|input| input.ulid() == edit.measure)?;
+                .position(|input| input.global_id() == edit.measure)?;
             match edit.value {
                 Some(value) => cells[input].insert(edit.coordinate, value),
                 None => cells[input].remove(&edit.coordinate),
@@ -188,7 +188,7 @@ impl common::Server for Owners {
             _ => (input, input.axes.len()),
         };
         server::edit::encode(&Edit {
-            measure: measure.ulid,
+            measure: measure.global_id,
             coordinate: vec![member; axes],
             value,
         })
@@ -574,7 +574,7 @@ fn final_values_agree_with_duckdb() {
         for (formula, measure) in model.workspace.formulas().iter().zip(results) {
             let result = formula.result();
             let expected = oracle
-                .evaluate(formula.expression(), result.ulid)
+                .evaluate(formula.expression(), result.global_id)
                 .expect("DuckDB evaluates the formula");
             assert_eq!(
                 cells(measure),

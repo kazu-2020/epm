@@ -38,7 +38,12 @@ fn cells(calculated: &Calculated) -> BTreeMap<MeasureGlobalId, Cells> {
     calculated
         .measures()
         .iter()
-        .map(|measure| (measure.ulid(), exact(&measure.cells().collect::<Vec<_>>())))
+        .map(|measure| {
+            (
+                measure.global_id(),
+                exact(&measure.cells().collect::<Vec<_>>()),
+            )
+        })
         .collect()
 }
 
@@ -55,7 +60,7 @@ fn formula(unchecked: &mut UncheckedWorkspace, result: MeasureGlobalId) -> &mut 
     unchecked
         .formulas
         .iter_mut()
-        .find(|formula| formula.result.ulid == result)
+        .find(|formula| formula.result.global_id == result)
         .expect("the representative model has the formula")
 }
 
@@ -76,7 +81,11 @@ fn the_order_of_the_declared_formulas_does_not_change_the_cells() {
 
     assert_eq!(cells(&reversed), cells(&declared));
     let order = |calculated: &Calculated| -> Vec<MeasureGlobalId> {
-        calculated.measures().iter().map(Measure::ulid).collect()
+        calculated
+            .measures()
+            .iter()
+            .map(Measure::global_id)
+            .collect()
     };
     assert_eq!(order(&reversed), order(&declared));
 }
@@ -126,7 +135,7 @@ fn two_dimensions_or_two_measures_with_one_id_are_an_error() {
     );
     assert_eq!(
         error(|unchecked| {
-            formula(unchecked, COST).result.ulid = QUANTITY;
+            formula(unchecked, COST).result.global_id = QUANTITY;
         }),
         WorkspaceError::DuplicateMeasure(QUANTITY)
     );
@@ -203,7 +212,7 @@ fn dimension(id: u128, members: u32) -> Dimension {
 
 fn dimension_of_kind(id: u128, members: u32, kind: DimensionKind) -> Dimension {
     let natural_key = AttributeDefinition {
-        ulid: AttributeGlobalId(Ulid(id * 1000)),
+        global_id: AttributeGlobalId(Ulid(id * 1000)),
         name: "ID".into(),
         kind: AttributeKind::Text,
     };
@@ -211,16 +220,16 @@ fn dimension_of_kind(id: u128, members: u32, kind: DimensionKind) -> Dimension {
         DimensionGlobalId(Ulid(id)),
         format!("D{id}"),
         kind,
-        natural_key.ulid,
+        natural_key.global_id,
         vec![natural_key],
     )
     .expect("one text attribute is a valid definition");
-    let ulids = FixedSizeBinaryArray::try_from_iter(
+    let global_ids = FixedSizeBinaryArray::try_from_iter(
         (0..members).map(|member| Ulid(id << 64 | u128::from(member)).to_bytes()),
     )
     .expect("every member ULID is 16 bytes");
     let natural_keys = StringArray::from_iter_values((0..members).map(|member| member.to_string()));
-    let columns: Vec<ArrayRef> = vec![Arc::new(ulids), Arc::new(natural_keys)];
+    let columns: Vec<ArrayRef> = vec![Arc::new(global_ids), Arc::new(natural_keys)];
     let members = RecordBatch::try_new(Arc::new(definition.schema()), columns)
         .expect("the columns follow the dimension schema");
     Dimension::try_new(definition, members, &[]).expect("the members are unique")
@@ -233,7 +242,7 @@ fn a_result_in_the_middle_of_a_formula_wider_than_64_bits_is_an_error() {
         let references: Vec<&Dimension> = dimensions.iter().collect();
         let axes = |ids: &[u128]| ids.iter().map(|&id| DimensionGlobalId(Ulid(id))).collect();
         let definition = |id: u128, name: &str, ids: &[u128]| MeasureDefinition {
-            ulid: MeasureGlobalId(Ulid(id)),
+            global_id: MeasureGlobalId(Ulid(id)),
             name: name.into(),
             axes: axes(ids),
         };
@@ -306,7 +315,7 @@ fn applied_edits_give_the_cells_of_a_workspace_that_starts_with_the_edited_input
 
     let mut edited = generated();
     let input = &mut edited.inputs[0];
-    assert_eq!(input.ulid(), QUANTITY);
+    assert_eq!(input.global_id(), QUANTITY);
     let mut delta = input.delta();
     delta
         .set(&quantity(None).coordinate, 7.25)
@@ -316,10 +325,13 @@ fn applied_edits_give_the_cells_of_a_workspace_that_starts_with_the_edited_input
 
     assert_eq!(cells(&applied), cells(&expected));
     assert_ne!(cells(&applied), cells(&start));
-    let ulids = |measures: &[Measure]| -> Vec<MeasureGlobalId> {
-        measures.iter().map(Measure::ulid).collect()
+    let global_ids = |measures: &[Measure]| -> Vec<MeasureGlobalId> {
+        measures.iter().map(Measure::global_id).collect()
     };
-    assert_eq!(ulids(applied.inputs()), ulids(&generated().inputs));
+    assert_eq!(
+        global_ids(applied.inputs()),
+        global_ids(&generated().inputs)
+    );
     assert_eq!(applied.dimensions().len(), generated().dimensions.len());
 }
 
@@ -332,7 +344,7 @@ fn a_workspace_gives_back_what_it_was_made_from() {
         workspace
             .dimensions()
             .iter()
-            .any(|dimension| dimension.ulid() == PERIOD)
+            .any(|dimension| dimension.global_id() == PERIOD)
     );
     let formulas: Vec<Formula> = workspace
         .formulas()
@@ -391,9 +403,9 @@ fn a_workspace_takes_only_inputs_of_its_definitions_and_dimensions() {
 fn an_input_of_a_dimension_of_another_kind_is_an_error() {
     let ordinary = [dimension(1, 2), dimension(2, 2)];
     let definition = MeasureDefinition {
-        ulid: MeasureGlobalId(Ulid(10)),
+        global_id: MeasureGlobalId(Ulid(10)),
         name: "入力".into(),
-        axes: ordinary.iter().map(Dimension::ulid).collect(),
+        axes: ordinary.iter().map(Dimension::global_id).collect(),
     };
     let input = || {
         Measure::from_cells(
@@ -419,7 +431,7 @@ fn an_input_of_a_dimension_of_another_kind_is_an_error() {
 
     assert_eq!(
         workspace(calendar(), vec![input()]).err(),
-        Some(WorkspaceError::InputOfOtherDimensions(definition.ulid))
+        Some(WorkspaceError::InputOfOtherDimensions(definition.global_id))
     );
     let made_for_calendar = Measure::from_cells(
         definition.clone(),
@@ -447,7 +459,7 @@ fn a_reference_attribute_outside_the_dimension_it_points_at_is_an_error() {
         unchecked
             .dimensions
             .iter()
-            .position(|dimension| dimension.ulid() == division)
+            .position(|dimension| dimension.global_id() == division)
             .expect("the representative model has the divisions")
     };
 

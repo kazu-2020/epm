@@ -53,11 +53,11 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &dimensions
         )
         .unwrap_err(),
-        EvaluateError::ResultAxesChanged(fixture.definition("期間結果").ulid)
+        EvaluateError::ResultAxesChanged(fixture.definition("期間結果").global_id)
     );
     assert_eq!(
         column_engine::evaluate(&sales, result, &[], &dimensions).unwrap_err(),
-        EvaluateError::MissingMeasure(fixture.definition("売上").ulid)
+        EvaluateError::MissingMeasure(fixture.definition("売上").global_id)
     );
     let mut stale = fixture.resolve("'売上'");
     let ResolvedExpressionKind::Measure { axes, .. } = &mut stale.kind else {
@@ -67,7 +67,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
     assert_eq!(
         column_engine::evaluate(&checked(&stale, result), result, &measures, &dimensions)
             .unwrap_err(),
-        EvaluateError::MeasureAxesChanged(fixture.definition("売上").ulid)
+        EvaluateError::MeasureAxesChanged(fixture.definition("売上").global_id)
     );
     for needs_broadcast in ["'売上'", "'売上' + 1"] {
         assert_eq!(
@@ -95,7 +95,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &[periods, divisions]
         )
         .unwrap_err(),
-        EvaluateError::MissingDimension(departments.ulid())
+        EvaluateError::MissingDimension(departments.global_id())
     );
     let mut unknown_attribute = fixture.resolve(by_division_source);
     let ResolvedExpressionKind::Sum { by, .. } = &mut unknown_attribute.kind else {
@@ -129,10 +129,10 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &[&one_period, departments, divisions]
         )
         .unwrap_err(),
-        EvaluateError::MeasurePackingChanged(fixture.definition("売上").ulid)
+        EvaluateError::MeasurePackingChanged(fixture.definition("売上").global_id)
     );
     let without_axes = MeasureDefinition {
-        ulid: MeasureGlobalId(Ulid(99)),
+        global_id: MeasureGlobalId(Ulid(99)),
         name: "軸なし".into(),
         axes: Vec::new(),
     };

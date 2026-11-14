@@ -117,7 +117,7 @@ impl<'a> Resolver<'a> {
         ids.dedup();
         known.then(|| ResolvedExpressionKind::Filter {
             value: Box::new(value),
-            dimension: found.ulid(),
+            dimension: found.global_id(),
             members: ids,
             keeps_axis,
         })
@@ -126,7 +126,7 @@ impl<'a> Resolver<'a> {
     fn measure(&self, name: &str) -> Result<ResolvedExpressionKind, ResolveErrorKind> {
         match (self.find_measure(name), self.find_dimension(name)) {
             (Some(measure), _) => Ok(ResolvedExpressionKind::Measure {
-                ulid: measure.ulid,
+                global_id: measure.global_id,
                 axes: measure.axes.clone(),
             }),
             (None, Some(_)) => Err(ResolveErrorKind::DimensionAsValue),
@@ -156,7 +156,7 @@ impl<'a> Resolver<'a> {
         };
         let dimension = dimension.definition();
         Ok(match &axis.attribute {
-            None => ResolvedAxisKind::Dimension(dimension.ulid()),
+            None => ResolvedAxisKind::Dimension(dimension.global_id()),
             Some(name) => {
                 let Some(attribute) = dimension
                     .attributes()
@@ -169,8 +169,8 @@ impl<'a> Resolver<'a> {
                     return Err(ResolveErrorKind::TextAttributeAsAxis);
                 };
                 ResolvedAxisKind::Attribute {
-                    dimension: dimension.ulid(),
-                    attribute: attribute.ulid,
+                    dimension: dimension.global_id(),
+                    attribute: attribute.global_id,
                     target,
                 }
             }

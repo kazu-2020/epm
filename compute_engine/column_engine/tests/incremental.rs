@@ -86,11 +86,11 @@ impl Model {
         self.workspace.dimensions.iter().collect()
     }
 
-    fn dimension(&self, ulid: DimensionGlobalId) -> &Dimension {
+    fn dimension(&self, global_id: DimensionGlobalId) -> &Dimension {
         self.workspace
             .dimensions
             .iter()
-            .find(|dimension| dimension.ulid() == ulid)
+            .find(|dimension| dimension.global_id() == global_id)
             .expect("the representative model has the dimension")
     }
 
@@ -107,13 +107,13 @@ impl Model {
             )
             .find(|definition| definition.name == name)
             .expect("the representative model has the measure")
-            .ulid
+            .global_id
     }
 
     fn formulas(&self) -> Vec<(MeasureGlobalId, &CheckedExpression)> {
         self.checked
             .iter()
-            .map(|(result, expression)| (result.ulid, expression))
+            .map(|(result, expression)| (result.global_id, expression))
             .collect()
     }
 
@@ -204,7 +204,7 @@ fn edit_and_compare(model: &Model) {
             .expect("the delta fits");
         measures = column_engine::edit(
             &measures,
-            [(inputs[input].ulid(), edited)],
+            [(inputs[input].global_id(), edited)],
             &formulas,
             &dimensions,
         )
@@ -223,7 +223,7 @@ fn two_deltas_for_one_measure_recalculate_the_cells_of_both() {
     let quantity = model.measure("数量");
     let input = inputs
         .iter()
-        .position(|input| input.ulid() == quantity)
+        .position(|input| input.global_id() == quantity)
         .expect("the quantity is an input");
     let cells: Vec<(Vec<MemberIndex>, f64)> = inputs[input].cells().collect();
     let (first, last) = (&cells[0].0, &cells[cells.len() - 1].0);

@@ -15,7 +15,7 @@ pub struct ResolvedExpression {
 pub enum ResolvedExpressionKind {
     Number(f64),
     Measure {
-        ulid: MeasureGlobalId,
+        global_id: MeasureGlobalId,
         axes: Vec<DimensionGlobalId>,
     },
     Negate(Box<ResolvedExpression>),

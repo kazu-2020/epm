@@ -93,7 +93,7 @@ impl Formulas<'_, '_, '_> {
             }
         };
         let definition = MeasureDefinition {
-            ulid: MeasureGlobalId(self.generator.ulid()),
+            global_id: MeasureGlobalId(self.generator.global_id()),
             name: format!("計算{index}"),
             axes,
         };

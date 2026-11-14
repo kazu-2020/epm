@@ -20,26 +20,26 @@ const DEPARTMENT: DimensionGlobalId = DimensionGlobalId(Ulid(200));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(300));
 const COST: MeasureGlobalId = MeasureGlobalId(Ulid(400));
 
-fn dimension(ulid: DimensionGlobalId, natural_keys: &[&str]) -> Dimension {
-    let natural_key_attribute = AttributeGlobalId(ulid.0);
+fn dimension(global_id: DimensionGlobalId, natural_keys: &[&str]) -> Dimension {
+    let natural_key_attribute = AttributeGlobalId(global_id.0);
     let definition = DimensionDefinition::try_new(
-        ulid,
+        global_id,
         "ディメンション".into(),
         DimensionKind::Ordinary,
         natural_key_attribute,
         vec![AttributeDefinition {
-            ulid: natural_key_attribute,
+            global_id: natural_key_attribute,
             name: "ID".into(),
             kind: AttributeKind::Text,
         }],
     )
     .unwrap();
-    let ulids = FixedSizeBinaryArray::try_from_iter(
-        (0..natural_keys.len()).map(|row| Ulid(ulid.0.0 + row as u128 + 1).to_bytes()),
+    let global_ids = FixedSizeBinaryArray::try_from_iter(
+        (0..natural_keys.len()).map(|row| Ulid(global_id.0.0 + row as u128 + 1).to_bytes()),
     )
     .unwrap();
     let columns: Vec<ArrayRef> = vec![
-        Arc::new(ulids),
+        Arc::new(global_ids),
         Arc::new(StringArray::from(natural_keys.to_vec())),
     ];
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
@@ -54,9 +54,9 @@ fn departments() -> Dimension {
     dimension(DEPARTMENT, &["営業部", "開発部"])
 }
 
-fn definition(ulid: MeasureGlobalId, axes: Vec<DimensionGlobalId>) -> MeasureDefinition {
+fn definition(global_id: MeasureGlobalId, axes: Vec<DimensionGlobalId>) -> MeasureDefinition {
     MeasureDefinition {
-        ulid,
+        global_id,
         name: "売上".into(),
         axes,
     }

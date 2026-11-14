@@ -15,21 +15,22 @@ const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(3));
 const VERSION: DimensionGlobalId = DimensionGlobalId(Ulid(4));
 
 pub fn dimensions() -> Vec<DimensionDefinition> {
-    let dimension = |ulid: DimensionGlobalId, name: &str, attributes: Vec<AttributeDefinition>| {
-        let natural_key_attribute = AttributeDefinition {
-            ulid: AttributeGlobalId(Ulid(ulid.0.0 * 1000)),
-            name: "ID".into(),
-            kind: AttributeKind::Text,
+    let dimension =
+        |global_id: DimensionGlobalId, name: &str, attributes: Vec<AttributeDefinition>| {
+            let natural_key_attribute = AttributeDefinition {
+                global_id: AttributeGlobalId(Ulid(global_id.0.0 * 1000)),
+                name: "ID".into(),
+                kind: AttributeKind::Text,
+            };
+            DimensionDefinition::try_new(
+                global_id,
+                name.into(),
+                DimensionKind::Ordinary,
+                natural_key_attribute.global_id,
+                [vec![natural_key_attribute], attributes].concat(),
+            )
+            .unwrap()
         };
-        DimensionDefinition::try_new(
-            ulid,
-            name.into(),
-            DimensionKind::Ordinary,
-            natural_key_attribute.ulid,
-            [vec![natural_key_attribute], attributes].concat(),
-        )
-        .unwrap()
-    };
     vec![
         dimension(PERIOD, "期間", vec![]),
         dimension(DIVISION, "事業部", vec![]),
@@ -37,7 +38,7 @@ pub fn dimensions() -> Vec<DimensionDefinition> {
             DEPARTMENT,
             "部門",
             vec![AttributeDefinition {
-                ulid: AttributeGlobalId(Ulid(21)),
+                global_id: AttributeGlobalId(Ulid(21)),
                 name: "事業部".into(),
                 kind: AttributeKind::Reference(DIVISION),
             }],
@@ -55,13 +56,13 @@ pub fn dimensions_with_members() -> Vec<Dimension> {
             "事業部" => (&["第一"], &[]),
             _ => (&["実績", "予算", "見込"], &[]),
         };
-        let ulids = FixedSizeBinaryArray::try_from_iter(
+        let global_ids = FixedSizeBinaryArray::try_from_iter(
             (0..natural_keys.len())
-                .map(|row| Ulid(definition.ulid().0.0 * 100 + row as u128).to_bytes()),
+                .map(|row| Ulid(definition.global_id().0.0 * 100 + row as u128).to_bytes()),
         )
         .unwrap();
         let mut columns: Vec<ArrayRef> = vec![
-            Arc::new(ulids),
+            Arc::new(global_ids),
             Arc::new(StringArray::from(natural_keys.to_vec())),
         ];
         if definition.attributes().len() > 1 {
@@ -76,8 +77,8 @@ pub fn dimensions_with_members() -> Vec<Dimension> {
 }
 
 pub fn measures() -> Vec<MeasureDefinition> {
-    let measure = |ulid, name: &str, axes: &[DimensionGlobalId]| MeasureDefinition {
-        ulid: MeasureGlobalId(Ulid(ulid)),
+    let measure = |global_id, name: &str, axes: &[DimensionGlobalId]| MeasureDefinition {
+        global_id: MeasureGlobalId(Ulid(global_id)),
         name: name.into(),
         axes: axes.to_vec(),
     };
@@ -92,10 +93,10 @@ pub fn measures() -> Vec<MeasureDefinition> {
     ]
 }
 
-pub fn dimension_name(ulid: DimensionGlobalId) -> String {
+pub fn dimension_name(global_id: DimensionGlobalId) -> String {
     dimensions()
         .into_iter()
-        .find(|dimension| dimension.ulid() == ulid)
+        .find(|dimension| dimension.global_id() == global_id)
         .expect("the fixture defines every dimension it refers to")
         .name()
         .into()
