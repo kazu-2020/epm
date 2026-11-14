@@ -12,7 +12,8 @@
 | `seqlog.qnt` | 変更ログの書き方のモデル。Assignee、配置コントローラー(エポックを渡す)、Slot、クライアントの再送。守りは `seqlog_design` の `allGuards` に、サーバー数などの上限は `seqlog` の `pure val` に置く |
 | `seqlog_mutations.qnt` | 守りを1つずつ外したモデル(`{ ...allGuards, deduplication: false }` など)。検査が実際に落ちることを示す。`check.sh` は、ここのモジュールがすべて `breaks` か `holds` に入っているかを確かめる |
 | `seqlog_replay.qnt` | Rust の実装に再生するトレースを作るための `replayStep`。`step` の一部の手順だけを許し、送信と停止にステップを使い切らないようにした |
-| `placement.qnt` | 配置表、App server、ランチャー、読み取り、書き込みの転送を `seqlog.qnt` に追加したモデル。PostgreSQL の切り替え(遅延するレプリカへの復帰)も含む。規則は `placement_design` の `allPlacementGuards` に置く。規則を1個ずつ除外した module と固定の手順も同一ファイルにある(ADR 0012) |
+| `placement.qnt` | 配置表、App server、ランチャー、読み取り、書き込みの転送を `seqlog.qnt` に追加したモデル。PostgreSQL の切り替え(遅延するレプリカへの復帰)も含む。規則は `placement_design` の `allPlacementGuards` に置く(ADR 0012) |
+| `placement_mutations.qnt` | 規則を1個ずつ除外した module と、その違反を示す固定の手順。`check.sh` は、ここのモジュールがすべて `placement_breaks` か `placement_scenarios` に入っているかを確かめる。`placement_failover_no_node_check` と `placement_failover_duplicate_start` は `processCheck` も除外する。`processCheck` が有効だと同一エポックの2個目のプロセスがフェンスで停止し、どちらの規則の除外も違反にならないため |
 | `check.sh` | すべての検査をまとめて実行する |
 | `../postgres/epoch_race.py` | PostgreSQL と PgBouncer で、エポックを発行する UPDATE の同時実行を実測する |
 | `../postgres/claim_rules.py` | エポックの発行と記録の UPDATE の規則(連続失敗の計数、待機時間、計画的な入れ替え、復元後の補正)を1個の接続で確認する |

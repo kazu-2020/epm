@@ -16,13 +16,18 @@ breaks=(
 holds=(seqlog_rejected_as_fenced)
 log_safe_without_guard=(seqlog_no_fence seqlog_no_epoch_check)
 
-listed=$(printf '%s\n' "${breaks[@]%%:*}" "${holds[@]}" | sort -u)
-defined=$(sed -n 's/^module \([a-z0-9_]*\).*/\1/p' seqlog_mutations.qnt | sort)
-if [[ "$listed" != "$defined" ]]; then
-  echo "check.sh does not list the same modules as seqlog_mutations.qnt:"
-  diff <(echo "$listed") <(echo "$defined") || true
-  exit 1
-fi
+lists_every_module() {
+  local listed defined
+  listed=$(printf '%s\n' "${@:2}" | sort -u)
+  defined=$(sed -n 's/^module \([a-z0-9_]*\).*/\1/p' "$1" | sort)
+  if [[ "$listed" != "$defined" ]]; then
+    echo "check.sh does not list the same modules as $1:"
+    diff <(echo "$listed") <(echo "$defined") || true
+    exit 1
+  fi
+}
+
+lists_every_module seqlog_mutations.qnt "${breaks[@]%%:*}" "${holds[@]}"
 
 quint typecheck change_log.qnt
 quint typecheck seqlog.qnt
@@ -79,8 +84,6 @@ placement_breaks=(
 )
 # Random simulation does not reach these violations, so a fixed scenario shows each one.
 placement_scenarios=(
-  placement_designed:readAfterHandoverTest
-  placement_designed:warmHandoverTest
   placement_start_resent:sameEpochOtherProcessStopsTest
   placement_start_resent_no_process_check:sameEpochAcknowledgesLostCommitTest
   placement_no_epoch_check:staleWriteReachesNewerProcessTest
@@ -90,36 +93,32 @@ placement_scenarios=(
   placement_failover:failoverReturnsToFencedAssigneeTest
   placement_failover_no_process_check:secondFailoverRecordsStaleProcessTest
   placement_failover_no_node_check:lateRecordMissesCommitTest
-  placement_failover_duplicate_start:duplicateStartRecordsStaleProcessTest
+  placement_failover_duplicate_start:lateRecordMissesCommitTest
 )
 # A failover makes the epoch decrease and returns the row to a fenced Assignee, so only the properties of the log are checked.
 placement_failover_invariants=(logRefinesChangeLog logSegmentsNeverChange logStaleEpochNeverCommits logSlotsContiguous logOneContentPerSlotPerEpoch logDataWriteNeverSeesOlderEpoch neverReadsOtherWorkspace)
 
-listed=$(printf '%s\n' placement_designed "${placement_breaks[@]%%:*}" "${placement_scenarios[@]%%:*}" | sort -u)
-defined=$(sed -n 's/^module \(placement_[a-z_]*\) {/\1/p' placement.qnt | grep -v '^placement_design$' | sort)
-if [[ "$listed" != "$defined" ]]; then
-  echo "check.sh does not list the same modules as placement.qnt:"
-  diff <(echo "$listed") <(echo "$defined") || true
-  exit 1
-fi
+lists_every_module placement_mutations.qnt "${placement_breaks[@]%%:*}" "${placement_scenarios[@]%%:*}"
 
 quint typecheck placement.qnt
+quint typecheck placement_mutations.qnt
+quint test placement.qnt --main placement_designed
 for entry in "${placement_scenarios[@]}"; do
-  quint test placement.qnt --main "${entry%%:*}" --match "${entry##*:}"
+  quint test placement_mutations.qnt --main "${entry%%:*}" --match "${entry##*:}"
 done
 
 run_placement() {
-  quint run placement.qnt --main "$1" --init placementInit --step placementStep --invariants "${@:2}" --max-samples "$samples" --max-steps 40 --seed 1 2>&1 || true
+  quint run "$1" --main "$2" --init placementInit --step placementStep --invariants "${@:3}" --max-samples "$samples" --max-steps 40 --seed 1 2>&1 || true
 }
 
-output=$(run_placement placement_designed "${placement_invariants[@]}")
+output=$(run_placement placement.qnt placement_designed "${placement_invariants[@]}")
 report placement_designed "$(outcome "$output")" "$(broken "$output")" hold
-output=$(run_placement placement_failover "${placement_failover_invariants[@]}")
+output=$(run_placement placement_mutations.qnt placement_failover "${placement_failover_invariants[@]}")
 report placement_failover "$(outcome "$output")" "$(broken "$output")" hold
 for witness in "${placement_witnesses[@]}"; do
-  report "placement_designed $witness" "$(outcome "$(run_placement placement_designed "$witness")")" "" break
+  report "placement_designed $witness" "$(outcome "$(run_placement placement.qnt placement_designed "$witness")")" "" break
 done
 for entry in "${placement_breaks[@]}"; do
-  report "${entry%%:*} ${entry##*:}" "$(outcome "$(run_placement "${entry%%:*}" "${entry##*:}")")" "" break
+  report "${entry%%:*} ${entry##*:}" "$(outcome "$(run_placement placement_mutations.qnt "${entry%%:*}" "${entry##*:}")")" "" break
 done
 exit "$status"
