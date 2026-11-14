@@ -20,7 +20,7 @@
 - 結果が分からない書き込みを成功とみなすと、確定していない変更に ACK を返す(`refinesChangeLog`)。
 - If-None-Match を外すと、遅れて届いた古い PUT が確定済みの Slot を上書きする(`refinesChangeLog`、`segmentsNeverChange`)。
 - Assignee が手元の集合だけで重複を排除すると、交代後に同じ Request ID が2回入る。PUT 中の Request ID を集合に入れないと、flush の後に同じ Request ID が次の Slot へ再度入る(どちらも `refinesChangeLog`)。
-- フェンスを外してもログの整合性は失われない。それでも必要な理由は次のとおり。フェンスがないと、新しい Assignee の受理開始後も古い Assignee がコミットと ACK を続ける。新しい Assignee はそのコミットを見ないまま読み込みに応じる(`newestAssigneeSeesAcknowledged`)。
+- フェンスを外してもログの整合性は失われない。それでも必要な理由は次のとおり。フェンスがないと、新しい Assignee の受理開始後も古い Assignee がコミットと ACK を続ける。新しい Assignee はそのコミットを見ないまま読み取りに応じる(`newestAssigneeSeesAcknowledged`)。
 - 末尾のエポックの検査を外すと、古い Assignee が新しいエポックのあとに確定できる(`staleEpochNeverCommits`)。
 - PUT を同時に2つ送ると、Slot N+1 が N より先に入る。すると N が空いたまま N+1 の batch を ACK する(`refinesChangeLog`、`slotsContiguous`)。
 - 読み込み直すときに同じエポックを使うと、前の PUT が遅れて届いたとき、自分のエポックの Slot に知らないコミットが入る。新しいエポックを取得すれば、その Slot は古いエポックとして扱われ、中身を view へ追加する経路に入る。
@@ -32,5 +32,5 @@
 
 ## 影響
 
-- 交代を知らない古い Assignee は、手元の状態から古い値を読ませうる。これはストアのフェンスでは防げない。読み取りはまだモデルにないので、防ぐ仕組み(リースの期限など)はスナップショットと一緒に決める。
+- 交代を知らない古い Assignee は、手元の状態から古い値を読ませうる。これはストアのフェンスでは防げない。読み取りはまだモデルにないので、防ぐ仕組み(リースの期限など)は snapshot と一緒に決める。
 - 読み込み直すときは、まだ ACK していない batch を捨て、クライアントの再送に任せる。
