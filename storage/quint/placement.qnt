@@ -10,10 +10,11 @@ module placement_design {
 module placement {
   import change_log.* from "./change_log"
   import seqlog_design.* from "./seqlog"
-  import seqlog(guards = allGuards).* from "./seqlog"
+  import seqlog(guards = logGuards).* from "./seqlog"
   import placement_design.*
 
   const placementGuards: PlacementGuards
+  const logGuards: Guards
 
   pure val Apps = Set("X", "Y")
 
@@ -84,7 +85,7 @@ module placement {
     starts.contains(start),
     servers.get(server).phase == Down,
     not(otherWorkspace.contains(server)),
-    servers' = servers.set(server, loading(start.epoch)),
+    servers' = servers.set(server, loading(start.epoch, spawned.length() + 1)),
     starts' = if (placementGuards.startOnce) starts.exclude(Set(start)) else starts,
     spawned' = spawned.append(start.epoch),
     store' = store, grantedEpoch' = grantedEpoch, clients' = clients,
@@ -252,6 +253,7 @@ module placement {
   val acknowledged: Set[str] = clients.acknowledged
   val log: List[str] = replay(store.slots)
   def isReady(server: str): bool = servers.get(server).phase == Ready
+  def isStopped(server: str): bool = servers.get(server).phase == Stopped
 
   run started(app: str, server: str): bool =
     table("readRow", app, "").then(table("claim", app, "")).then(table("spawn", "", server)).then(fenced(server)).then(table("record", "", server))
@@ -304,18 +306,39 @@ module placement {
 
 module placement_designed {
   import placement_design.*
-  import placement(placementGuards = allPlacementGuards).*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = allPlacementGuards, logGuards = allGuards).*
 }
 
 module placement_blind_claim {
   import placement_design.*
-  import placement(placementGuards = { ...allPlacementGuards, conditionalClaim: false }).*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, conditionalClaim: false }, logGuards = allGuards).*
+}
+
+// A fixed scenario, because random simulation does not reach two processes of one epoch that both load before either fence.
+module placement_start_resent {
+  import placement_design.*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, startOnce: false }, logGuards = allGuards).*
+
+  run sameEpochOtherProcessStopsTest =
+    placementInit
+      .then(table("readRow", "X", "")).then(table("claim", "X", ""))
+      .then(table("spawn", "", "A")).then(table("spawn", "", "B"))
+      .then(onLog("A", "load", "")).then(onLog("B", "load", ""))
+      .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
+      .then(onLog("A", "reply", "")).then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
+      .expect(isReady("A") and isStopped("B"))
+      .then(table("record", "", "A")).then(committed("A", "r1"))
+      .expect(acknowledged == Set("r1") and log == List("r1") and logRefinesChangeLog)
 }
 
 // A fixed scenario, because random simulation does not reach the acknowledgement of the second process.
-module placement_start_resent {
+module placement_start_resent_no_process_check {
   import placement_design.*
-  import placement(placementGuards = { ...allPlacementGuards, startOnce: false }).*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, startOnce: false }, logGuards = { ...allGuards, processCheck: false }).*
 
   run sameEpochAcknowledgesLostCommitTest =
     placementInit
@@ -334,13 +357,15 @@ module placement_start_resent {
 
 module placement_no_workspace_check {
   import placement_design.*
-  import placement(placementGuards = { ...allPlacementGuards, workspaceCheck: false }).*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, workspaceCheck: false }, logGuards = allGuards).*
 }
 
 // A fixed scenario, because random simulation does not reach a write in flight to an address that a later epoch takes.
 module placement_no_epoch_check {
   import placement_design.*
-  import placement(placementGuards = { ...allPlacementGuards, epochCheck: false }).*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, epochCheck: false }, logGuards = allGuards).*
 
   run staleWriteReachesNewerProcessTest =
     placementInit
@@ -357,7 +382,8 @@ module placement_no_epoch_check {
 
 module placement_cached_route {
   import placement_design.*
-  import placement(placementGuards = { ...allPlacementGuards, lookupPerRequest: false }).*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, lookupPerRequest: false }, logGuards = allGuards).*
 
   run cachedRouteMissesCommitTest =
     handedOver
@@ -369,7 +395,8 @@ module placement_cached_route {
 
 module placement_unrouted_write {
   import placement_design.*
-  import placement(placementGuards = { ...allPlacementGuards, routedWrites: false }).*
+  import seqlog_design.* from "./seqlog"
+  import placement(placementGuards = { ...allPlacementGuards, routedWrites: false }, logGuards = allGuards).*
 
   run unroutedWriteMissesCommitTest =
     warmStarted

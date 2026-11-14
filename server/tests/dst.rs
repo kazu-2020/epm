@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use change_log::{Commit, Epoch, Request, Sequence, Slot, Start};
+use change_log::{Commit, Epoch, ProcessId, Request, Sequence, Slot, Start};
 use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
@@ -124,8 +124,15 @@ impl common::Server for Assignees {
                 .lock()
                 .expect("restored")
                 .push((epoch, start.clone()));
-            let (handle, assignee) =
-                server::start(engine, start, settings, store, workspace, Epoch(epoch));
+            let (handle, assignee) = server::start(
+                engine,
+                start,
+                settings,
+                store,
+                workspace,
+                Epoch(epoch),
+                ProcessId(u128::from(epoch)),
+            );
             let _ = started.send(handle);
             match assignee.await {
                 Exit::ChangeLog(exit) => Ok(exit),

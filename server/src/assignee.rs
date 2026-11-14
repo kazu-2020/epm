@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use change_log::{Admit, Commit, Epoch, Request, RequestId, Sequence, Slot, Start, Submission};
+use change_log::{
+    Admit, Commit, Epoch, ProcessId, Request, RequestId, Sequence, Slot, Start, Submission,
+};
 use dimension::MemberIndex;
 use measure::{CoordinateError, MeasureGlobalId};
 use object_store::path::Path;
@@ -103,6 +105,7 @@ pub fn start(
     store: Arc<dyn ObjectStore>,
     workspace: String,
     epoch: Epoch,
+    process: ProcessId,
 ) -> (Handle, impl Future<Output = Exit>) {
     assert!(
         engine.next.index() == start.request_ids.len() && engine.slot == start.slot,
@@ -141,7 +144,7 @@ pub fn start(
         // Not two spawned tasks: a crash aborts this one future, so the engine stops with the assignee.
         tokio::select! {
             biased;
-            exit = change_log::serve(Arc::clone(&store), &workspace, epoch, start, admission, submission_receiver, commit_sender) => {
+            exit = change_log::serve(Arc::clone(&store), &workspace, epoch, process, start, admission, submission_receiver, commit_sender) => {
                 Exit::ChangeLog(exit)
             }
             alarm = apply(

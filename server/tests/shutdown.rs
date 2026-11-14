@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use change_log::{Epoch, Start};
+use change_log::{Epoch, ProcessId, Start};
 use datagen::representative::{self, Size};
 use futures_util::stream::BoxStream;
 use measure::MeasureGlobalId;
@@ -118,6 +118,7 @@ async fn run(deadline: Duration) -> Running {
         Arc::clone(&store) as Arc<dyn ObjectStore>,
         "ws".to_owned(),
         Epoch(1),
+        ProcessId(1),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let address = listener.local_addr().expect("an address");

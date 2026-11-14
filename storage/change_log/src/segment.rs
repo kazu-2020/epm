@@ -1,10 +1,14 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 const MAGIC: [u8; 4] = *b"CLOG";
-const VERSION: u8 = 1;
+const VERSION_WITHOUT_FENCE: u8 = 1;
+const VERSION: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Epoch(pub u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProcessId(pub u128);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Slot(pub u64);
@@ -35,6 +39,7 @@ pub struct Commit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Segment {
     pub epoch: Epoch,
+    pub fence: Option<ProcessId>,
     pub commits: Vec<Commit>,
 }
 
@@ -44,6 +49,8 @@ pub enum DecodeError {
     Version(u8),
     Truncated,
     TrailingBytes,
+    FenceFlag(u8),
+    FenceWithCommits,
 }
 
 impl Segment {
@@ -53,10 +60,18 @@ impl Segment {
             return Err(DecodeError::Magic);
         }
         let version = reader.u8()?;
-        if version != VERSION {
+        if version != VERSION && version != VERSION_WITHOUT_FENCE {
             return Err(DecodeError::Version(version));
         }
         let epoch = Epoch(reader.u64()?);
+        let fence = match version {
+            VERSION_WITHOUT_FENCE => None,
+            _ => match reader.u8()? {
+                0 => None,
+                1 => Some(ProcessId(reader.u128()?)),
+                flag => return Err(DecodeError::FenceFlag(flag)),
+            },
+        };
         let count = reader.u32()?;
         // Not Vec::with_capacity(count): the count is untrusted until the bytes behind it are read.
         let mut commits = Vec::new();
@@ -74,17 +89,31 @@ impl Segment {
         if reader.rest.has_remaining() {
             return Err(DecodeError::TrailingBytes);
         }
-        Ok(Segment { epoch, commits })
+        if fence.is_some() && !commits.is_empty() {
+            return Err(DecodeError::FenceWithCommits);
+        }
+        Ok(Segment {
+            epoch,
+            fence,
+            commits,
+        })
     }
 }
 
-pub fn encode(epoch: Epoch, commits: &[Commit]) -> Bytes {
+pub fn encode(segment: &Segment) -> Bytes {
     let mut out = BytesMut::new();
     out.put_slice(&MAGIC);
     out.put_u8(VERSION);
-    out.put_u64_le(epoch.0);
-    out.put_u32_le(length(commits.len()));
-    for commit in commits {
+    out.put_u64_le(segment.epoch.0);
+    match segment.fence {
+        None => out.put_u8(0),
+        Some(process) => {
+            out.put_u8(1);
+            out.put_u128_le(process.0);
+        }
+    }
+    out.put_u32_le(length(segment.commits.len()));
+    for commit in &segment.commits {
         put_prefixed(&mut out, &commit.request_id.0);
         out.put_u64_le(commit.sequence.0);
         put_prefixed(&mut out, &commit.payload);
@@ -125,6 +154,10 @@ impl Reader {
         Ok(self.take(8)?.get_u64_le())
     }
 
+    fn u128(&mut self) -> Result<u128, DecodeError> {
+        Ok(self.take(16)?.get_u128_le())
+    }
+
     fn prefixed(&mut self) -> Result<Bytes, DecodeError> {
         let length = self.u32()?;
         self.take(length as usize)
@@ -146,42 +179,83 @@ mod tests {
     fn sample() -> Segment {
         Segment {
             epoch: Epoch(7),
+            fence: None,
             commits: vec![commit("r1", 4, "edit a"), commit("r2", 5, "")],
+        }
+    }
+
+    fn fence() -> Segment {
+        Segment {
+            epoch: Epoch(2),
+            fence: Some(ProcessId(0x0102)),
+            commits: vec![],
         }
     }
 
     #[test]
     fn a_segment_reads_back_as_written() {
-        let segment = sample();
-        assert_eq!(
-            Segment::decode(encode(segment.epoch, &segment.commits)),
-            Ok(segment)
-        );
+        for segment in [sample(), fence()] {
+            assert_eq!(Segment::decode(encode(&segment)), Ok(segment));
+        }
     }
 
     #[test]
     fn the_layout_is_fixed() {
-        let fence = Segment {
-            epoch: Epoch(2),
-            commits: vec![],
-        };
         assert_eq!(
-            &encode(fence.epoch, &fence.commits)[..],
-            b"CLOG\x01\x02\0\0\0\0\0\0\0\0\0\0\0"
+            &encode(&fence())[..],
+            b"CLOG\x02\x02\0\0\0\0\0\0\0\x01\x02\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
         );
         let one = Segment {
             epoch: Epoch(1),
+            fence: None,
             commits: vec![commit("r", 3, "p")],
         };
         assert_eq!(
-            &encode(one.epoch, &one.commits)[..],
-            b"CLOG\x01\x01\0\0\0\0\0\0\0\x01\0\0\0\x01\0\0\0r\x03\0\0\0\0\0\0\0\x01\0\0\0p"
+            &encode(&one)[..],
+            b"CLOG\x02\x01\0\0\0\0\0\0\0\0\x01\0\0\0\x01\0\0\0r\x03\0\0\0\0\0\0\0\x01\0\0\0p"
         );
     }
 
     #[test]
+    fn a_segment_of_the_first_version_reads_without_a_fence() {
+        assert_eq!(
+            Segment::decode(Bytes::from_static(b"CLOG\x01\x02\0\0\0\0\0\0\0\0\0\0\0")),
+            Ok(Segment {
+                epoch: Epoch(2),
+                fence: None,
+                commits: vec![],
+            })
+        );
+        assert_eq!(
+            Segment::decode(Bytes::from_static(
+                b"CLOG\x01\x01\0\0\0\0\0\0\0\x01\0\0\0\x01\0\0\0r\x03\0\0\0\0\0\0\0\x01\0\0\0p"
+            )),
+            Ok(Segment {
+                epoch: Epoch(1),
+                fence: None,
+                commits: vec![commit("r", 3, "p")],
+            })
+        );
+    }
+
+    #[test]
+    fn a_fence_with_commits_or_an_unknown_flag_is_an_error() {
+        let with_commits = Segment {
+            commits: vec![commit("r", 3, "p")],
+            ..fence()
+        };
+        assert_eq!(
+            Segment::decode(encode(&with_commits)),
+            Err(DecodeError::FenceWithCommits)
+        );
+        let mut flag = encode(&fence()).to_vec();
+        flag[13] = 2;
+        assert_eq!(Segment::decode(flag.into()), Err(DecodeError::FenceFlag(2)));
+    }
+
+    #[test]
     fn a_decoded_request_id_does_not_hold_the_segment() {
-        let bytes = encode(sample().epoch, &sample().commits);
+        let bytes = encode(&sample());
         let segment = Segment::decode(bytes.clone()).expect("valid");
         let mut request_id = segment.commits[0].request_id.0.clone();
         drop(segment);
@@ -191,27 +265,28 @@ mod tests {
 
     #[test]
     fn every_truncation_is_an_error() {
-        let bytes = encode(sample().epoch, &sample().commits);
-        for end in 0..bytes.len() {
-            assert_eq!(
-                Segment::decode(bytes.slice(..end)),
-                Err(DecodeError::Truncated),
-                "cut at {end}"
-            );
+        for bytes in [encode(&sample()), encode(&fence())] {
+            for end in 0..bytes.len() {
+                assert_eq!(
+                    Segment::decode(bytes.slice(..end)),
+                    Err(DecodeError::Truncated),
+                    "cut at {end}"
+                );
+            }
         }
     }
 
     #[test]
     fn bad_headers_and_trailing_bytes_are_errors() {
-        let bytes = encode(sample().epoch, &sample().commits);
+        let bytes = encode(&sample());
         let mut magic = bytes.to_vec();
         magic[0] = b'X';
         assert_eq!(Segment::decode(magic.into()), Err(DecodeError::Magic));
         let mut version = bytes.to_vec();
-        version[4] = 2;
+        version[4] = 3;
         assert_eq!(
             Segment::decode(version.into()),
-            Err(DecodeError::Version(2))
+            Err(DecodeError::Version(3))
         );
         let mut trailing = bytes.to_vec();
         trailing.push(0);
@@ -223,12 +298,12 @@ mod tests {
 
     #[test]
     fn a_length_past_the_end_is_an_error() {
-        let mut huge = b"CLOG\x01\x01\0\0\0\0\0\0\0\xff\xff\xff\xff".to_vec();
+        let mut huge = b"CLOG\x02\x01\0\0\0\0\0\0\0\0\xff\xff\xff\xff".to_vec();
         assert_eq!(
             Segment::decode(huge.clone().into()),
             Err(DecodeError::Truncated)
         );
-        huge.truncate(13);
+        huge.truncate(14);
         huge.extend_from_slice(b"\x01\0\0\0\xff\xff\xff\xff");
         assert_eq!(Segment::decode(huge.into()), Err(DecodeError::Truncated));
     }

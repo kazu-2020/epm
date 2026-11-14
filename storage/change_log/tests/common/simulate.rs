@@ -8,7 +8,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use change_log::{
-    AdmitAll, Commit, Epoch, Exit, Request, RequestId, Sequence, Slot, Start, Submission, serve,
+    AdmitAll, Commit, Epoch, Exit, ProcessId, Request, RequestId, Sequence, Slot, Start,
+    Submission, serve,
 };
 use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
@@ -55,6 +56,7 @@ pub trait Server: Send + Sync {
                 store,
                 &workspace,
                 Epoch(epoch),
+                ProcessId(u128::from(epoch)),
                 Start::default(),
                 AdmitAll,
                 submission_receiver,

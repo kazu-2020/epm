@@ -81,7 +81,8 @@ placement_breaks=(
 placement_scenarios=(
   placement_designed:readAfterHandoverTest
   placement_designed:warmHandoverTest
-  placement_start_resent:sameEpochAcknowledgesLostCommitTest
+  placement_start_resent:sameEpochOtherProcessStopsTest
+  placement_start_resent_no_process_check:sameEpochAcknowledgesLostCommitTest
   placement_no_epoch_check:staleWriteReachesNewerProcessTest
   placement_cached_route:cachedRouteMissesCommitTest
   placement_unrouted_write:unroutedWriteMissesCommitTest

@@ -14,6 +14,7 @@ struct Write {
     server: String,
     slot: u64,
     epoch: u64,
+    process: u64,
     requests: Vec<String>,
     attempt: u32,
 }
@@ -33,6 +34,7 @@ struct Pending {
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 struct Stored {
     epoch: u64,
+    process: u64,
     requests: Vec<String>,
 }
 
@@ -188,6 +190,7 @@ impl State<Replay> for ModelState {
                             slot.0,
                             Stored {
                                 epoch: segment.epoch.0,
+                                process: process(segment),
                                 requests: names(segment),
                             },
                         )
@@ -212,6 +215,12 @@ impl State<Replay> for ModelState {
             },
         })
     }
+}
+
+fn process(segment: &Segment) -> u64 {
+    segment.fence.map_or(0, |process| {
+        u64::try_from(process.0).expect("the model numbers processes in u64")
+    })
 }
 
 fn names(segment: &Segment) -> Vec<String> {
@@ -242,7 +251,11 @@ impl Driver for Replay {
             init => *self = Replay::default(),
             grant(server: String) => {
                 self.granted_epoch += 1;
-                self.assignees.insert(server.clone(), Assignee::new(Epoch(self.granted_epoch), AdmitAll));
+                self.assignees.insert(server.clone(), Assignee::new(
+                    Epoch(self.granted_epoch),
+                    ProcessId(u128::from(self.granted_epoch)),
+                    AdmitAll,
+                ));
                 self.next_to_pass_on.insert(server, Sequence(0));
             },
             crash(server: String) => {
@@ -303,6 +316,7 @@ impl Replay {
                         server: server.to_string(),
                         slot: slot.0,
                         epoch: segment.epoch.0,
+                        process: process(&segment),
                         requests: names(&segment),
                         attempt,
                     };

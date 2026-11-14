@@ -4,7 +4,9 @@ use std::convert::Infallible;
 
 use bytes::Bytes;
 
-use crate::segment::{self, Commit, DecodeError, Epoch, RequestId, Segment, Sequence, Slot};
+use crate::segment::{
+    self, Commit, DecodeError, Epoch, ProcessId, RequestId, Segment, Sequence, Slot,
+};
 
 const MAX_IN_FLIGHT: usize = if cfg!(feature = "two_in_flight") {
     2
@@ -102,6 +104,7 @@ impl Admit for AdmitAll {
 #[derive(Debug)]
 pub struct Assignee<A> {
     epoch: Epoch,
+    process: ProcessId,
     admit: A,
     phase: Phase,
 }
@@ -138,6 +141,7 @@ struct View {
 #[derive(Debug)]
 struct Write {
     slot: Slot,
+    fence: Option<ProcessId>,
     commits: Vec<Commit>,
     body: Bytes,
     attempt: u32,
@@ -159,13 +163,14 @@ enum Outcome {
 }
 
 impl<A: Admit> Assignee<A> {
-    pub fn new(epoch: Epoch, admit: A) -> Assignee<A> {
-        Assignee::resume(epoch, admit, Start::default())
+    pub fn new(epoch: Epoch, process: ProcessId, admit: A) -> Assignee<A> {
+        Assignee::resume(epoch, process, admit, Start::default())
     }
 
-    pub fn resume(epoch: Epoch, admit: A, start: Start) -> Assignee<A> {
+    pub fn resume(epoch: Epoch, process: ProcessId, admit: A, start: Start) -> Assignee<A> {
         Assignee {
             epoch,
+            process,
             admit,
             phase: Phase::Loading {
                 start,
@@ -178,13 +183,21 @@ impl<A: Admit> Assignee<A> {
     pub fn step(&mut self, event: Event) -> Vec<Effect<A::Rejection>> {
         let mut effects = Vec::new();
         let phase = std::mem::replace(&mut self.phase, Phase::Stopped);
-        self.phase = transition(self.epoch, &mut self.admit, phase, event, &mut effects);
+        self.phase = transition(
+            self.epoch,
+            self.process,
+            &mut self.admit,
+            phase,
+            event,
+            &mut effects,
+        );
         effects
     }
 }
 
 fn transition<A: Admit>(
     epoch: Epoch,
+    process: ProcessId,
     admit: &mut A,
     phase: Phase,
     event: Event,
@@ -192,7 +205,7 @@ fn transition<A: Admit>(
 ) -> Phase {
     match (phase, event) {
         (Phase::Loading { start, waiting }, Event::Loaded { slots }) => {
-            load(epoch, admit, start, &slots, waiting, effects)
+            load(epoch, process, admit, start, &slots, waiting, effects)
         }
         (Phase::Loading { start, mut waiting }, Event::Request(request)) => {
             waiting.push(request);
@@ -229,7 +242,7 @@ fn transition<A: Admit>(
             Outcome::Committed(fence) => ready(view, next(fence.slot), waiting, admit, effects),
             Outcome::OlderEpoch(taken, found) => {
                 view.add_older(&found.commits, taken.slot, admit, effects);
-                let fence = Write::new(epoch, next(taken.slot), Vec::new());
+                let fence = Write::fence(epoch, process, next(taken.slot));
                 effects.push(fence.put());
                 Phase::Fencing {
                     view,
@@ -286,6 +299,7 @@ fn transition<A: Admit>(
 
 fn load<A: Admit>(
     epoch: Epoch,
+    process: ProcessId,
     admit: &mut A,
     start: Start,
     slots: &BTreeMap<Slot, Segment>,
@@ -318,7 +332,7 @@ fn load<A: Admit>(
     if cfg!(feature = "no_fence") {
         return ready(view, free, waiting, admit, effects);
     }
-    let fence = Write::new(epoch, free, Vec::new());
+    let fence = Write::fence(epoch, process, free);
     effects.push(fence.put());
     Phase::Fencing {
         view,
@@ -417,7 +431,9 @@ fn advance<R>(
         Event::ReadBack {
             found: Some(found), ..
         } => match found.epoch.cmp(&epoch) {
-            Ordering::Equal if found.commits == write.commits => Outcome::Committed(write),
+            Ordering::Equal if found.fence == write.fence && found.commits == write.commits => {
+                Outcome::Committed(write)
+            }
             Ordering::Equal => Outcome::OtherContent(write),
             Ordering::Greater => Outcome::NewerEpoch,
             Ordering::Less => Outcome::OlderEpoch(write, found),
@@ -485,7 +501,14 @@ impl Ready {
                 payload: request.payload,
             })
             .collect();
-        let write = Write::new(epoch, self.next, commits);
+        let write = Write::new(
+            Segment {
+                epoch,
+                fence: None,
+                commits,
+            },
+            self.next,
+        );
         effects.push(write.put());
         *cell = Some(write);
         self.next = next(self.next);
@@ -544,14 +567,26 @@ impl View {
 }
 
 impl Write {
-    fn new(epoch: Epoch, slot: Slot, commits: Vec<Commit>) -> Write {
+    fn new(segment: Segment, slot: Slot) -> Write {
         Write {
             slot,
-            body: segment::encode(epoch, &commits),
-            commits,
+            body: segment::encode(&segment),
+            fence: segment.fence,
+            commits: segment.commits,
             attempt: 0,
             awaiting: Awaiting::Reply,
         }
+    }
+
+    fn fence(epoch: Epoch, process: ProcessId, slot: Slot) -> Write {
+        Write::new(
+            Segment {
+                epoch,
+                fence: Some(process),
+                commits: Vec::new(),
+            },
+            slot,
+        )
     }
 
     fn put<R>(&self) -> Effect<R> {

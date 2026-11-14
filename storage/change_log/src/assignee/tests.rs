@@ -5,6 +5,8 @@ use super::*;
 
 type Effect = super::Effect<Infallible>;
 
+const PROCESS: ProcessId = ProcessId(1);
+
 impl<A: Admit> Assignee<A> {
     fn step_and_flush(&mut self, event: Event) -> Vec<super::Effect<A::Rejection>> {
         let mut effects = self.step(event);
@@ -122,7 +124,7 @@ fn ready_assignee<A: Admit<Rejection: std::fmt::Debug>>(
     epoch: u64,
     admit: A,
 ) -> Assignee<A> {
-    let mut assignee = Assignee::new(Epoch(epoch), admit);
+    let mut assignee = Assignee::new(Epoch(epoch), PROCESS, admit);
     let (slot, fence, _) = put(&assignee.step_and_flush(store.loaded()));
     assert!(fence.commits.is_empty());
     assert!(assignee.step_and_flush(store.put(slot, fence)).is_empty());
@@ -132,13 +134,14 @@ fn ready_assignee<A: Admit<Rejection: std::fmt::Debug>>(
 #[test]
 fn a_new_assignee_fences_the_next_slot_and_then_writes_after_it() {
     let mut store = Store::default();
-    let mut assignee = Assignee::new(Epoch(1), AdmitAll);
+    let mut assignee = Assignee::new(Epoch(1), PROCESS, AdmitAll);
     assert_eq!(
         put(&assignee.step_and_flush(store.loaded())),
         (
             Slot(0),
             Segment {
                 epoch: Epoch(1),
+                fence: Some(PROCESS),
                 commits: vec![]
             },
             0
@@ -149,6 +152,7 @@ fn a_new_assignee_fences_the_next_slot_and_then_writes_after_it() {
             Slot(0),
             Segment {
                 epoch: Epoch(1),
+                fence: Some(PROCESS),
                 commits: vec![],
             },
         )),
@@ -296,16 +300,18 @@ fn a_new_assignee_replays_the_commits_of_older_assignees_in_sequence_order() {
         Slot(0),
         Segment {
             epoch: Epoch(1),
+            fence: None,
             commits: vec![committed_as("r1", 0, "first"), committed_as("r2", 1, "bad")],
         },
     );
     let checked = Checked::default();
-    let mut assignee = Assignee::new(Epoch(3), checked.clone());
+    let mut assignee = Assignee::new(Epoch(3), PROCESS, checked.clone());
     let (fence_slot, fence, _) = put(&assignee.step_and_flush(store.loaded()));
     store.put(
         fence_slot,
         Segment {
             epoch: Epoch(2),
+            fence: None,
             commits: vec![committed_as("r3", 2, "third")],
         },
     );
@@ -339,6 +345,7 @@ fn requests_before_the_fence_succeeds_wait_for_it() {
         Slot(0),
         Segment {
             epoch: Epoch(1),
+            fence: None,
             commits: vec![Commit {
                 request_id: id("r1"),
                 sequence: Sequence(0),
@@ -346,7 +353,7 @@ fn requests_before_the_fence_succeeds_wait_for_it() {
             }],
         },
     );
-    let mut assignee = Assignee::new(Epoch(2), AdmitAll);
+    let mut assignee = Assignee::new(Epoch(2), PROCESS, AdmitAll);
     assert_eq!(assignee.step_and_flush(request("r1")), vec![]);
     let (slot, fence, _) = put(&assignee.step_and_flush(store.loaded()));
     assert_eq!(assignee.step_and_flush(request("r2")), vec![]);
@@ -364,6 +371,7 @@ fn an_assignee_stops_when_the_last_slot_has_its_epoch_or_a_newer_one() {
         Slot(0),
         Segment {
             epoch: Epoch(1),
+            fence: None,
             commits: vec![],
         },
     );
@@ -371,19 +379,21 @@ fn an_assignee_stops_when_the_last_slot_has_its_epoch_or_a_newer_one() {
         Slot(1),
         Segment {
             epoch: Epoch(3),
+            fence: None,
             commits: vec![],
         },
     );
     assert_eq!(
-        Assignee::new(Epoch(2), AdmitAll).step_and_flush(store.loaded()),
+        Assignee::new(Epoch(2), PROCESS, AdmitAll).step_and_flush(store.loaded()),
         vec![Effect::Stop]
     );
     assert_eq!(
-        Assignee::new(Epoch(3), AdmitAll).step_and_flush(store.loaded()),
+        Assignee::new(Epoch(3), PROCESS, AdmitAll).step_and_flush(store.loaded()),
         vec![Effect::Stop],
         "a reload takes a new epoch"
     );
-    let (slot, _, _) = put(&Assignee::new(Epoch(4), AdmitAll).step_and_flush(store.loaded()));
+    let (slot, _, _) =
+        put(&Assignee::new(Epoch(4), PROCESS, AdmitAll).step_and_flush(store.loaded()));
     assert_eq!(slot, Slot(2));
 }
 
@@ -415,6 +425,7 @@ fn a_read_back_decides_by_the_epoch_and_checks_the_content() {
     );
     let newer = Segment {
         epoch: Epoch(3),
+        fence: None,
         commits: vec![],
     };
     assert_eq!(
@@ -445,6 +456,7 @@ fn other_content_under_the_own_epoch_raises_an_alarm() {
     );
     let other = Segment {
         epoch: Epoch(2),
+        fence: None,
         commits: vec![],
     };
     assert_eq!(
@@ -455,7 +467,7 @@ fn other_content_under_the_own_epoch_raises_an_alarm() {
         vec![Effect::Alarm(Alarm::OtherContentInOwnEpoch { slot })]
     );
 
-    let mut fencing = Assignee::new(Epoch(3), AdmitAll);
+    let mut fencing = Assignee::new(Epoch(3), PROCESS, AdmitAll);
     let (slot, _, _) = put(&fencing.step_and_flush(store.loaded()));
     assert_eq!(
         fencing.step_and_flush(Event::PutFailed {
@@ -466,6 +478,7 @@ fn other_content_under_the_own_epoch_raises_an_alarm() {
     );
     let earlier_write = Segment {
         epoch: Epoch(3),
+        fence: None,
         commits: vec![Commit {
             request_id: id("r1"),
             sequence: Sequence(0),
@@ -483,6 +496,32 @@ fn other_content_under_the_own_epoch_raises_an_alarm() {
 }
 
 #[test]
+fn of_two_processes_with_one_epoch_only_the_one_whose_fence_is_in_the_slot_becomes_ready() {
+    let mut store = Store::default();
+    let mut first = Assignee::new(Epoch(2), ProcessId(1), AdmitAll);
+    let mut second = Assignee::new(Epoch(2), ProcessId(2), AdmitAll);
+    let (slot, first_fence, _) = put(&first.step_and_flush(store.loaded()));
+    let (second_slot, second_fence, _) = put(&second.step_and_flush(store.loaded()));
+    assert_eq!(second_slot, slot);
+    assert!(
+        first
+            .step_and_flush(store.put(slot, first_fence))
+            .is_empty()
+    );
+    assert_eq!(
+        second.step_and_flush(store.put(slot, second_fence)),
+        vec![Effect::Get { slot }]
+    );
+    assert_eq!(
+        second.step_and_flush(store.read_back(slot)),
+        vec![Effect::Alarm(Alarm::OtherContentInOwnEpoch { slot })]
+    );
+    let (next, _, _) = put(&first.step_and_flush(request("r1")));
+    assert_eq!(next, Slot(slot.0 + 1), "the first process is ready");
+    assert_eq!(second.step_and_flush(request("r1")), vec![], "stopped");
+}
+
+#[test]
 fn a_data_write_that_finds_an_older_epoch_raises_an_alarm() {
     let mut store = Store::default();
     let mut assignee = ready_assignee(&mut store, 2, AdmitAll);
@@ -496,6 +535,7 @@ fn a_data_write_that_finds_an_older_epoch_raises_an_alarm() {
     );
     let older = Segment {
         epoch: Epoch(1),
+        fence: None,
         commits: vec![],
     };
     assert_eq!(
@@ -562,7 +602,7 @@ fn events_for_other_slots_or_stages_change_nothing() {
         vec![id("r1")]
     );
 
-    let mut fencing = Assignee::new(Epoch(2), AdmitAll);
+    let mut fencing = Assignee::new(Epoch(2), PROCESS, AdmitAll);
     let (slot, _, _) = put(&fencing.step_and_flush(store.loaded()));
     assert_eq!(
         fencing.step_and_flush(Event::ReadBack { slot, found: None }),
@@ -586,7 +626,7 @@ fn old_assignee_takes_slot_first() {
     let mut store = Store::default();
     let mut a = ready_assignee(&mut store, 1, AdmitAll);
     let (a_slot, a_write, _) = put(&a.step_and_flush(request("r1")));
-    let mut b = Assignee::new(Epoch(2), AdmitAll);
+    let mut b = Assignee::new(Epoch(2), PROCESS, AdmitAll);
     let (b_slot, b_fence, _) = put(&b.step_and_flush(store.loaded()));
     assert_eq!(b_slot, Slot(1));
     let a_reply = store.put(a_slot, a_write);
@@ -609,6 +649,7 @@ fn old_assignee_takes_slot_first() {
         store.0[&Slot(2)],
         Segment {
             epoch: Epoch(2),
+            fence: Some(PROCESS),
             commits: vec![]
         }
     );
@@ -668,10 +709,11 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
         Slot(0),
         Segment {
             epoch: Epoch(1),
+            fence: None,
             commits: vec![commit("r1", 0)],
         },
     );
-    let mut assignee = Assignee::new(Epoch(3), AdmitAll);
+    let mut assignee = Assignee::new(Epoch(3), PROCESS, AdmitAll);
     let effects = assignee.step_and_flush(store.loaded());
     assert_eq!(effects[0], committed("r1", 0, Slot(0)), "read on load");
     let (fence_slot, fence, _) = put(&effects);
@@ -679,6 +721,7 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
         fence_slot,
         Segment {
             epoch: Epoch(2),
+            fence: None,
             commits: vec![commit("r2", 1)],
         },
     );
@@ -711,6 +754,7 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
 fn three_slots() -> Store {
     let segment = |commits| Segment {
         epoch: Epoch(1),
+        fence: None,
         commits,
     };
     Store(BTreeMap::from([
@@ -723,12 +767,12 @@ fn three_slots() -> Store {
 #[test]
 fn an_assignee_from_a_start_continues_as_an_assignee_that_reads_the_whole_log() {
     let store = three_slots();
-    let whole = Assignee::new(Epoch(2), AdmitAll).step_and_flush(store.loaded());
+    let whole = Assignee::new(Epoch(2), PROCESS, AdmitAll).step_and_flush(store.loaded());
     let start = Start {
         slot: Slot(1),
         request_ids: vec![id("r1"), id("r2"), id("r3")],
     };
-    let mut resumed = Assignee::resume(Epoch(2), AdmitAll, start);
+    let mut resumed = Assignee::resume(Epoch(2), PROCESS, AdmitAll, start);
     let tail = Event::Loaded {
         slots: store.0.clone().split_off(&Slot(1)),
     };
@@ -759,7 +803,7 @@ fn a_start_that_the_log_does_not_hold_is_an_alarm() {
         request_ids: vec![id("r1"), id("r2"), id("r3")],
     };
     assert_eq!(
-        Assignee::resume(Epoch(2), AdmitAll, start).step_and_flush(store.loaded()),
+        Assignee::resume(Epoch(2), PROCESS, AdmitAll, start).step_and_flush(store.loaded()),
         [Effect::Alarm(Alarm::StartNotInLog {
             slot: Slot(0),
             sequence: Sequence(2)
@@ -774,7 +818,7 @@ fn a_start_with_another_request_id_for_its_last_commit_is_an_alarm() {
         request_ids: vec![id("r1"), id("r2"), id("other")],
     };
     assert_eq!(
-        Assignee::resume(Epoch(2), AdmitAll, start).step_and_flush(three_slots().loaded()),
+        Assignee::resume(Epoch(2), PROCESS, AdmitAll, start).step_and_flush(three_slots().loaded()),
         [Effect::Alarm(Alarm::StartNotInLog {
             slot: Slot(1),
             sequence: Sequence(2)
@@ -786,7 +830,7 @@ fn a_start_with_another_request_id_for_its_last_commit_is_an_alarm() {
 fn the_replay_starts_only_at_the_slot_of_the_start() {
     let mut store = three_slots();
     store.0.remove(&Slot(0));
-    let effects = Assignee::new(Epoch(2), AdmitAll).step_and_flush(store.loaded());
+    let effects = Assignee::new(Epoch(2), PROCESS, AdmitAll).step_and_flush(store.loaded());
     assert!(
         !effects
             .iter()

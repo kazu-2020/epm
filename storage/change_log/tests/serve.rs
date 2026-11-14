@@ -7,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use change_log::{
-    Admit, AdmitAll, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Slot, Start,
-    Submission, serve,
+    Admit, AdmitAll, Commit, Epoch, Exit, ProcessId, Request, RequestId, Segment, Sequence, Slot,
+    Start, Submission, serve,
 };
 use futures_util::stream::{self, BoxStream};
 use futures_util::{StreamExt, TryStreamExt};
@@ -42,6 +42,7 @@ fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Assigne
             store,
             WORKSPACE,
             Epoch(epoch),
+            ProcessId(u128::from(epoch)),
             first,
             AdmitAll,
             submission_receiver,
@@ -306,6 +307,7 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
             store,
             WORKSPACE,
             Epoch(1),
+            ProcessId(1),
             Start::default(),
             GoodOnly,
             submission_receiver,
