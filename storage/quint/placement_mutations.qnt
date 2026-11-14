@@ -19,22 +19,24 @@ module placement_start_resent {
       .expect(acknowledged == Set("r1") and log == List("r1") and logRefinesChangeLog)
 }
 
-// A fixed scenario, because random simulation does not reach the acknowledgement of the second process.
+// A fixed scenario, because random simulation does not reach two processes of one epoch that both load before either fence.
 module placement_start_resent_no_process_check {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
   import placement(placementGuards = { ...allPlacementGuards, startOnce: false, rejectsDuplicateStart: false, oneNode: true }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
 
-  run sameEpochAcknowledgesLostCommitTest =
+  run sameEpochServesStaleReadTest =
     placementInit
       .then(launched("X", "A")).then(table("spawn", "", "B"))
       .then(fencedTogether)
       .expect(isReady("A") and isReady("B"))
-      .then(table("record", "", "A")).then(sent("A", "r1")).then(onLog("A", "flush", ""))
-      .then(table("record", "", "B")).then(sent("B", "r2")).then(onLog("B", "flush", ""))
-      .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
-      .then(onLog("A", "reply", "")).then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
-      .expect(acknowledged == Set("r1", "r2") and log == List("r1") and not(logRefinesChangeLog))
+      .then(table("record", "", "A")).then(committed("A", "r1"))
+      .then(table("record", "", "B"))
+      .then(looksUp(placement.serving)).then(servedOne)
+      .expect(placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
+      .then(sent("B", "r2")).then(onLog("B", "flush", "")).then(onLog("B", "apply", ""))
+      .then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
+      .expect(isStopped("B") and acknowledged == Set("r1") and logRefinesChangeLog)
 }
 
 module placement_no_workspace_check {

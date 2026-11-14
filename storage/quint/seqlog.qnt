@@ -202,7 +202,7 @@ module seqlog {
     val again = { ...write, attempt: write.attempt + 1 }
     val refence = { ...write, slot: write.slot + 1, attempt: 0 }
     val resend = not(taken) and write.attempt < MaxResends
-    val own = taken and (if (guards.processCheck) found == slotOf(write) else found.epoch == write.epoch)
+    val own = taken and (if (guards.processCheck) found == slotOf(write) else found.epoch == write.epoch and found.requests == write.requests)
     val oldAssigneeTookFenceSlot = taken and found.epoch < write.epoch and isFence(write)
     all {
       if (not(taken)) replace(server, self, write, { write: if (resend) again else write, unknown: false })

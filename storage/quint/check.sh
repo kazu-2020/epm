@@ -85,7 +85,7 @@ placement_breaks=(
 # Random simulation does not reach these violations, so a fixed scenario shows each one.
 placement_scenarios=(
   placement_start_resent:sameEpochOtherProcessStopsTest
-  placement_start_resent_no_process_check:sameEpochAcknowledgesLostCommitTest
+  placement_start_resent_no_process_check:sameEpochServesStaleReadTest
   placement_no_epoch_check:staleWriteReachesNewerProcessTest
   placement_cached_route:cachedRouteMissesCommitTest
   placement_unrouted_write:unroutedWriteMissesCommitTest
