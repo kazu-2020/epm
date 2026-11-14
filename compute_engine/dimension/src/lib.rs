@@ -296,7 +296,7 @@ impl Dimension {
                 return Err(DimensionError::EmptyNaturalKey(member));
             }
         }
-        let by_global_id = UniqueIndex::new(rows, |row| global_id_at(global_ids, row))
+        let by_global_id = UniqueIndex::new(rows, |row| ulid_at(global_ids, row))
             .map_err(|global_id| DimensionError::DuplicateGlobalId(MemberGlobalId(global_id)))?;
         let by_natural_key = UniqueIndex::new(rows, |row| natural_keys.value(row))
             .map_err(|natural_key| DimensionError::DuplicateNaturalKey(natural_key.into()))?;
@@ -348,7 +348,7 @@ impl Dimension {
         let global_ids = global_id_column(&self.members);
         let id = self
             .by_global_id
-            .find(global_id.0, |row| global_id_at(global_ids, row))?;
+            .find(global_id.0, |row| ulid_at(global_ids, row))?;
         self.member(id)
     }
 
@@ -442,7 +442,7 @@ impl<'d> Member<'d> {
     }
 
     pub fn global_id(self) -> MemberGlobalId {
-        MemberGlobalId(global_id_at(
+        MemberGlobalId(ulid_at(
             global_id_column(&self.dimension.members),
             self.id.0 as usize,
         ))
@@ -523,7 +523,7 @@ impl fmt::Debug for ReferenceAttribute<'_> {
     }
 }
 
-fn global_id_at(global_ids: &FixedSizeBinaryArray, row: usize) -> Ulid {
+fn ulid_at(global_ids: &FixedSizeBinaryArray, row: usize) -> Ulid {
     let bytes: [u8; 16] = global_ids
         .value(row)
         .try_into()

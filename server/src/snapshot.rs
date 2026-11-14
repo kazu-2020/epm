@@ -132,10 +132,10 @@ impl Manifest {
         let request_chunks = reader.chunks()?;
         let mut measures = Vec::new();
         for _ in 0..reader.u32()? {
-            let global_id = MeasureGlobalId(reader.global_id()?);
+            let global_id = MeasureGlobalId(reader.ulid()?);
             let mut axes = Vec::new();
             for _ in 0..reader.u32()? {
-                axes.push((DimensionGlobalId(reader.global_id()?), reader.u32()?));
+                axes.push((DimensionGlobalId(reader.ulid()?), reader.u32()?));
             }
             let chunks = reader.chunks()?;
             measures.push(MeasureEntry {
@@ -366,7 +366,7 @@ impl Reader {
         Ok(self.take(8)?.get_u64_le())
     }
 
-    fn global_id(&mut self) -> Result<Ulid, SnapshotError> {
+    fn ulid(&mut self) -> Result<Ulid, SnapshotError> {
         Ok(Ulid(self.take(16)?.get_u128_le()))
     }
 

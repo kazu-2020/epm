@@ -40,7 +40,7 @@ pub fn generate(configuration: &Configuration) -> UncheckedWorkspace {
     let mut generator = Generator {
         configuration,
         random: StdRng::seed_from_u64(configuration.seed),
-        last_global_id: 0,
+        last_ulid: 0,
     };
     let mut dimensions = Vec::with_capacity(configuration.dimension_count);
     for index in 0..configuration.dimension_count {
@@ -61,13 +61,13 @@ pub fn generate(configuration: &Configuration) -> UncheckedWorkspace {
 struct Generator<'c> {
     configuration: &'c Configuration,
     random: StdRng,
-    last_global_id: u128,
+    last_ulid: u128,
 }
 
 impl Generator<'_> {
-    fn global_id(&mut self) -> Ulid {
-        self.last_global_id += 1;
-        Ulid(self.last_global_id)
+    fn ulid(&mut self) -> Ulid {
+        self.last_ulid += 1;
+        Ulid(self.last_ulid)
     }
 
     fn skewed(&mut self, end: u32) -> u32 {
@@ -85,7 +85,7 @@ impl Generator<'_> {
     }
 
     fn dimension(&mut self, index: usize, earlier: &[Dimension]) -> Dimension {
-        let global_id = DimensionGlobalId(self.global_id());
+        let global_id = DimensionGlobalId(self.ulid());
         let member_count = self
             .random
             .random_range(1..=self.configuration.members_per_dimension);
@@ -95,7 +95,7 @@ impl Generator<'_> {
         let natural_key_global_id = natural_key.global_id;
         let attributes: Vec<AttributeDefinition> = std::iter::once(natural_key)
             .chain(parent.map(|parent| AttributeDefinition {
-                global_id: AttributeGlobalId(self.global_id()),
+                global_id: AttributeGlobalId(self.ulid()),
                 name: "親".into(),
                 kind: AttributeKind::Reference(parent.global_id()),
             }))
@@ -113,10 +113,9 @@ impl Generator<'_> {
             attributes,
         )
         .expect("generated attributes have unique names and ULIDs");
-        let global_ids = FixedSizeBinaryArray::try_from_iter(
-            (0..member_count).map(|_| self.global_id().to_bytes()),
-        )
-        .expect("every member ULID is 16 bytes");
+        let global_ids =
+            FixedSizeBinaryArray::try_from_iter((0..member_count).map(|_| self.ulid().to_bytes()))
+                .expect("every member ULID is 16 bytes");
         let natural_keys =
             StringArray::from_iter_values((0..member_count).map(|member| format!("m{member}")));
         let mut columns: Vec<ArrayRef> = vec![Arc::new(global_ids), Arc::new(natural_keys)];
@@ -134,7 +133,7 @@ impl Generator<'_> {
 
     fn input(&mut self, index: usize, dimensions: &[Dimension]) -> Measure {
         let definition = MeasureDefinition {
-            global_id: MeasureGlobalId(self.global_id()),
+            global_id: MeasureGlobalId(self.ulid()),
             name: format!("入力{index}"),
             axes: self.axes(dimensions),
         };
