@@ -89,7 +89,6 @@ module placement {
     claimOn(app, nodeOf(server))
   }
 
-  // The replica follows the primary with a lag, so a failover returns the row to an earlier state.
   action replicate: bool = all {
     placementGuards.maxFailovers > 0,
     row' = { ...row, replica: { epoch: grantedEpoch, node: row.node, serving: serving } },
@@ -451,7 +450,6 @@ module placement_unrouted_write {
       .expect(served.epoch == 1 and served.mustSee == Set("r1", "r2") and not(readSeesAcknowledgedAtLookup))
 }
 
-// The claim of epoch 1 is lost in a failover, so epoch 1 is claimed two times.
 module placement_failover {
   import placement_design.*
   import seqlog_design.* from "./seqlog"
