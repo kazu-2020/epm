@@ -10,10 +10,10 @@ use formula::{
 fn render(expression: &ResolvedExpression) -> String {
     match &expression.kind {
         ResolvedExpressionKind::Number(value) => value.to_string(),
-        ResolvedExpressionKind::Measure { ulid, axes } => {
+        ResolvedExpressionKind::Measure { global_id, axes } => {
             let measure = common::measures()
                 .into_iter()
-                .find(|measure| measure.ulid == *ulid)
+                .find(|measure| measure.global_id == *global_id)
                 .expect("resolution points at a fixture measure");
             let axes: Vec<_> = axes.iter().copied().map(common::dimension_name).collect();
             format!("'{}'{{{}}}", measure.name, axes.join(","))
@@ -64,7 +64,7 @@ fn render_axis(axis: &ResolvedAxis) -> String {
             let attribute = common::dimensions()
                 .into_iter()
                 .flat_map(|dimension| dimension.attributes().to_vec())
-                .find(|candidate| candidate.ulid == attribute)
+                .find(|candidate| candidate.global_id == attribute)
                 .expect("resolution points at a fixture attribute");
             format!(
                 "'{}'.'{}'->'{}'",

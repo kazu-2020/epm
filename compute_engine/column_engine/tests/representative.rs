@@ -82,7 +82,7 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
     for (index, text) in extra_formulas.iter().enumerate() {
         workspace.formulas.push(Formula {
             result: MeasureDefinition {
-                ulid: MeasureGlobalId(Ulid(300 + index as u128)),
+                global_id: MeasureGlobalId(Ulid(300 + index as u128)),
                 name: text.to_string(),
                 axes: sales_axes.clone(),
             },

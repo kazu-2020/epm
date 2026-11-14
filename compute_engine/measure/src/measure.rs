@@ -156,8 +156,8 @@ impl Measure {
         &self.definition
     }
 
-    pub fn ulid(&self) -> MeasureGlobalId {
-        self.definition.ulid
+    pub fn global_id(&self) -> MeasureGlobalId {
+        self.definition.global_id
     }
 
     pub fn packing(&self) -> &CoordinatePacking {
@@ -247,7 +247,7 @@ impl Measure {
 
     pub fn delta(&self) -> Delta {
         Delta {
-            measure: self.definition.ulid,
+            measure: self.definition.global_id,
             axes: self.axes.clone(),
             packed_coordinates: Vec::new(),
             changes: Vec::new(),
@@ -278,7 +278,7 @@ impl Measure {
 
     pub fn apply(&self, delta: impl Into<Arc<Delta>>) -> Result<Measure, MeasureError> {
         let mut delta = delta.into();
-        if delta.measure != self.definition.ulid {
+        if delta.measure != self.definition.global_id {
             return Err(MeasureError::ForeignDelta(delta.measure));
         }
         if delta.axes != self.axes {

@@ -16,7 +16,7 @@ fn oracle_matches_every_hand_computed_case() {
             cells = oracle
                 .evaluate(
                     &fixture.check(source, result),
-                    fixture.definition(result).ulid,
+                    fixture.definition(result).global_id,
                 )
                 .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         }

@@ -31,7 +31,7 @@ pub struct Manifest {
 
 #[derive(Debug, PartialEq)]
 struct MeasureEntry {
-    ulid: MeasureGlobalId,
+    global_id: MeasureGlobalId,
     axes: Vec<(DimensionGlobalId, u32)>,
     chunks: Vec<Chunk>,
 }
@@ -100,12 +100,12 @@ fn encode_in_chunks(
             let (chunk, bytes) = compress(packed_coordinates.len(), &out);
             chunks.push(chunk);
             objects.push(Object {
-                path: measure_path(compact.ulid(), index),
+                path: measure_path(compact.global_id(), index),
                 bytes,
             });
         }
         measures.push(MeasureEntry {
-            ulid: compact.ulid(),
+            global_id: compact.global_id(),
             axes: compact.axis_member_counts().collect(),
             chunks,
         });
@@ -132,13 +132,17 @@ impl Manifest {
         let request_chunks = reader.chunks()?;
         let mut measures = Vec::new();
         for _ in 0..reader.u32()? {
-            let ulid = MeasureGlobalId(reader.ulid()?);
+            let global_id = MeasureGlobalId(reader.ulid()?);
             let mut axes = Vec::new();
             for _ in 0..reader.u32()? {
                 axes.push((DimensionGlobalId(reader.ulid()?), reader.u32()?));
             }
             let chunks = reader.chunks()?;
-            measures.push(MeasureEntry { ulid, axes, chunks });
+            measures.push(MeasureEntry {
+                global_id,
+                axes,
+                chunks,
+            });
         }
         if reader.rest.has_remaining() {
             return Err(SnapshotError::TrailingBytes);
@@ -153,7 +157,7 @@ impl Manifest {
     pub fn paths(&self) -> Vec<String> {
         let requests = (0..self.request_chunks.len()).map(request_path);
         let measures = self.measures.iter().flat_map(|measure| {
-            (0..measure.chunks.len()).map(|index| measure_path(measure.ulid, index))
+            (0..measure.chunks.len()).map(|index| measure_path(measure.global_id, index))
         });
         requests.chain(measures).collect()
     }
@@ -186,9 +190,9 @@ impl Manifest {
         for entry in &self.measures {
             let definition = definitions
                 .iter()
-                .find(|definition| definition.ulid == entry.ulid)
+                .find(|definition| definition.global_id == entry.global_id)
                 .filter(|definition| axes(definition, dimensions).as_ref() == Some(&entry.axes))
-                .ok_or(SnapshotError::Definitions(entry.ulid))?;
+                .ok_or(SnapshotError::Definitions(entry.global_id))?;
             let mut packed_coordinates = Vec::new();
             let mut values = Vec::new();
             for chunk in &entry.chunks {
@@ -206,17 +210,17 @@ impl Manifest {
                 values.into(),
                 dimensions,
             )
-            .map_err(|error| SnapshotError::Measure(entry.ulid, error))?;
+            .map_err(|error| SnapshotError::Measure(entry.global_id, error))?;
             inputs.push(measure);
         }
         if let Some(unmatched) = definitions.iter().find(|definition| {
             self.measures
                 .iter()
-                .filter(|entry| entry.ulid == definition.ulid)
+                .filter(|entry| entry.global_id == definition.global_id)
                 .count()
                 != 1
         }) {
-            return Err(SnapshotError::Definitions(unmatched.ulid));
+            return Err(SnapshotError::Definitions(unmatched.global_id));
         }
         Ok(Snapshot {
             start: Start {
@@ -235,7 +239,7 @@ impl Manifest {
         put_chunks(&mut out, &self.request_chunks);
         out.put_u32_le(count(self.measures.len()));
         for measure in &self.measures {
-            out.put_u128_le(measure.ulid.0.0);
+            out.put_u128_le(measure.global_id.0.0);
             out.put_u32_le(count(measure.axes.len()));
             for (axis, member_count) in &measure.axes {
                 out.put_u128_le(axis.0.0);
@@ -257,7 +261,7 @@ fn axes(
         .map(|&axis| {
             dimensions
                 .iter()
-                .find(|dimension| dimension.ulid() == axis)
+                .find(|dimension| dimension.global_id() == axis)
                 .copied()
         })
         .collect::<Option<Vec<&Dimension>>>()?;
@@ -266,7 +270,7 @@ fn axes(
     Some(
         found
             .iter()
-            .map(|dimension| (dimension.ulid(), dimension.len()))
+            .map(|dimension| (dimension.global_id(), dimension.len()))
             .collect(),
     )
 }
@@ -532,8 +536,8 @@ mod tests {
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let (objects, manifest) = encode(&snapshot(&workspace));
         let mut fewer = definitions(&workspace);
-        let missing = fewer.pop().expect("an input").ulid;
-        let first = fewer[0].ulid;
+        let missing = fewer.pop().expect("an input").global_id;
+        let first = fewer[0].global_id;
         assert_eq!(
             read_back(manifest.clone(), objects, &fewer, &dimensions).err(),
             Some(SnapshotError::Definitions(missing)),
@@ -633,7 +637,7 @@ mod tests {
         let manifest = Manifest::decode(manifest).expect("valid");
         let mut expected = vec!["requests/000000".to_owned()];
         for input in &workspace.inputs {
-            expected.push(format!("{}/000000", input.ulid().0));
+            expected.push(format!("{}/000000", input.global_id().0));
         }
         assert_eq!(manifest.paths(), expected);
         assert_eq!(objects.len(), expected.len());
@@ -646,14 +650,14 @@ mod tests {
                     workspace
                         .dimensions
                         .iter()
-                        .find(|dimension| dimension.ulid() == axis)
+                        .find(|dimension| dimension.global_id() == axis)
                         .expect("a dimension")
                 })
                 .collect();
             axes.sort_by_key(|dimension| dimension.packing_order());
             let member_counts: Vec<_> = axes
                 .iter()
-                .map(|dimension| (dimension.ulid(), dimension.len()))
+                .map(|dimension| (dimension.global_id(), dimension.len()))
                 .collect();
             assert_eq!(entry.axes, member_counts);
         }
@@ -664,7 +668,7 @@ mod tests {
         let workspace = workspace();
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let mut fewer = snapshot(&workspace);
-        let dropped = fewer.inputs.pop().expect("an input").ulid();
+        let dropped = fewer.inputs.pop().expect("an input").global_id();
         let (objects, manifest) = encode(&fewer);
         assert_eq!(
             read_back(manifest, objects, &definitions(&workspace), &dimensions).err(),
@@ -703,12 +707,12 @@ mod tests {
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let mut doubled = snapshot(&workspace);
         let first = doubled.inputs[0].clone();
-        let ulid = first.ulid();
+        let global_id = first.global_id();
         doubled.inputs.push(first);
         let (objects, manifest) = encode(&doubled);
         assert_eq!(
             read_back(manifest, objects, &definitions(&workspace), &dimensions).err(),
-            Some(SnapshotError::Definitions(ulid))
+            Some(SnapshotError::Definitions(global_id))
         );
     }
 

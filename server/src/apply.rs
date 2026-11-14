@@ -257,7 +257,7 @@ mod tests {
     fn edit(sequence: u64, slot: u64, engine: &Engine) -> (Slot, Commit) {
         let input = &engine.measures()[0];
         let edit = crate::Edit {
-            measure: input.ulid(),
+            measure: input.global_id(),
             coordinate: vec![dimension::MemberIndex(0); input.definition().axes.len()],
             value: Some(sequence as f64),
         };

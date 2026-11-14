@@ -23,11 +23,11 @@ impl Oracle {
         for dimension in dimensions {
             connection.execute_batch(&format!(
                 "CREATE TABLE {} AS SELECT range::UINTEGER AS member FROM range({})",
-                member_table(dimension.ulid()),
+                member_table(dimension.global_id()),
                 dimension.len()
             ))?;
             for attribute in dimension.reference_attributes() {
-                let table = attribute_table(attribute.ulid());
+                let table = attribute_table(attribute.global_id());
                 connection.execute_batch(&format!(
                     "CREATE TABLE {table} (member UINTEGER NOT NULL, target UINTEGER)"
                 ))?;
@@ -41,7 +41,7 @@ impl Oracle {
         }
         for measure in measures {
             let definition = measure.definition();
-            let table = measure_table(definition.ulid);
+            let table = measure_table(definition.global_id);
             let mut columns: Vec<String> = definition
                 .axes
                 .iter()
@@ -57,7 +57,7 @@ impl Oracle {
             connection,
             packing_orders: dimensions
                 .iter()
-                .map(|dimension| (dimension.ulid(), dimension.packing_order()))
+                .map(|dimension| (dimension.global_id(), dimension.packing_order()))
                 .collect(),
         })
     }
@@ -111,11 +111,15 @@ fn query(node: &CheckedNode, packing_orders: &PackingOrders) -> Query {
             sql: format!("SELECT CAST('{value:?}' AS DOUBLE) AS value"),
             axes: BTreeSet::new(),
         },
-        CheckedNode::Measure { ulid, axes } => {
+        CheckedNode::Measure { global_id, axes } => {
             let mut items: Vec<String> = axes.iter().map(|&axis| column(axis)).collect();
             items.push("value".into());
             Query {
-                sql: format!("SELECT {} FROM {}", items.join(", "), measure_table(*ulid)),
+                sql: format!(
+                    "SELECT {} FROM {}",
+                    items.join(", "),
+                    measure_table(*global_id)
+                ),
                 axes: axes.iter().copied().collect(),
             }
         }

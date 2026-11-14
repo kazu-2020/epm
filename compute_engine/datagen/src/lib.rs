@@ -77,30 +77,31 @@ impl Generator<'_> {
     }
 
     fn axes(&mut self, dimensions: &[Dimension]) -> Vec<DimensionGlobalId> {
-        let mut axes: Vec<DimensionGlobalId> = dimensions.iter().map(Dimension::ulid).collect();
+        let mut axes: Vec<DimensionGlobalId> =
+            dimensions.iter().map(Dimension::global_id).collect();
         axes.shuffle(&mut self.random);
         axes.truncate(self.random.random_range(1..=axes.len()));
         axes
     }
 
     fn dimension(&mut self, index: usize, earlier: &[Dimension]) -> Dimension {
-        let ulid = DimensionGlobalId(self.ulid());
+        let global_id = DimensionGlobalId(self.ulid());
         let member_count = self
             .random
             .random_range(1..=self.configuration.members_per_dimension);
         let parent = (!earlier.is_empty() && self.random.random_bool(0.75))
             .then(|| &earlier[self.random.random_range(0..earlier.len())]);
-        let natural_key = natural_key_attribute(ulid);
-        let natural_key_ulid = natural_key.ulid;
+        let natural_key = natural_key_attribute(global_id);
+        let natural_key_global_id = natural_key.global_id;
         let attributes: Vec<AttributeDefinition> = std::iter::once(natural_key)
             .chain(parent.map(|parent| AttributeDefinition {
-                ulid: AttributeGlobalId(self.ulid()),
+                global_id: AttributeGlobalId(self.ulid()),
                 name: "親".into(),
-                kind: AttributeKind::Reference(parent.ulid()),
+                kind: AttributeKind::Reference(parent.global_id()),
             }))
             .collect();
         let definition = DimensionDefinition::try_new(
-            ulid,
+            global_id,
             format!("D{index}"),
             // Not the ULID order: the last dimensions lead the packed coordinate, so the tests meet packed coordinates in the other order.
             match self.configuration.dimension_count - index {
@@ -108,16 +109,16 @@ impl Generator<'_> {
                 2 => DimensionKind::Version,
                 _ => DimensionKind::Ordinary,
             },
-            natural_key_ulid,
+            natural_key_global_id,
             attributes,
         )
         .expect("generated attributes have unique names and ULIDs");
-        let ulids =
+        let global_ids =
             FixedSizeBinaryArray::try_from_iter((0..member_count).map(|_| self.ulid().to_bytes()))
                 .expect("every member ULID is 16 bytes");
         let natural_keys =
             StringArray::from_iter_values((0..member_count).map(|member| format!("m{member}")));
-        let mut columns: Vec<ArrayRef> = vec![Arc::new(ulids), Arc::new(natural_keys)];
+        let mut columns: Vec<ArrayRef> = vec![Arc::new(global_ids), Arc::new(natural_keys)];
         if let Some(parent) = parent {
             let targets: UInt32Array = (0..member_count)
                 .map(|_| (!self.random.random_bool(0.1)).then(|| self.skewed(parent.len())))
@@ -132,7 +133,7 @@ impl Generator<'_> {
 
     fn input(&mut self, index: usize, dimensions: &[Dimension]) -> Measure {
         let definition = MeasureDefinition {
-            ulid: MeasureGlobalId(self.ulid()),
+            global_id: MeasureGlobalId(self.ulid()),
             name: format!("入力{index}"),
             axes: self.axes(dimensions),
         };
@@ -171,17 +172,17 @@ impl Generator<'_> {
     }
 }
 
-fn dimension(dimensions: &[Dimension], ulid: DimensionGlobalId) -> &Dimension {
+fn dimension(dimensions: &[Dimension], global_id: DimensionGlobalId) -> &Dimension {
     dimensions
         .iter()
-        .find(|dimension| dimension.ulid() == ulid)
+        .find(|dimension| dimension.global_id() == global_id)
         .expect("generated axes are generated dimensions")
 }
 
 // Not a random ULID: drawing one more would change every model that an existing seed generates.
 pub(crate) fn natural_key_attribute(dimension: DimensionGlobalId) -> AttributeDefinition {
     AttributeDefinition {
-        ulid: AttributeGlobalId(dimension.0),
+        global_id: AttributeGlobalId(dimension.0),
         name: "ID".into(),
         kind: AttributeKind::Text,
     }

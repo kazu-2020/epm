@@ -32,7 +32,7 @@ fn app(settings: Settings) -> App {
     let (coordinate, quantity) = engine
         .measures()
         .iter()
-        .find(|measure| measure.ulid() == QUANTITY)
+        .find(|measure| measure.global_id() == QUANTITY)
         .and_then(|quantity| quantity.cells().next())
         .expect("the seed has a quantity");
     let (handle, assignee) = server::start(
@@ -189,14 +189,14 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
 
     let mut no_value = edit("r2", QUANTITY, &app.coordinate, Some(1.0));
     no_value.as_object_mut().expect("an object").remove("value");
-    let mut bad_ulid = edit("r3", QUANTITY, &app.coordinate, Some(1.0));
-    bad_ulid["measure"] = json!("not a ULID");
+    let mut bad_global_id = edit("r3", QUANTITY, &app.coordinate, Some(1.0));
+    bad_global_id["measure"] = json!("not a ULID");
     let mut unknown_field = edit("r4", QUANTITY, &app.coordinate, Some(1.0));
     unknown_field["note"] = json!("x");
     let long_request_id = "r".repeat(129);
     for body in [
         no_value,
-        bad_ulid,
+        bad_global_id,
         unknown_field,
         edit("", QUANTITY, &app.coordinate, Some(1.0)),
         edit(&long_request_id, QUANTITY, &app.coordinate, Some(1.0)),
@@ -286,10 +286,10 @@ async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions()
     let (status, definitions) = call(&app, "ListDefinitions", json!({})).await;
     assert_eq!(status, StatusCode::OK);
     let measures = definitions["measures"].as_array().expect("measures");
-    let kind = |ulid: MeasureGlobalId| {
+    let kind = |global_id: MeasureGlobalId| {
         measures
             .iter()
-            .find(|measure| measure["ulid"] == ulid.0.to_string())
+            .find(|measure| measure["ulid"] == global_id.0.to_string())
             .map(|measure| measure["kind"].clone())
     };
     assert_eq!(kind(QUANTITY), Some(json!("input")));

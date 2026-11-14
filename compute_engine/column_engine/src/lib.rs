@@ -49,12 +49,12 @@ pub fn edit(
 
 fn apply(
     measures: &mut [Measure],
-    ulid: MeasureGlobalId,
+    global_id: MeasureGlobalId,
     mut delta: Delta,
     changed: &mut HashMap<MeasureGlobalId, Region>,
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {
-    let index = position(measures, ulid)?;
+    let index = position(measures, global_id)?;
     let axes = measures[index].axes_in_packing_order();
     if let Some(mut region) =
         Region::of_packed(axes, measures[index].packing(), delta.packed_coordinates())
@@ -66,11 +66,11 @@ fn apply(
                 region = region.without(axis);
             }
         }
-        let region = match changed.remove(&ulid) {
+        let region = match changed.remove(&global_id) {
             Some(earlier) => earlier.union(&region),
             None => region,
         };
-        changed.insert(ulid, region);
+        changed.insert(global_id, region);
     }
     measures[index] = measures[index]
         .apply(delta)
@@ -78,11 +78,11 @@ fn apply(
     Ok(())
 }
 
-fn position(measures: &[Measure], ulid: MeasureGlobalId) -> Result<usize, EvaluateError> {
+fn position(measures: &[Measure], global_id: MeasureGlobalId) -> Result<usize, EvaluateError> {
     measures
         .iter()
-        .position(|measure| measure.ulid() == ulid)
-        .ok_or(EvaluateError::MissingMeasure(ulid))
+        .position(|measure| measure.global_id() == global_id)
+        .ok_or(EvaluateError::MissingMeasure(global_id))
 }
 
 fn changed_region(
@@ -118,7 +118,7 @@ fn evaluate_in(
     region: &Region,
 ) -> Result<Columns, EvaluateError> {
     if expression.result_axes() != result.axes {
-        return Err(EvaluateError::ResultAxesChanged(result.ulid));
+        return Err(EvaluateError::ResultAxesChanged(result.global_id));
     }
     for &axis in &result.axes {
         find_dimension(dimensions, axis)?;
@@ -152,7 +152,7 @@ fn changed_in(
 ) -> Result<Option<Region>, EvaluateError> {
     Ok(match node {
         CheckedNode::Number(_) => None,
-        CheckedNode::Measure { ulid, .. } => changed.get(ulid).cloned(),
+        CheckedNode::Measure { global_id, .. } => changed.get(global_id).cloned(),
         CheckedNode::Terms(_) | CheckedNode::Product { .. } => {
             let mut union: Option<Region> = None;
             for operand in operands(node) {
@@ -215,7 +215,7 @@ fn changed_in(
 
 fn check_packing(measure: &Measure, dimensions: &[&Dimension]) -> Result<(), EvaluateError> {
     if *measure.packing() != packing_of(dimensions, measure.axes_in_packing_order())? {
-        return Err(EvaluateError::MeasurePackingChanged(measure.ulid()));
+        return Err(EvaluateError::MeasurePackingChanged(measure.global_id()));
     }
     Ok(())
 }
@@ -227,7 +227,7 @@ fn find_attribute<'d>(
 ) -> Result<ReferenceAttribute<'d>, EvaluateError> {
     find_dimension(dimensions, dimension)?
         .reference_attributes()
-        .find(|candidate| candidate.ulid() == attribute)
+        .find(|candidate| candidate.global_id() == attribute)
         .ok_or(EvaluateError::MissingAttribute(attribute))
 }
 
@@ -337,14 +337,14 @@ impl<'a, 'e> Evaluator<'a, 'e> {
     fn compute(&self, node: &'e CheckedNode, region: &Region) -> Result<Columns, EvaluateError> {
         match node {
             CheckedNode::Number(value) => Ok(Columns::number(*value)),
-            CheckedNode::Measure { ulid, axes } => {
+            CheckedNode::Measure { global_id, axes } => {
                 let measure = self
                     .measures
                     .iter()
-                    .find(|measure| measure.ulid() == *ulid)
-                    .ok_or(EvaluateError::MissingMeasure(*ulid))?;
+                    .find(|measure| measure.global_id() == *global_id)
+                    .ok_or(EvaluateError::MissingMeasure(*global_id))?;
                 if measure.definition().axes != *axes {
-                    return Err(EvaluateError::MeasureAxesChanged(*ulid));
+                    return Err(EvaluateError::MeasureAxesChanged(*global_id));
                 }
                 check_packing(measure, self.dimensions)?;
                 if axes.iter().any(|&axis| region.members(axis).is_some()) {

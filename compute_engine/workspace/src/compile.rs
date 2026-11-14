@@ -88,8 +88,8 @@ pub fn compile(
 fn collect_sources(node: &CheckedNode, sources: &mut BTreeSet<MeasureGlobalId>) {
     match node {
         CheckedNode::Number(_) => {}
-        CheckedNode::Measure { ulid, .. } => {
-            sources.insert(*ulid);
+        CheckedNode::Measure { global_id, .. } => {
+            sources.insert(*global_id);
         }
         CheckedNode::Terms(terms) => {
             for term in terms {
@@ -160,7 +160,7 @@ fn fits(
         .map(|&axis| {
             dimensions
                 .iter()
-                .find(|dimension| dimension.ulid() == axis)
+                .find(|dimension| dimension.global_id() == axis)
                 .map(|dimension| dimension.len())
                 .ok_or(FormulaError::MissingDimension(axis))
         })
