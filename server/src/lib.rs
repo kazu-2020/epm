@@ -8,12 +8,11 @@ pub mod snapshot;
 
 use std::ops::RangeInclusive;
 
-use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence, Slot, Start};
 use dimension::Dimension;
 use formula::EvaluateError;
 use measure::{CoordinateError, Measure, MeasureGlobalId};
-use workspace::{CalculateError, Calculated, EditCheck, EditError, Edits, Workspace};
+use workspace::{CalculateError, Calculated, EditCheck, Edits, Workspace};
 
 pub use crate::edit::DecodeError;
 pub use crate::owner::{Calculation, Handle, Lag, ReadError, Settings, SubmitError, start};
@@ -29,14 +28,8 @@ pub enum Exit {
 #[derive(Clone, Debug)]
 pub struct Engine {
     calculated: Calculated,
-    definitions: Definitions,
     next: Sequence,
     slot: Slot,
-}
-
-#[derive(Clone, Debug)]
-pub struct Definitions {
-    inputs: EditCheck,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -79,9 +72,6 @@ impl Engine {
     pub fn resume(workspace: Workspace, start: &Start) -> Result<Engine, CalculateError> {
         let calculated = Calculated::new(workspace)?;
         Ok(Engine {
-            definitions: Definitions {
-                inputs: calculated.edit_check().clone(),
-            },
             calculated,
             next: Sequence(u64::try_from(start.request_ids.len()).expect("a count fits in u64")),
             slot: start.slot,
@@ -92,8 +82,8 @@ impl Engine {
         self.calculated.dimensions()
     }
 
-    pub fn definitions(&self) -> &Definitions {
-        &self.definitions
+    pub fn edit_check(&self) -> &EditCheck {
+        self.calculated.edit_check()
     }
 
     pub fn apply_batch(&self, commits: &[(Slot, Commit)]) -> Result<Engine, EngineAlarm> {
@@ -110,8 +100,7 @@ impl Engine {
                     found: sequence,
                 });
             }
-            self.definitions
-                .add(&commit.payload, &mut edits)
+            edit::add(self.edit_check(), &commit.payload, &mut edits)
                 .map_err(|invalid| EngineAlarm::Invalid { sequence, invalid })?;
             next = sequence.next();
         }
@@ -124,7 +113,6 @@ impl Engine {
             })?;
         Ok(Engine {
             calculated,
-            definitions: self.definitions.clone(),
             next,
             slot: *slot,
         })
@@ -152,23 +140,5 @@ impl Engine {
             },
             inputs: self.calculated.inputs().to_vec(),
         }
-    }
-}
-
-impl Definitions {
-    pub fn is_input(&self, measure: MeasureGlobalId) -> bool {
-        self.inputs.is_input(measure)
-    }
-
-    pub fn check(&self, payload: &Bytes) -> Result<(), Invalid> {
-        self.add(payload, &mut Edits::default())
-    }
-
-    fn add(&self, payload: &Bytes, edits: &mut Edits) -> Result<(), Invalid> {
-        let edit = edit::decode(payload.clone()).map_err(Invalid::Undecodable)?;
-        self.inputs.add(&edit, edits).map_err(|error| match error {
-            EditError::NotAnInput(measure) => Invalid::NotAnInput(measure),
-            EditError::Coordinate(error) => Invalid::Coordinate(error),
-        })
     }
 }

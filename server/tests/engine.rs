@@ -63,7 +63,7 @@ fn cells(engine: &Engine) -> Vec<Vec<(Vec<u32>, String)>> {
 }
 
 fn check(payload: &Bytes) -> Result<(), Invalid> {
-    engine().definitions().check(payload)
+    server::edit::check(engine().edit_check(), payload)
 }
 
 #[test]

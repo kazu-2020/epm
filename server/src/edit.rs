@@ -2,7 +2,9 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use dimension::MemberIndex;
 use measure::MeasureGlobalId;
 use ulid::Ulid;
-use workspace::Edit;
+use workspace::{Edit, EditCheck, EditError, Edits};
+
+use crate::Invalid;
 
 const VERSION: u8 = 1;
 const CLEAR: u8 = 0;
@@ -15,6 +17,22 @@ pub enum DecodeError {
     Tag(u8),
     NotFinite,
     TrailingBytes,
+}
+
+pub fn check(edit_check: &EditCheck, payload: &Bytes) -> Result<(), Invalid> {
+    add(edit_check, payload, &mut Edits::default())
+}
+
+pub(crate) fn add(
+    edit_check: &EditCheck,
+    payload: &Bytes,
+    edits: &mut Edits,
+) -> Result<(), Invalid> {
+    let edit = decode(payload.clone()).map_err(Invalid::Undecodable)?;
+    edit_check.add(&edit, edits).map_err(|error| match error {
+        EditError::NotAnInput(measure) => Invalid::NotAnInput(measure),
+        EditError::Coordinate(error) => Invalid::Coordinate(error),
+    })
 }
 
 pub fn encode(edit: &Edit) -> Bytes {
