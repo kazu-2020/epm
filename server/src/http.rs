@@ -157,7 +157,7 @@ async fn list_definitions(State(handle): State<Handle>) -> Json<Value> {
         .iter()
         .map(|measure| {
             let definition = measure.definition();
-            let kind = if engine.definitions().is_input(definition.ulid) {
+            let kind = if engine.edit_check().is_input(definition.ulid) {
                 "input"
             } else {
                 "calculated"

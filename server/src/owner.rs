@@ -12,10 +12,12 @@ use measure::{CoordinateError, MeasureGlobalId};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use tokio::sync::{mpsc, oneshot, watch};
+use workspace::EditCheck;
 
 use crate::apply::{Applier, Effect, Event};
+use crate::edit;
 use crate::snapshot::{self, Snapshot};
-use crate::{Definitions, Edit, Engine, EngineAlarm, Exit, Rejection};
+use crate::{Edit, Engine, EngineAlarm, Exit, Rejection};
 
 const WAITING_REQUESTS: usize = 64;
 
@@ -77,7 +79,7 @@ pub struct Handle {
 }
 
 struct Admission {
-    definitions: Definitions,
+    edit_check: EditCheck,
     engine_receiver: watch::Receiver<Arc<Engine>>,
     accepted_count: u64,
     busy_after: u64,
@@ -110,12 +112,12 @@ pub fn start(
     let (commit_sender, commit_receiver) = mpsc::unbounded_channel();
     let engine_next = engine.next.0;
     let committed_count = Arc::new(AtomicU64::new(engine_next));
-    let definitions = engine.definitions.clone();
+    let edit_check = engine.edit_check().clone();
     let engine = Arc::new(engine);
     let (engine_sender, engine_receiver) = watch::channel(Arc::clone(&engine));
     let (readiness_sender, readiness_receiver) = watch::channel(false);
     let admission = Admission {
-        definitions,
+        edit_check,
         engine_receiver: engine_receiver.clone(),
         accepted_count: engine_next,
         busy_after: settings.busy_after,
@@ -400,9 +402,7 @@ impl Admit for Admission {
             return Err(Rejection::Busy { behind });
         }
         if !cfg!(feature = "no_admission_check") {
-            self.definitions
-                .check(payload)
-                .map_err(Rejection::Invalid)?;
+            edit::check(&self.edit_check, payload).map_err(Rejection::Invalid)?;
         }
         self.accepted_count += 1;
         Ok(())
