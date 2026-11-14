@@ -13,9 +13,9 @@ ROUNDS = 50
 LOOKUPS = 2000
 WORKSPACE = "01KA0000000000000000000000"
 
-CONDITIONAL = "UPDATE placement SET epoch = epoch + 1 WHERE workspace_global_id = %s AND epoch = %s RETURNING epoch"
-BLIND = "UPDATE placement SET epoch = %s + 1 WHERE workspace_global_id = %s RETURNING epoch"
-LOOKUP = "SELECT epoch FROM placement WHERE workspace_global_id = %s"
+CONDITIONAL = "UPDATE placement_race SET epoch = epoch + 1 WHERE workspace_global_id = %s AND epoch = %s RETURNING epoch"
+BLIND = "UPDATE placement_race SET epoch = %s + 1 WHERE workspace_global_id = %s RETURNING epoch"
+LOOKUP = "SELECT epoch FROM placement_race WHERE workspace_global_id = %s"
 
 
 def connect() -> psycopg.Connection:
@@ -42,11 +42,12 @@ def race(connections: list[psycopg.Connection], claim) -> collections.Counter[in
 def main() -> None:
     connections = [connect() for _ in range(WRITERS)]
     control = connections[0]
-    control.execute("CREATE TABLE IF NOT EXISTS placement (workspace_global_id text PRIMARY KEY, epoch bigint NOT NULL)")
+    control.execute("DROP TABLE IF EXISTS placement_race")
+    control.execute("CREATE TABLE placement_race (workspace_global_id text PRIMARY KEY, epoch bigint NOT NULL)")
 
     def reset() -> None:
         control.execute(
-            "INSERT INTO placement VALUES (%s, 0) ON CONFLICT (workspace_global_id) DO UPDATE SET epoch = 0", (WORKSPACE,)
+            "INSERT INTO placement_race VALUES (%s, 0) ON CONFLICT (workspace_global_id) DO UPDATE SET epoch = 0", (WORKSPACE,)
         )
 
     reset()
@@ -68,6 +69,8 @@ def main() -> None:
         times.append((time.perf_counter() - start) * 1000)
     cuts = statistics.quantiles(times, n=100)
     print(f"lookup over one connection: p50 {cuts[49]:.2f} ms, p99 {cuts[98]:.2f} ms ({LOOKUPS} lookups)")
+    control.execute("DROP TABLE placement_race")
 
 
-main()
+if __name__ == "__main__":
+    main()
