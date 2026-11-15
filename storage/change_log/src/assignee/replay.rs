@@ -14,6 +14,7 @@ struct Write {
     server: String,
     slot: u64,
     epoch: u64,
+    process: u64,
     requests: Vec<String>,
     attempt: u32,
 }
@@ -33,6 +34,7 @@ struct Pending {
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 struct Stored {
     epoch: u64,
+    process: u64,
     requests: Vec<String>,
 }
 
@@ -112,7 +114,7 @@ impl Server {
     }
 
     fn of(assignee: &Assignee<AdmitAll>) -> Server {
-        let epoch = assignee.epoch.0;
+        let epoch = assignee.id.epoch.0;
         match &assignee.phase {
             Phase::Loading { .. } => Server::empty(ModelPhase::Loading, epoch),
             Phase::Fencing { view, fence, .. } => Server {
@@ -147,7 +149,8 @@ fn pending(write: &super::Write) -> (u64, Vec<String>, bool) {
     (
         write.slot.0,
         write
-            .commits
+            .segment
+            .commits()
             .iter()
             .map(|commit| name(&commit.request_id))
             .collect(),
@@ -188,6 +191,7 @@ impl State<Replay> for ModelState {
                             slot.0,
                             Stored {
                                 epoch: segment.epoch.0,
+                                process: process(segment),
                                 requests: names(segment),
                             },
                         )
@@ -214,9 +218,18 @@ impl State<Replay> for ModelState {
     }
 }
 
+fn process(segment: &Segment) -> u64 {
+    match segment.content {
+        Content::Fence(process) => {
+            u64::try_from(process.0).expect("the model numbers processes in u64")
+        }
+        Content::Commits(_) => 0,
+    }
+}
+
 fn names(segment: &Segment) -> Vec<String> {
     segment
-        .commits
+        .commits()
         .iter()
         .map(|commit| name(&commit.request_id))
         .collect()
@@ -242,7 +255,13 @@ impl Driver for Replay {
             init => *self = Replay::default(),
             grant(server: String) => {
                 self.granted_epoch += 1;
-                self.assignees.insert(server.clone(), Assignee::new(Epoch(self.granted_epoch), AdmitAll));
+                self.assignees.insert(server.clone(), Assignee::new(
+                    AssigneeId {
+                        epoch: Epoch(self.granted_epoch),
+                        process: ProcessId(u128::from(self.granted_epoch)),
+                    },
+                    AdmitAll,
+                ));
                 self.next_to_pass_on.insert(server, Sequence(0));
             },
             crash(server: String) => {
@@ -303,6 +322,7 @@ impl Replay {
                         server: server.to_string(),
                         slot: slot.0,
                         epoch: segment.epoch.0,
+                        process: process(&segment),
                         requests: names(&segment),
                         attempt,
                     };
@@ -352,7 +372,7 @@ impl Replay {
             .iter()
             .zip(0..)
             .take_while(|((slot, _), expected)| slot.0 == *expected)
-            .flat_map(|((_, segment), _)| &segment.commits)
+            .flat_map(|((_, segment), _)| segment.commits())
             .collect()
     }
 

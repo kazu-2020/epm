@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: epm
+    ports: ["127.0.0.1:55433:5432"]
+    # Not pg_isready over the unix socket: during initdb a temporary server answers there before the real one starts.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d epm"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  # The transaction mode and no prepared statements: the app server must work with the strictest pooling.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/epm
+      AUTH_TYPE: trust
+      POOL_MODE: transaction
+      MAX_PREPARED_STATEMENTS: "0"
+    ports: ["127.0.0.1:56433:5432"]

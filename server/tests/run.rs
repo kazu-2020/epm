@@ -2,7 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use change_log::{AdmitAll, Epoch, Request, RequestId, Sequence, Slot, Start, Submission, serve};
+use change_log::{
+    AdmitAll, AssigneeId, Epoch, ProcessId, Request, RequestId, Sequence, Slot, Start, Submission,
+    serve,
+};
 use datagen::representative::{self, Size};
 use dimension::MemberIndex;
 use measure::{CoordinateError, MeasureGlobalId};
@@ -42,7 +45,10 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Runnin
         settings,
         Arc::clone(store),
         WORKSPACE.to_owned(),
-        Epoch(epoch),
+        AssigneeId {
+            epoch: Epoch(epoch),
+            process: ProcessId(u128::from(epoch)),
+        },
     );
     let exit = tokio::spawn(assignee);
     Running { handle, exit }
@@ -394,7 +400,10 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_assignee() {
         serve(
             writer,
             WORKSPACE,
-            Epoch(1),
+            AssigneeId {
+                epoch: Epoch(1),
+                process: ProcessId(1),
+            },
             Start::default(),
             AdmitAll,
             submission_receiver,
@@ -496,7 +505,10 @@ async fn a_new_assignee_starts_from_the_newest_snapshot_it_can_read() {
         settings(),
         Arc::clone(&store),
         WORKSPACE.to_owned(),
-        Epoch(2),
+        AssigneeId {
+            epoch: Epoch(2),
+            process: ProcessId(2),
+        },
     );
     let b = tokio::spawn(assignee);
     assert_eq!(
@@ -541,7 +553,10 @@ fn start_from(start: Start) {
         Settings::default(),
         Arc::new(InMemory::new()),
         WORKSPACE.to_owned(),
-        Epoch(1),
+        AssigneeId {
+            epoch: Epoch(1),
+            process: ProcessId(1),
+        },
     );
 }
 

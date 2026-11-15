@@ -4,7 +4,9 @@ use std::convert::Infallible;
 
 use bytes::Bytes;
 
-use crate::segment::{self, Commit, DecodeError, Epoch, RequestId, Segment, Sequence, Slot};
+use crate::segment::{
+    self, Commit, Content, DecodeError, Epoch, ProcessId, RequestId, Segment, Sequence, Slot,
+};
 
 const MAX_IN_FLIGHT: usize = if cfg!(feature = "two_in_flight") {
     2
@@ -99,9 +101,15 @@ impl Admit for AdmitAll {
     fn replay(&mut self, _payload: &Bytes) {}
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssigneeId {
+    pub epoch: Epoch,
+    pub process: ProcessId,
+}
+
 #[derive(Debug)]
 pub struct Assignee<A> {
-    epoch: Epoch,
+    id: AssigneeId,
     admit: A,
     phase: Phase,
 }
@@ -138,7 +146,7 @@ struct View {
 #[derive(Debug)]
 struct Write {
     slot: Slot,
-    commits: Vec<Commit>,
+    segment: Segment,
     body: Bytes,
     attempt: u32,
     awaiting: Awaiting,
@@ -159,13 +167,13 @@ enum Outcome {
 }
 
 impl<A: Admit> Assignee<A> {
-    pub fn new(epoch: Epoch, admit: A) -> Assignee<A> {
-        Assignee::resume(epoch, admit, Start::default())
+    pub fn new(id: AssigneeId, admit: A) -> Assignee<A> {
+        Assignee::resume(id, admit, Start::default())
     }
 
-    pub fn resume(epoch: Epoch, admit: A, start: Start) -> Assignee<A> {
+    pub fn resume(id: AssigneeId, admit: A, start: Start) -> Assignee<A> {
         Assignee {
-            epoch,
+            id,
             admit,
             phase: Phase::Loading {
                 start,
@@ -178,13 +186,13 @@ impl<A: Admit> Assignee<A> {
     pub fn step(&mut self, event: Event) -> Vec<Effect<A::Rejection>> {
         let mut effects = Vec::new();
         let phase = std::mem::replace(&mut self.phase, Phase::Stopped);
-        self.phase = transition(self.epoch, &mut self.admit, phase, event, &mut effects);
+        self.phase = transition(self.id, &mut self.admit, phase, event, &mut effects);
         effects
     }
 }
 
 fn transition<A: Admit>(
-    epoch: Epoch,
+    id: AssigneeId,
     admit: &mut A,
     phase: Phase,
     event: Event,
@@ -192,7 +200,7 @@ fn transition<A: Admit>(
 ) -> Phase {
     match (phase, event) {
         (Phase::Loading { start, waiting }, Event::Loaded { slots }) => {
-            load(epoch, admit, start, &slots, waiting, effects)
+            load(id, admit, start, &slots, waiting, effects)
         }
         (Phase::Loading { start, mut waiting }, Event::Request(request)) => {
             waiting.push(request);
@@ -220,7 +228,7 @@ fn transition<A: Admit>(
                 waiting,
             },
             event,
-        ) if fence.answered_by(&event) => match advance(epoch, fence, event, effects) {
+        ) if fence.answered_by(&event) => match advance(fence, event, effects) {
             Outcome::Waiting(fence) => Phase::Fencing {
                 view,
                 fence,
@@ -228,8 +236,8 @@ fn transition<A: Admit>(
             },
             Outcome::Committed(fence) => ready(view, next(fence.slot), waiting, admit, effects),
             Outcome::OlderEpoch(taken, found) => {
-                view.add_older(&found.commits, taken.slot, admit, effects);
-                let fence = Write::new(epoch, next(taken.slot), Vec::new());
+                view.add_older(found.commits(), taken.slot, admit, effects);
+                let fence = Write::fence(id, next(taken.slot));
                 effects.push(fence.put());
                 Phase::Fencing {
                     view,
@@ -245,7 +253,7 @@ fn transition<A: Admit>(
             Phase::Ready(ready)
         }
         (Phase::Ready(mut ready), Event::Flush) => {
-            ready.flush(epoch, effects);
+            ready.flush(id.epoch, effects);
             Phase::Ready(ready)
         }
         (Phase::Ready(mut ready), event) => {
@@ -257,13 +265,14 @@ fn transition<A: Admit>(
                 return Phase::Ready(ready);
             };
             let write = cell.take().expect("the cell was found by its write");
-            match advance(epoch, write, event, effects) {
+            match advance(write, event, effects) {
                 Outcome::Waiting(write) => *cell = Some(write),
                 Outcome::Committed(write) => {
-                    ready.view.add(&write.commits, write.slot, effects);
-                    for commit in write.commits {
+                    let commits = write.segment.commits();
+                    ready.view.add(commits, write.slot, effects);
+                    for commit in commits {
                         effects.push(Effect::Ack {
-                            request_id: commit.request_id,
+                            request_id: commit.request_id.clone(),
                             sequence: commit.sequence,
                         });
                     }
@@ -285,7 +294,7 @@ fn transition<A: Admit>(
 }
 
 fn load<A: Admit>(
-    epoch: Epoch,
+    id: AssigneeId,
     admit: &mut A,
     start: Start,
     slots: &BTreeMap<Slot, Segment>,
@@ -293,7 +302,8 @@ fn load<A: Admit>(
     effects: &mut Vec<Effect<A::Rejection>>,
 ) -> Phase {
     let last = slots.last_key_value();
-    if !cfg!(feature = "no_epoch_check") && last.is_some_and(|(_, segment)| segment.epoch >= epoch)
+    if !cfg!(feature = "no_epoch_check")
+        && last.is_some_and(|(_, segment)| segment.epoch >= id.epoch)
     {
         return stop(effects);
     }
@@ -301,7 +311,7 @@ fn load<A: Admit>(
     if let Some((sequence, request_id)) = start.last() {
         let found = slots.get(&start.slot).is_some_and(|segment| {
             segment
-                .commits
+                .commits()
                 .iter()
                 .any(|commit| commit.sequence == sequence && commit.request_id == *request_id)
         });
@@ -318,7 +328,7 @@ fn load<A: Admit>(
     if cfg!(feature = "no_fence") {
         return ready(view, free, waiting, admit, effects);
     }
-    let fence = Write::new(epoch, free, Vec::new());
+    let fence = Write::fence(id, free);
     effects.push(fence.put());
     Phase::Fencing {
         view,
@@ -343,12 +353,12 @@ fn replay<A: Admit>(
         // Not every commit of the first slot: the start already counts the commits before its next sequence, and that slot can hold some of them.
         let skipped = if *slot == first {
             segment
-                .commits
+                .commits()
                 .partition_point(|commit| commit.sequence < view.next_sequence)
         } else {
             0
         };
-        view.add_older(&segment.commits[skipped..], *slot, admit, effects);
+        view.add_older(&segment.commits()[skipped..], *slot, admit, effects);
     }
     view
 }
@@ -389,12 +399,7 @@ fn next(slot: Slot) -> Slot {
     Slot(slot.0 + 1)
 }
 
-fn advance<R>(
-    epoch: Epoch,
-    mut write: Write,
-    event: Event,
-    effects: &mut Vec<Effect<R>>,
-) -> Outcome {
+fn advance<R>(mut write: Write, event: Event, effects: &mut Vec<Effect<R>>) -> Outcome {
     match event {
         Event::PutSucceeded { .. } => Outcome::Committed(write),
         Event::PutFailed { failure, .. } => {
@@ -416,8 +421,8 @@ fn advance<R>(
         }
         Event::ReadBack {
             found: Some(found), ..
-        } => match found.epoch.cmp(&epoch) {
-            Ordering::Equal if found.commits == write.commits => Outcome::Committed(write),
+        } => match found.epoch.cmp(&write.segment.epoch) {
+            Ordering::Equal if found == write.segment => Outcome::Committed(write),
             Ordering::Equal => Outcome::OtherContent(write),
             Ordering::Greater => Outcome::NewerEpoch,
             Ordering::Less => Outcome::OlderEpoch(write, found),
@@ -449,7 +454,7 @@ impl Ready {
                 .in_flight
                 .iter()
                 .flatten()
-                .flat_map(|write| &write.commits)
+                .flat_map(|write| write.segment.commits())
                 .any(|commit| commit.request_id == *request_id);
         if in_batch || in_put {
             return;
@@ -485,7 +490,13 @@ impl Ready {
                 payload: request.payload,
             })
             .collect();
-        let write = Write::new(epoch, self.next, commits);
+        let write = Write::new(
+            Segment {
+                epoch,
+                content: Content::Commits(commits),
+            },
+            self.next,
+        );
         effects.push(write.put());
         *cell = Some(write);
         self.next = next(self.next);
@@ -544,14 +555,24 @@ impl View {
 }
 
 impl Write {
-    fn new(epoch: Epoch, slot: Slot, commits: Vec<Commit>) -> Write {
+    fn new(segment: Segment, slot: Slot) -> Write {
         Write {
             slot,
-            body: segment::encode(epoch, &commits),
-            commits,
+            body: segment::encode(&segment),
+            segment,
             attempt: 0,
             awaiting: Awaiting::Reply,
         }
+    }
+
+    fn fence(id: AssigneeId, slot: Slot) -> Write {
+        Write::new(
+            Segment {
+                epoch: id.epoch,
+                content: Content::Fence(id.process),
+            },
+            slot,
+        )
     }
 
     fn put<R>(&self) -> Effect<R> {

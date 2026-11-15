@@ -2,13 +2,14 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use change_log::Epoch;
+use change_log::{AssigneeId, Epoch, ProcessId};
 use datagen::representative::{self, Size};
 use object_store::aws::AmazonS3Builder;
 use server::Settings;
 use server::http::Shutdown;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
+use ulid::Ulid;
 use workspace::Workspace;
 
 // shortcut: the workspace definition is fixed in code because the log does not hold it, put it in the log when users define their own.
@@ -106,7 +107,10 @@ async fn main() -> ExitCode {
         Settings::default(),
         store,
         arguments.workspace,
-        Epoch(arguments.epoch),
+        AssigneeId {
+            epoch: Epoch(arguments.epoch),
+            process: ProcessId(Ulid::generate().0),
+        },
     );
     match server::http::serve(listener, handle, assignee, shutdown, SHUTDOWN_DEADLINE).await {
         Shutdown::Drained => ExitCode::SUCCESS,

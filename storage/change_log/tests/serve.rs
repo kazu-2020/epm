@@ -7,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use change_log::{
-    Admit, AdmitAll, Commit, Epoch, Exit, Request, RequestId, Segment, Sequence, Slot, Start,
-    Submission, serve,
+    Admit, AdmitAll, AssigneeId, Commit, Epoch, Exit, ProcessId, Request, RequestId, Segment,
+    Sequence, Slot, Start, Submission, serve,
 };
 use futures_util::stream::{self, BoxStream};
 use futures_util::{StreamExt, TryStreamExt};
@@ -41,7 +41,10 @@ fn start_from(store: &Arc<dyn ObjectStore>, epoch: u64, first: Start) -> Assigne
         serve(
             store,
             WORKSPACE,
-            Epoch(epoch),
+            AssigneeId {
+                epoch: Epoch(epoch),
+                process: ProcessId(u128::from(epoch)),
+            },
             first,
             AdmitAll,
             submission_receiver,
@@ -111,7 +114,7 @@ async fn log(store: &Arc<dyn ObjectStore>) -> Vec<String> {
         let segment = Segment::decode(bytes).expect("segment");
         names.extend(
             segment
-                .commits
+                .commits()
                 .iter()
                 .map(|commit| name(&commit.request_id)),
         );
@@ -305,7 +308,10 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
         serve(
             store,
             WORKSPACE,
-            Epoch(1),
+            AssigneeId {
+                epoch: Epoch(1),
+                process: ProcessId(1),
+            },
             Start::default(),
             GoodOnly,
             submission_receiver,

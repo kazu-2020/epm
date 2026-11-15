@@ -3,7 +3,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use change_log::{AdmitAll, Alarm, Epoch, Exit, Start, serve};
+use change_log::{AdmitAll, Alarm, AssigneeId, Epoch, Exit, ProcessId, Start, serve};
 use object_store::aws::{AmazonS3Builder, S3ConditionalPut};
 use object_store::{ObjectStore, RetryConfig};
 use tokio::sync::mpsc;
@@ -114,7 +114,10 @@ async fn run(
         serve(
             store(&endpoint, conditional_put),
             "ws",
-            Epoch(1),
+            AssigneeId {
+                epoch: Epoch(1),
+                process: ProcessId(1),
+            },
             Start::default(),
             AdmitAll,
             submission_receiver,

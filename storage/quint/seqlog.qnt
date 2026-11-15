@@ -1,11 +1,11 @@
 module seqlog_design {
   type Guards = {
     ifNoneMatch: bool, readsBackUnknown: bool, deduplication: bool, inFlightDeduplication: bool, fence: bool,
-    epochCheck: bool, oneInFlight: bool, headsAfterRejection: bool,
+    epochCheck: bool, oneInFlight: bool, headsAfterRejection: bool, processCheck: bool,
   }
   pure val allGuards: Guards = {
     ifNoneMatch: true, readsBackUnknown: true, deduplication: true, inFlightDeduplication: true, fence: true,
-    epochCheck: true, oneInFlight: true, headsAfterRejection: true,
+    epochCheck: true, oneInFlight: true, headsAfterRejection: true, processCheck: true,
   }
 }
 
@@ -22,20 +22,21 @@ module seqlog {
   pure val MaxInFlight = 2
 
   // The epoch is at the start of the segment body, not in the key: the slot number alone is what two assignees fight for.
-  type Slot = { epoch: int, requests: List[str] }
-  type Write = { server: str, slot: int, epoch: int, requests: List[str], attempt: int }
+  // Not the epoch alone in a fence: after a failover of the database, two processes can get the same epoch. A data write has process 0.
+  type Slot = { epoch: int, process: int, requests: List[str] }
+  type Write = { server: str, slot: int, epoch: int, process: int, requests: List[str], attempt: int }
   type Reply = { write: Write, succeeded: bool }
   type Pending = { write: Write, unknown: bool }
   type Phase = Down | Loading | Fencing | Ready | Stopped
-  type Server = { phase: Phase, epoch: int, next: int, view: List[str], batch: List[str], pending: Set[Pending] }
+  type Server = { phase: Phase, epoch: int, process: int, next: int, view: List[str], batch: List[str], pending: Set[Pending] }
   type Store = { slots: int -> Slot, writesInFlight: Set[Write], replies: Set[Reply] }
   type Clients = { requestsInFlight: Set[{ server: str, request: str }], acknowledged: Set[str] }
 
   pure val emptyStore: Store = { slots: Map(), writesInFlight: Set(), replies: Set() }
-  pure val down: Server = { phase: Down, epoch: 0, next: 0, view: List(), batch: List(), pending: Set() }
-  pure def loading(epoch: int): Server = { ...down, phase: Loading, epoch: epoch }
+  pure val down: Server = { phase: Down, epoch: 0, process: 0, next: 0, view: List(), batch: List(), pending: Set() }
+  pure def loading(epoch: int, process: int): Server = { ...down, phase: Loading, epoch: epoch, process: process }
   pure def isFence(write: Write): bool = write.requests.length() == 0
-  pure def slotOf(write: Write): Slot = { epoch: write.epoch, requests: write.requests }
+  pure def slotOf(write: Write): Slot = { epoch: write.epoch, process: write.process, requests: write.requests }
 
   var store: Store
   var servers: str -> Server
@@ -61,7 +62,7 @@ module seqlog {
   action grant(server: str): bool = all {
     grantedEpoch < MaxEpoch,
     grantedEpoch' = grantedEpoch + 1,
-    servers' = servers.set(server, loading(grantedEpoch + 1)),
+    servers' = servers.set(server, loading(grantedEpoch + 1, grantedEpoch + 1)),
     store' = store, clients' = clients,
   }
 
@@ -80,7 +81,7 @@ module seqlog {
     val self = servers.get(server)
     val slots = store.slots
     val free = lastSlot(slots) + 1
-    val fence = { server: server, slot: free, epoch: self.epoch, requests: List(), attempt: 0 }
+    val fence = { server: server, slot: free, epoch: self.epoch, process: self.process, requests: List(), attempt: 0 }
     val loaded = { ...self, next: free + 1, view: replay(slots) }
     val stale = guards.epochCheck and lastSlot(slots) >= 0 and slots.get(lastSlot(slots)).epoch >= self.epoch
     all {
@@ -127,7 +128,7 @@ module seqlog {
 
   action flush(server: str): bool = {
     val self = servers.get(server)
-    val write = { server: server, slot: self.next, epoch: self.epoch, requests: self.batch, attempt: 0 }
+    val write = { server: server, slot: self.next, epoch: self.epoch, process: 0, requests: self.batch, attempt: 0 }
     all {
       self.phase == Ready,
       self.batch.length() > 0,
@@ -201,7 +202,7 @@ module seqlog {
     val again = { ...write, attempt: write.attempt + 1 }
     val refence = { ...write, slot: write.slot + 1, attempt: 0 }
     val resend = not(taken) and write.attempt < MaxResends
-    val own = taken and found.epoch == write.epoch
+    val own = taken and (if (guards.processCheck) found == slotOf(write) else found.epoch == write.epoch and found.requests == write.requests)
     val oldAssigneeTookFenceSlot = taken and found.epoch < write.epoch and isFence(write)
     all {
       if (not(taken)) replace(server, self, write, { write: if (resend) again else write, unknown: false })
@@ -302,7 +303,7 @@ module seqlog {
         servers.get("B").view == List("r1"),
         clients.acknowledged == Set("r1"),
         replay(store.slots) == List("r1"),
-        store.slots.get(2) == { epoch: 2, requests: List() },
+        store.slots.get(2) == { epoch: 2, process: 2, requests: List() },
         refinesChangeLog, newestAssigneeSeesAcknowledged, staleEpochNeverCommits,
       })
 

@@ -12,8 +12,10 @@ use object_store::path::Path;
 use object_store::{ObjectStore, PutMode};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::assignee::{Admit, Alarm, Assignee, Effect, Event, PutFailure, Request, Start};
-use crate::segment::{Commit, Epoch, RequestId, Segment, Sequence, Slot};
+use crate::assignee::{
+    Admit, Alarm, Assignee, AssigneeId, Effect, Event, PutFailure, Request, Start,
+};
+use crate::segment::{Commit, RequestId, Segment, Sequence, Slot};
 
 pub struct Submission<R> {
     request: Request,
@@ -46,7 +48,7 @@ pub enum Exit {
 pub async fn serve<A: Admit>(
     store: Arc<dyn ObjectStore>,
     workspace: &str,
-    epoch: Epoch,
+    id: AssigneeId,
     start: Start,
     admit: A,
     mut submission_receiver: mpsc::Receiver<Submission<A::Rejection>>,
@@ -54,7 +56,7 @@ pub async fn serve<A: Admit>(
 ) -> Exit {
     let log = Path::from(workspace).join("log");
     let first = start.slot;
-    let mut assignee = Assignee::resume(epoch, admit, start);
+    let mut assignee = Assignee::resume(id, admit, start);
     let mut io: FuturesUnordered<BoxFuture<'static, Result<Event, Alarm>>> =
         FuturesUnordered::new();
     io.push(load(Arc::clone(&store), log.clone(), first).boxed());
