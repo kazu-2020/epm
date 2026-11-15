@@ -8,7 +8,7 @@ use crate::error::CoordinateError;
 use crate::normalize::normalize;
 use crate::scan::first_unsorted;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Delta {
     pub(crate) measure: MeasureGlobalId,
     pub(crate) axes: Arc<Axes>,

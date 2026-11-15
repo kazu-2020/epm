@@ -12,7 +12,7 @@ use crate::delta::{Delta, DeltaBuilder};
 use crate::error::{CoordinateError, MeasureError};
 use crate::normalize::normalize;
 use crate::packing::CoordinatePacking;
-use crate::scan::{check_sorted, first_row};
+use crate::scan::{check_sorted, first_row, first_unsorted};
 
 #[derive(Debug, Clone)]
 pub struct Measure {
@@ -255,6 +255,7 @@ impl Measure {
     }
 
     fn sorted_delta(&self, packed_coordinates: Vec<u64>, changes: Vec<Option<f64>>) -> Delta {
+        debug_assert!(first_unsorted(&packed_coordinates).is_none());
         Delta {
             measure: self.definition.global_id,
             axes: self.axes.clone(),

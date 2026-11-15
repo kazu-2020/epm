@@ -50,7 +50,7 @@ fn main() -> std::io::Result<()> {
         for edit in 0..edits {
             let row = (edit * 7_919 * 104_729) % rows;
             let measure = &measures[input];
-            // Not Delta::set: it takes the coordinate in the declared order, and the base row gives it packed.
+            // Not DeltaBuilder::set: it takes the coordinate in the declared order, and the base row gives it packed.
             let delta = measure
                 .delta_from_packed(
                     vec![measure.base_packed_coordinates()[row]],
