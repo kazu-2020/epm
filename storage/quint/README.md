@@ -37,9 +37,9 @@ placement の失敗は次の4種類である。
 - 設計どおりのモデル(`placement_designed`)か、PostgreSQL の切り替えを含むモデル(`placement_failover`)で性質が破れた。
 - `placement_designed` の witness が届かなかった。
 - 固定の手順(`quint test`)が失敗した。
-- `placement_breaks` の性質が破れなかった。
+- `placement_breaks` か `placement_read_write_breaks` の性質が破れなかった。
 
-反例の手順は `quint run seqlog.qnt --main seqlog_designed --invariant <性質> --mbt` で確認する。placement では、`--init placementInit --step placementStep` を付けて `placement.qnt` を実行する。`mbt::actionTaken` に各ステップの操作が出る。
+反例の手順は `quint run seqlog.qnt --main seqlog_designed --invariant <性質> --mbt` で確認する。placement では、`--init placementInit --step placementStep` を付けて `placement.qnt` を実行する。読み書きの経路の反例は `--step placementReadWriteStep` で確認する。`mbt::actionTaken` に各ステップの操作が出る。
 
 モデルが前提にする条件付き書き込みの応答は、RustFS で次のように実測する。
 
@@ -75,7 +75,7 @@ Assignee の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-
 | `dataWriteNeverSeesOlderEpoch` | データの書き込みが 412 のあとに自分より古いエポックを見ることはない |
 | `epochStartsOneProcess` | `placement.qnt`。1個のエポックで起動するプロセスは高々1個である |
 | `epochNeverDecreases` | `placement.qnt`。配置表のエポックは減少しない |
-| `readSeesAcknowledgedAtLookup` | `placement.qnt`。読み取りの応答は、App server が配置表を参照した時点で ACK 済みのコミットをすべて含む |
+| `readSeesAcknowledgedAtLookup` | `placement.qnt`。読み取りの応答は、App server が配置表を参照した時点で ACK 済みのコミットをすべて含む。`placementStep` のランダムシミュレーションは ACK 後の読み取りにほぼ届かない(5万回で0回)。そのため、各起動を記録まで済ませてから次のエポックを発行する `placementReadWriteStep` でも検査する。この step は、アドレスの再利用、`Start` の消失、プロセスの停止、切り替えを含まない。それらは `placementStep` が扱う |
 | `neverReadsOtherWorkspace` | `placement.qnt`。要求は、ほかのワークスペースの Assignee から応答を受領しない |
 | `viewIsLogPrefix` | いちばん新しいエポックを持つ受理中の Assignee の `view`(Rust の `Effect::Committed` で渡した列)は、ログの先頭部分に一致する。ACK 済みの集合では見えない、順序の入れ替わりも反例になる |
 

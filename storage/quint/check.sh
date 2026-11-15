@@ -92,6 +92,8 @@ placement_breaks=(
   placement_start_resent:epochStartsOneProcess
   placement_no_workspace_check:neverReadsOtherWorkspace
 )
+# placementReadWriteStep reaches a read after an acknowledgement, which placementStep does not reach.
+placement_read_write_breaks=(placement_cached_route:readSeesAcknowledgedAtLookup)
 # Random simulation does not reach these violations, so a fixed scenario shows each one.
 placement_scenarios=(
   placement_start_resent:sameEpochOtherProcessStopsTest
@@ -119,7 +121,7 @@ for entry in "${placement_scenarios[@]}"; do
 done
 
 run_placement() {
-  quint run "$1" --main "$2" --init placementInit --step placementStep --invariants "${@:3}" --max-samples "$samples" --max-steps 40 --seed 1 2>&1 || true
+  quint run "$1" --main "$2" --init placementInit --step "${step:-placementStep}" --invariants "${@:3}" --max-samples "$samples" --max-steps 40 --seed 1 2>&1 || true
 }
 
 output=$(run_placement placement.qnt placement_designed "${placement_invariants[@]}" --witnesses "${placement_witnesses[@]}")
@@ -129,5 +131,11 @@ output=$(run_placement placement_mutations.qnt placement_failover "${placement_f
 report placement_failover "$(outcome "$output")" "$(broken "$output")" hold
 for entry in "${placement_breaks[@]}"; do
   report "${entry%%:*} ${entry##*:}" "$(outcome "$(run_placement placement_mutations.qnt "${entry%%:*}" "${entry##*:}")")" "" break
+done
+output=$(step=placementReadWriteStep run_placement placement.qnt placement_designed "${placement_invariants[@]}" --witnesses witnessReadSeesAcknowledged)
+report "placement_designed read_write" "$(outcome "$output")" "$(broken "$output")" hold
+report "placement_designed read_write witnesses" "$(witnessed "$output" witnessReadSeesAcknowledged)" "$(missed "$output" witnessReadSeesAcknowledged)" reach
+for entry in "${placement_read_write_breaks[@]}"; do
+  report "${entry%%:*} ${entry##*:} read_write" "$(outcome "$(step=placementReadWriteStep run_placement placement_mutations.qnt "${entry%%:*}" "${entry##*:}")")" "" break
 done
 exit "$status"

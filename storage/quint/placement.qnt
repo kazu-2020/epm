@@ -235,6 +235,28 @@ module placement {
     },
   }
 
+  // Not placementStep: its random runs reach a read after an acknowledgement in no run of 50000.
+  // This step finishes each start before the next claim, and leaves out address reuse, lost starts, crashes and failovers.
+  action placementReadWriteStep = all {
+    placementGhost,
+    any {
+      all { placement' = placement, nondet server = Servers.oneOf() any { load(server), flush(server), timeout(server), resolve(server) } },
+      all { placement' = placement, nondet server = Servers.oneOf() nondet request = Requests.oneOf() receive(server, request) },
+      nondet request = Requests.oneOf() routeWrite(request),
+      nondet write = placement.writes.oneOf() deliverWrite(write),
+      all { placement' = placement, nondet write = store.writesInFlight.oneOf() nondet replyLost = Set(true, false).oneOf() apply(write, replyLost) },
+      all { placement' = placement, nondet reply = store.replies.oneOf() receiveReply(reply) },
+      nondet app = Apps.oneOf() any {
+        all { placement.seen.get(app) != grantedEpoch, readRow(app) },
+        all { placement.starts.size() == 0, grantedEpoch == 0 or placement.serving.epoch == grantedEpoch, claim(app) },
+      },
+      nondet start = placement.starts.oneOf() nondet server = Servers.oneOf() spawn(start, server),
+      nondet server = Servers.oneOf() record(server),
+      lookup,
+      nondet read = placement.reads.oneOf() serve(read),
+    },
+  }
+
   // An instance does not export what it imports, so the properties of the change log get a name here.
   val logRefinesChangeLog: bool = refinesChangeLog
   val logSegmentsNeverChange: bool = segmentsNeverChange
@@ -252,6 +274,7 @@ module placement {
   val neverReadsOtherWorkspace: bool = not(placement.served.otherWorkspace)
 
   val witnessReadAfterLostStart: bool = placement.startLost > 0 and placement.served.epoch > placement.startLost
+  val witnessReadSeesAcknowledged: bool = placement.served.mustSee.size() > 0 and not(placement.served.otherWorkspace)
   val witnessAddressReuse: bool = placement.reads.exists(read =>
     placement.otherWorkspace.contains(read.server) or (servers.get(read.server).phase != Down and servers.get(read.server).epoch != read.epoch))
 
