@@ -24,19 +24,25 @@ module placement {
   pure val Apps = Set("X", "Y")
 
   type Start = { epoch: int, by: str, node: str }
-  type Replica = { epoch: int, node: str, serving: Route }
-  type Row = { node: str, replica: Replica, failovers: int }
+  type Option[a] = Some(a) | None
+  type Replica = { epoch: int, node: Option[str], serving: Option[Route] }
+  type Row = { node: Option[str], replica: Replica, failovers: int }
   type Route = { server: str, epoch: int }
   type RoutedWrite = { server: str, epoch: int, request: str }
   type Read = { server: str, epoch: int, mustSee: Set[str] }
   type Served = { epoch: int, view: Set[str], mustSee: Set[str], otherWorkspace: bool }
   type Placement = {
-    serving: Route, writes: Set[RoutedWrite], seen: str -> int, starts: Set[Start], spawned: List[int], otherWorkspace: Set[str],
-    route: Route, reads: Set[Read], served: Served, startLost: int, row: Row,
+    serving: Option[Route], writes: Set[RoutedWrite], seen: str -> int, starts: Set[Start], spawned: List[int], otherWorkspace: Set[str],
+    route: Option[Route], reads: Set[Read], served: Served, startLost: int, row: Row,
   }
 
   var placement: Placement
   var previousGrantedEpoch: int
+
+  pure def present(options: Set[Option[a]]): Set[a] = options.fold(Set(), (found, option) => match option {
+    | Some(value) => found.union(Set(value))
+    | None => found
+  })
 
   def nodeOf(server: str): str = if (placementGuards.oneNode) "n" else server
   def isRunning(server: str): bool = servers.get(server).phase != Down and servers.get(server).phase != Stopped
@@ -46,10 +52,10 @@ module placement {
   action placementInit = all {
     init,
     placement' = {
-      serving: { server: "", epoch: 0 }, writes: Set(), seen: Apps.mapBy(_ => 0), starts: Set(), spawned: List(), otherWorkspace: Set(),
-      route: { server: "", epoch: 0 }, reads: Set(),
+      serving: None, writes: Set(), seen: Apps.mapBy(_ => 0), starts: Set(), spawned: List(), otherWorkspace: Set(),
+      route: None, reads: Set(),
       served: { epoch: 0, view: Set(), mustSee: Set(), otherWorkspace: false }, startLost: 0,
-      row: { node: "", replica: { epoch: 0, node: "", serving: { server: "", epoch: 0 } }, failovers: 0 },
+      row: { node: None, replica: { epoch: 0, node: None, serving: None }, failovers: 0 },
     },
     previousGrantedEpoch' = 0,
   }
@@ -69,7 +75,7 @@ module placement {
       placement' = {
         ...placement,
         starts: placement.starts.union(Set({ epoch: epoch, by: app, node: node })),
-        row: { ...placement.row, node: node },
+        row: { ...placement.row, node: Some(node) },
       },
       store' = store, servers' = servers, clients' = clients,
     }
@@ -126,8 +132,8 @@ module placement {
   action record(server: str): bool = all {
     servers.get(server).phase == Ready,
     servers.get(server).epoch == grantedEpoch,
-    placementGuards.recordChecksNode implies nodeOf(server) == placement.row.node,
-    placement' = { ...placement, serving: { server: server, epoch: grantedEpoch } },
+    placementGuards.recordChecksNode implies placement.row.node == Some(nodeOf(server)),
+    placement' = { ...placement, serving: Some({ server: server, epoch: grantedEpoch }) },
     keepLog,
   }
 
@@ -144,39 +150,37 @@ module placement {
   }
 
   action lookupWith(chosen: Route): bool = all {
-    chosen.server != "",
-    chosen == placement.serving or (not(placementGuards.lookupPerRequest) and chosen == placement.route),
+    placement.serving == Some(chosen) or (not(placementGuards.lookupPerRequest) and placement.route == Some(chosen)),
     placement' = {
       ...placement,
       reads: placement.reads.union(Set({ server: chosen.server, epoch: chosen.epoch, mustSee: clients.acknowledged })),
-      route: chosen,
+      route: Some(chosen),
     },
     keepLog,
   }
 
   action lookup: bool = {
-    nondet chosen = Set(placement.serving, placement.route).oneOf()
+    nondet chosen = present(Set(placement.serving, placement.route)).oneOf()
     lookupWith(chosen)
   }
 
-  action serve(read: Read): bool = {
-    val self = servers.get(read.server)
-    val other = placement.otherWorkspace.contains(read.server)
-    val ready = self.phase == Ready
-    // Not the epoch of the process of the other workspace: it can be equal by chance, so only the workspace check stops that request.
-    val accepted = (not(other) or not(placementGuards.workspaceCheck)) and (other or self.epoch == read.epoch or not(placementGuards.epochCheck))
-    all {
-      placement.reads.contains(read),
-      placement' = {
-        ...placement,
-        reads: placement.reads.exclude(Set(read)),
-        served:
-          if (accepted and other) { epoch: read.epoch, view: Set(), mustSee: read.mustSee, otherWorkspace: true }
-          else if (accepted and ready) { epoch: self.epoch, view: self.view.toSet(), mustSee: read.mustSee, otherWorkspace: false }
-          else placement.served,
-      },
-      keepLog,
-    }
+  // Not the epoch of the process of the other workspace: it can be equal by chance, so only the workspace check stops that request.
+  pure def accepts(other: bool, processEpoch: int, epoch: int): bool =
+    (not(other) or not(placementGuards.workspaceCheck)) and (other or processEpoch == epoch or not(placementGuards.epochCheck))
+
+  pure def serves(self: Server, other: bool, read: Read, current: Served): Served =
+    if (accepts(other, self.epoch, read.epoch) and other) { epoch: read.epoch, view: Set(), mustSee: read.mustSee, otherWorkspace: true }
+    else if (accepts(other, self.epoch, read.epoch) and self.phase == Ready) { epoch: self.epoch, view: self.view.toSet(), mustSee: read.mustSee, otherWorkspace: false }
+    else current
+
+  action serve(read: Read): bool = all {
+    placement.reads.contains(read),
+    placement' = {
+      ...placement,
+      reads: placement.reads.exclude(Set(read)),
+      served: serves(servers.get(read.server), placement.otherWorkspace.contains(read.server), read, placement.served),
+    },
+    keepLog,
   }
 
   // A request in flight to a process ends with the process, because the connection ends.
@@ -188,26 +192,24 @@ module placement {
   }
 
   action routeWriteTo(chosen: Route, request: str): bool = all {
-    chosen.server != "",
-    chosen == placement.serving or (not(placementGuards.routedWrites) and chosen.epoch == servers.get(chosen.server).epoch),
+    placement.serving == Some(chosen) or (not(placementGuards.routedWrites) and chosen.epoch == servers.get(chosen.server).epoch),
     placement' = { ...placement, writes: placement.writes.union(Set({ server: chosen.server, epoch: chosen.epoch, request: request })) },
     keepLog,
   }
 
   action routeWrite(request: str): bool = {
     nondet server = Servers.oneOf()
-    nondet chosen = Set(placement.serving, { server: server, epoch: servers.get(server).epoch }).oneOf()
+    nondet chosen = present(Set(placement.serving)).union(Set({ server: server, epoch: servers.get(server).epoch })).oneOf()
     routeWriteTo(chosen, request)
   }
 
   action deliverWrite(write: RoutedWrite): bool = {
     val self = servers.get(write.server)
-    val other = placement.otherWorkspace.contains(write.server)
-    val accepted = (not(other) or not(placementGuards.workspaceCheck)) and (other or self.epoch == write.epoch or not(placementGuards.epochCheck))
     all {
       placement.writes.contains(write),
       placement' = { ...placement, writes: placement.writes.exclude(Set(write)) },
-      if (accepted and self.phase != Down) send(write.server, write.request) else keepLog,
+      if (accepts(placement.otherWorkspace.contains(write.server), self.epoch, write.epoch) and self.phase != Down) send(write.server, write.request)
+      else keepLog,
     }
   }
 
@@ -248,7 +250,7 @@ module placement {
       all { placement' = placement, nondet reply = store.replies.oneOf() receiveReply(reply) },
       nondet app = Apps.oneOf() any {
         all { placement.seen.get(app) != grantedEpoch, readRow(app) },
-        all { placement.starts.size() == 0, grantedEpoch == 0 or placement.serving.epoch == grantedEpoch, claim(app) },
+        all { placement.starts.size() == 0, grantedEpoch == 0 or present(Set(placement.serving)).exists(route => route.epoch == grantedEpoch), claim(app) },
       },
       nondet start = placement.starts.oneOf() nondet server = Servers.oneOf() spawn(start, server),
       nondet server = Servers.oneOf() record(server),
@@ -309,6 +311,8 @@ module placement {
   action routes(chosen: Route, request: str): bool = all { placementGhost, routeWriteTo(chosen, request) }
   action delivers: bool = { nondet write = placement.writes.oneOf() all { placementGhost, deliverWrite(write) } }
   action looksUp(chosen: Route): bool = all { placementGhost, lookupWith(chosen) }
+  action routesToServing(request: str): bool = nondet chosen = present(Set(placement.serving)).oneOf() routes(chosen, request)
+  action looksUpServing: bool = nondet chosen = present(Set(placement.serving)).oneOf() looksUp(chosen)
   val acknowledged: Set[str] = clients.acknowledged
   val log: List[str] = replay(store.slots)
   def isReady(server: str): bool = servers.get(server).phase == Ready
@@ -335,7 +339,7 @@ module placement {
       .then(launched("Y", "B"))
       .then(fencedTogether)
 
-  run sent(server: str, request: str): bool = routes(placement.serving, request).then(delivers).then(onLog(server, Receive(request)))
+  run sent(server: str, request: str): bool = routesToServing(request).then(delivers).then(onLog(server, Receive(request)))
 
   run committed(server: str, request: str): bool =
     sent(server, request)
@@ -356,13 +360,13 @@ module placement {
     placementInit
       .then(started("X", "A")).then(committed("A", "r1"))
       .then(launched("Y", "B")).then(fenced("B"))
-      .expect(isReady("A") and isReady("B") and placement.serving == { server: "A", epoch: 1 })
+      .expect(isReady("A") and isReady("B") and placement.serving == Some({ server: "A", epoch: 1 }))
 
   run lateRecordMissesCommit: bool =
     launchedAcrossFailover
       .then(table(Record("B"))).then(committed("B", "r1"))
       .then(table(Record("A")))
-      .then(looksUp(placement.serving)).then(servedOne)
+      .then(looksUpServing).then(servedOne)
       .expect(placement.served.epoch == 1 and placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
 }
 

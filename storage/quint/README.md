@@ -60,7 +60,7 @@ uv run --with 'psycopg[binary]' storage/postgres/claim_rules.py
 
 ## Assignee の動き
 
-Assignee の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` にある。その動作は `seqlog.qnt` の action が記述する。変更ログは Slot 0 から最初の穴までを並べたものとして扱う。
+Assignee の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-and-read-back.md` にある。その動作は `seqlog.qnt` が記述する。判断(応答を受けた次の状態など)は `pure def`(`loads`、`receivesReply`、`resolves` など)に、状態の書き換えは同名の action に置く。変更ログは Slot 0 から最初の穴までを並べたものとして扱う。
 
 ## 検査する性質
 
@@ -114,6 +114,6 @@ Assignee の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-
 
 ## コードとの対応
 
-Rust の実装は `storage/change_log/` にある。Assignee の状態機械 `Assignee::step` が Quint の action に対応する。`mutations.sh` は `check.sh` と同じ変異を Rust のシミュレーションで検証する。
+Rust の実装は `storage/change_log/` にある。Assignee の状態機械 `Assignee::step` が Quint の action と、その判断を記述する `pure def` に対応する。`mutations.sh` は `check.sh` と同じ変異を Rust のシミュレーションで検証する。
 
 `storage/change_log/src/assignee/replay.rs` は、`seqlog_replay.qnt` のトレースを `Assignee::step` に再生する。再生には [quint-connect](https://crates.io/crates/quint-connect) を使う。各ステップの後でモデルと状態を比較する。モデルで起きない手順(`two_in_flight` など)は確かめず、`mutations.sh` が捕まえる。`cargo test` で動き、`quint` が PATH に要る。失敗したら表示される `QUINT_SEED=<値>` を付けて再生する。

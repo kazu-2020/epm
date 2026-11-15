@@ -14,11 +14,11 @@ module placement_test {
 
   run warmHandoverTest =
     warmStarted
-      .then(looksUp(placement.serving)).then(servedOne)
+      .then(looksUpServing).then(servedOne)
       .expect(placement.served == { epoch: 1, view: Set("r1"), mustSee: Set("r1"), otherWorkspace: false })
       .then(sent("A", "r2")).then(onLog("A", Flush)).then(onLog("A", ApplyWrite)).then(onLog("A", ReceiveReply)).then(onLog("A", Resolve))
       .expect(acknowledged == Set("r1") and not(isReady("A")))
       .then(table(Record("B"))).then(committed("B", "r2"))
-      .then(looksUp(placement.serving)).then(servedOne)
+      .then(looksUpServing).then(servedOne)
       .expect(placement.served == { epoch: 2, view: Set("r1", "r2"), mustSee: Set("r1", "r2"), otherWorkspace: false })
 }

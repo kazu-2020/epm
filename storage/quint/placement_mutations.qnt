@@ -32,7 +32,7 @@ module placement_start_resent_no_process_check {
       .expect(isReady("A") and isReady("B"))
       .then(table(Record("A"))).then(committed("A", "r1"))
       .then(table(Record("B")))
-      .then(looksUp(placement.serving)).then(servedOne)
+      .then(looksUpServing).then(servedOne)
       .expect(placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
       .then(sent("B", "r2")).then(onLog("B", Flush)).then(onLog("B", ApplyWrite))
       .then(onLog("B", ReceiveReply)).then(onLog("B", Resolve))
@@ -101,7 +101,7 @@ module placement_failover {
       .then(table(Failover))
       .then(table(ReadRow("X"))).then(table(Claim({ app: "X", server: "A" })))
       .then(table(Record("A"))).then(committed("A", "r1"))
-      .then(looksUp(placement.serving)).then(servedOne)
+      .then(looksUpServing).then(servedOne)
       .expect(placement.served == { epoch: 1, view: Set("r1"), mustSee: Set("r1"), otherWorkspace: false } and logRefinesChangeLog)
 
   // No guard of this design stops this read: the fence is in the store, and the row no longer shows the later epoch.
@@ -110,8 +110,8 @@ module placement_failover {
       .then(started("X", "A")).then(table(Replicate))
       .then(started("Y", "B")).then(committed("B", "r1"))
       .then(table(Failover))
-      .expect(placement.serving == { server: "A", epoch: 1 } and isReady("A"))
-      .then(looksUp(placement.serving)).then(servedOne)
+      .expect(placement.serving == Some({ server: "A", epoch: 1 }) and isReady("A"))
+      .then(looksUpServing).then(servedOne)
       .expect(placement.served.epoch == 1 and placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
 }
 
@@ -127,7 +127,7 @@ module placement_failover_no_process_check {
       .then(table(Failover))
       .then(table(ReadRow("X"))).then(table(Claim({ app: "X", server: "A" })))
       .then(table(Record("A")))
-      .then(looksUp(placement.serving)).then(servedOne)
+      .then(looksUpServing).then(servedOne)
       .expect(placement.served.epoch == 1 and placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
 }
 
