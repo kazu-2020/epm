@@ -12,7 +12,7 @@ use crate::delta::{Delta, DeltaBuilder};
 use crate::error::{CoordinateError, MeasureError};
 use crate::normalize::normalize;
 use crate::packing::CoordinatePacking;
-use crate::scan::{check_sorted, first_row, first_unsorted};
+use crate::scan::{check_sorted, first_row};
 
 #[derive(Debug, Clone)]
 pub struct Measure {
@@ -246,22 +246,7 @@ impl Measure {
     }
 
     pub fn delta(&self) -> DeltaBuilder {
-        DeltaBuilder {
-            measure: self.definition.global_id,
-            axes: self.axes.clone(),
-            packed_coordinates: Vec::new(),
-            changes: Vec::new(),
-        }
-    }
-
-    fn sorted_delta(&self, packed_coordinates: Vec<u64>, changes: Vec<Option<f64>>) -> Delta {
-        debug_assert!(first_unsorted(&packed_coordinates).is_none());
-        Delta {
-            measure: self.definition.global_id,
-            axes: self.axes.clone(),
-            packed_coordinates,
-            changes,
-        }
+        DeltaBuilder::new(self.definition.global_id, self.axes.clone())
     }
 
     pub fn delta_from_packed(
@@ -276,7 +261,9 @@ impl Measure {
         );
         check_sorted(&packed_coordinates)?;
         self.axes.check_in_range(&packed_coordinates)?;
-        Ok(self.sorted_delta(
+        Ok(Delta::sorted(
+            self.definition.global_id,
+            self.axes.clone(),
             packed_coordinates,
             changes
                 .into_iter()
@@ -306,7 +293,12 @@ impl Measure {
         }
         let (packed_coordinates, changes) = self.merged_changes();
         let mut measure = self.clone();
-        measure.deltas = vec![Arc::new(self.sorted_delta(packed_coordinates, changes))];
+        measure.deltas = vec![Arc::new(Delta::sorted(
+            self.definition.global_id,
+            self.axes.clone(),
+            packed_coordinates,
+            changes,
+        ))];
         measure
     }
 

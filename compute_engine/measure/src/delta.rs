@@ -18,6 +18,21 @@ pub struct Delta {
 }
 
 impl Delta {
+    pub(crate) fn sorted(
+        measure: MeasureGlobalId,
+        axes: Arc<Axes>,
+        packed_coordinates: Vec<u64>,
+        changes: Vec<Option<f64>>,
+    ) -> Delta {
+        debug_assert!(first_unsorted(&packed_coordinates).is_none());
+        Delta {
+            measure,
+            axes,
+            packed_coordinates,
+            changes,
+        }
+    }
+
     pub fn packed_coordinates(&self) -> &[u64] {
         &self.packed_coordinates
     }
@@ -25,13 +40,22 @@ impl Delta {
 
 #[derive(Debug, Clone)]
 pub struct DeltaBuilder {
-    pub(crate) measure: MeasureGlobalId,
-    pub(crate) axes: Arc<Axes>,
-    pub(crate) packed_coordinates: Vec<u64>,
-    pub(crate) changes: Vec<Option<f64>>,
+    measure: MeasureGlobalId,
+    axes: Arc<Axes>,
+    packed_coordinates: Vec<u64>,
+    changes: Vec<Option<f64>>,
 }
 
 impl DeltaBuilder {
+    pub(crate) fn new(measure: MeasureGlobalId, axes: Arc<Axes>) -> DeltaBuilder {
+        DeltaBuilder {
+            measure,
+            axes,
+            packed_coordinates: Vec::new(),
+            changes: Vec::new(),
+        }
+    }
+
     pub fn set(&mut self, coordinate: &[MemberIndex], value: f64) -> Result<(), CoordinateError> {
         self.write(coordinate, normalize(value))
     }
@@ -75,11 +99,6 @@ impl DeltaBuilder {
                 }
             }
         }
-        Delta {
-            measure,
-            axes,
-            packed_coordinates,
-            changes,
-        }
+        Delta::sorted(measure, axes, packed_coordinates, changes)
     }
 }
