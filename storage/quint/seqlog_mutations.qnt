@@ -28,9 +28,7 @@ module seqlog_no_epoch_check {
   import seqlog(guards = { ...allGuards, epochCheck: false }).* from "./seqlog"
 }
 
-// Pipelined PUTs break the log in two ways. Slot N+1 can land before N, so a batch is acknowledged but not in the log.
-// The second PUT of an old Assignee can land past the fence of the new one.
-// Replies in the reverse order of the slots also make the view differ from the log, which only viewIsLogPrefix catches.
+// Not two PUTs in flight: S3 can apply them in either order, so a batch past a hole gets acknowledged, the second PUT of an old Assignee can land past a new fence, and the view can differ from the log in order.
 // A fixed scenario, because random simulation does not reach this acknowledgement past a hole.
 module seqlog_two_in_flight {
   import seqlog_design.* from "./seqlog"

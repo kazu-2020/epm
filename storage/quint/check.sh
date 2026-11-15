@@ -92,7 +92,6 @@ placement_breaks=(
   placement_start_resent:epochStartsOneProcess
   placement_no_workspace_check:neverReadsOtherWorkspace
 )
-# placementReadWriteStep reaches a read after an acknowledgement, which placementStep does not reach.
 placement_read_write_breaks=(placement_cached_route:readSeesAcknowledgedAtLookup)
 # Random simulation does not reach these violations, so a fixed scenario shows each one.
 placement_scenarios=(
@@ -107,7 +106,7 @@ placement_scenarios=(
   placement_failover_no_node_check:lateRecordMissesCommitTest
   placement_failover_duplicate_start:lateRecordMissesCommitTest
 )
-# A failover makes the epoch decrease and returns the row to a fenced Assignee, so only the properties of the log are checked.
+# Not epochNeverDecreases, epochStartsOneProcess or readSeesAcknowledgedAtLookup: a failover makes the epoch decrease and returns the row to a fenced Assignee.
 placement_failover_invariants=(logRefinesChangeLog logSegmentsNeverChange logStaleEpochNeverCommits logSlotsContiguous logOneContentPerSlotPerEpoch logDataWriteNeverSeesOlderEpoch neverReadsOtherWorkspace)
 
 lists_every_module placement_mutations.qnt "${placement_breaks[@]%%:*}" "${placement_scenarios[@]%%:*}"

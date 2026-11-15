@@ -10,7 +10,7 @@
 npm ci --prefix storage/quint
 export PATH="$PWD/storage/quint/node_modules/.bin:$PATH"
 storage/quint/check.sh          # 1モジュールあたり5万回のランダムシミュレーション
-storage/quint/check.sh 5000     # 短時間で確認する場合。回数が少ないと変異の反例に到達せず失敗することがあるので、その場合は既定の回数で再実行する
+storage/quint/check.sh 5000     # 短時間で確認する場合。回数が不足すると変異の反例に到達せず失敗することがあるので、失敗した場合は既定の回数で再実行する
 ```
 
 終了コードが 1 の場合、次のいずれかが発生した。
@@ -44,9 +44,9 @@ uv run --with 'psycopg[binary]' storage/postgres/claim_rules.py
 
 ## 範囲外
 
-- snapshot、GC、再計算済み番号、Request ID の窓。
+- snapshot、GC、再計算済み番号、Request ID のウィンドウ。
 - 複数のワークスペースの変更ログと、テナントの混入。これらは、キーの命名規則、ワークスペースごとのデータ鍵、IAM で保護する。`placement.qnt` の対象は、アドレスの再利用で他のワークスペースの Assignee へ要求が到達する場合だけである。
 - 活性(最終的に確定すること、交代後に書き込みが可能になること)。ランダムシミュレーションは活性を検査しない。
-- グループコミットに集約する件数、ハッシュの鎖、Event ID、3分のタイムアウト。
+- グループコミットに集約する件数、ハッシュチェーン、Event ID、3分のタイムアウト。
 
 網羅検査ではない。反例がないことは、「5万回の試行で検出しなかった」という意味である。

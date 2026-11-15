@@ -2,14 +2,13 @@ module placement_design {
   type PlacementGuards = {
     conditionalClaim: bool, startOnce: bool, workspaceCheck: bool, epochCheck: bool, lookupPerRequest: bool, routedWrites: bool,
     recordChecksNode: bool, rejectsDuplicateStart: bool,
-    // Not guards: the size of the scenario. One node with every address shows what a node does with two starts of one epoch.
-    oneNode: bool, maxFailovers: int,
   }
   pure val allPlacementGuards: PlacementGuards = {
     conditionalClaim: true, startOnce: true, workspaceCheck: true, epochCheck: true, lookupPerRequest: true, routedWrites: true,
     recordChecksNode: true, rejectsDuplicateStart: true,
-    oneNode: false, maxFailovers: 0,
   }
+  type PlacementScenario = { oneNode: bool, maxFailovers: int }
+  pure val baseScenario: PlacementScenario = { oneNode: false, maxFailovers: 0 }
 }
 
 module placement {
@@ -19,6 +18,7 @@ module placement {
   import placement_design.*
 
   const placementGuards: PlacementGuards
+  const scenario: PlacementScenario
   const logGuards: Guards
 
   pure val Apps = Set("X", "Y")
@@ -44,7 +44,7 @@ module placement {
     | None => found
   })
 
-  def nodeOf(server: str): str = if (placementGuards.oneNode) "n" else server
+  def nodeOf(server: str): str = if (scenario.oneNode) "n" else server
   def isRunning(server: str): bool = servers.get(server).phase != Down and servers.get(server).phase != Stopped
 
   action keepLog = all { store' = store, servers' = servers, grantedEpoch' = grantedEpoch, clients' = clients }
@@ -87,7 +87,7 @@ module placement {
   }
 
   action replicate: bool = all {
-    placementGuards.maxFailovers > 0,
+    scenario.maxFailovers > 0,
     placement' = { ...placement, row: { ...placement.row, replica: { epoch: grantedEpoch, node: placement.row.node, serving: placement.serving } } },
     keepLog,
   }
@@ -95,7 +95,7 @@ module placement {
   action failover: bool = {
     val row = placement.row
     all {
-      row.failovers < placementGuards.maxFailovers,
+      row.failovers < scenario.maxFailovers,
       row.replica != { epoch: grantedEpoch, node: row.node, serving: placement.serving },
       grantedEpoch' = row.replica.epoch,
       placement' = { ...placement, serving: row.replica.serving, row: { ...row, node: row.replica.node, failovers: row.failovers + 1 } },
@@ -238,7 +238,6 @@ module placement {
   }
 
   // Not placementStep: its random runs reach a read after an acknowledgement in no run of 50000.
-  // This step finishes each start before the next claim, and leaves out address reuse, lost starts, crashes and failovers.
   action placementReadWriteStep = all {
     placementGhost,
     any {
@@ -373,5 +372,5 @@ module placement {
 module placement_designed {
   import placement_design.*
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = allPlacementGuards, logGuards = allGuards).*
+  import placement(placementGuards = allPlacementGuards, scenario = baseScenario, logGuards = allGuards).*
 }

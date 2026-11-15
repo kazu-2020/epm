@@ -1,7 +1,7 @@
 module placement_test {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = allPlacementGuards, logGuards = allGuards).* from "./placement"
+  import placement(placementGuards = allPlacementGuards, scenario = baseScenario, logGuards = allGuards).* from "./placement"
 
   // The read that chose the old Assignee before the handover is concurrent with r2, so it may miss r2.
   run readAfterHandoverTest =

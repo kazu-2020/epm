@@ -9,7 +9,6 @@ module seqlog_design {
   }
 }
 
-// The change log is the list of segments at <ws>/log/<Slot>, read from Slot 0 up to the first hole.
 // The guards and the reasons for them are in docs/adr/0006-change-log-writes-are-conditional-and-read-back.md.
 module seqlog {
   import change_log.* from "./change_log"
@@ -24,7 +23,7 @@ module seqlog {
   pure val MaxInFlight = 2
 
   // The epoch is at the start of the segment body, not in the key: the slot number alone is what two assignees fight for.
-  // Not the epoch alone in a fence: after a failover of the database, two processes can get the same epoch. A data write has process 0.
+  // Not the epoch alone in a fence: after a failover of the database, two processes can get the same epoch.
   type Slot = { epoch: int, process: int, requests: List[str] }
   type Write = { server: str, slot: int, epoch: int, process: int, requests: List[str], attempt: int }
   type Reply = { write: Write, succeeded: bool }
@@ -53,7 +52,6 @@ module seqlog {
 
   pure def lastSlot(slots: int -> Slot): int = slots.keys().fold(-1, (highest, i) => if (i > highest) i else highest)
 
-  // The next state of one server, the requests it acknowledges, and the writes it sends to the store.
   type Outcome = { self: Server, acknowledged: Set[str], sent: Set[Write] }
 
   pure def keeps(self: Server): Outcome = { self: self, acknowledged: Set(), sent: Set() }
@@ -143,7 +141,7 @@ module seqlog {
     previous' = { slots: Map(), acknowledged: Set() },
   }
 
-  // Each handover, restart and reload gets a new epoch, and the old Assignee can keep running without knowing it (SlateDB also increments writer_epoch at each open).
+  // Not a stop of the other server: an old Assignee keeps running until it learns of the new epoch.
   action grant(server: str): bool = all {
     grantedEpoch < MaxEpoch,
     grantedEpoch' = grantedEpoch + 1,
@@ -252,7 +250,7 @@ module seqlog {
   val refinesChangeLog: bool =
     allowedStep({ commits: replay(previous.slots), acknowledged: previous.acknowledged }, { commits: replay(store.slots), acknowledged: clients.acknowledged })
 
-  // Not covered by refinesChangeLog: an overwrite with the same content does not change the log.
+  // Not covered by refinesChangeLog: an overwrite that keeps the requests, or that lands past the first hole, does not change the log.
   val segmentsNeverChange: bool = previous.slots.keys().forall(i =>
     store.slots.keys().contains(i) and store.slots.get(i) == previous.slots.get(i))
 
@@ -281,14 +279,13 @@ module seqlog {
     val self = servers.get(server)
     (self.phase == Ready and self.epoch == grantedEpoch) implies clients.acknowledged.subseteq(self.view.toSet()))
 
-  // The view is the list that Rust passes in Effect::Committed. A change of order does not show in the set of acknowledged requests.
+  // Not covered by newestAssigneeSeesAcknowledged: a change of order does not show in the set of acknowledged requests.
   val viewIsLogPrefix: bool = servers.keys().forall(server =>
     val self = servers.get(server)
     val log = replay(store.slots)
     (self.phase == Ready and self.epoch == grantedEpoch) implies
       (if (self.view.length() > log.length()) false else log.slice(0, self.view.length()) == self.view))
 
-  // Witnesses: if a run does not reach these states, the properties pass without checking anything.
   val witnessTwoAcknowledged: bool = clients.acknowledged.size() >= 2
   val witnessCommitAfterHandover: bool = store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0)
   val witnessOwnResendRejected: bool = store.replies.exists(reply =>

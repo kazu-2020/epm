@@ -1,14 +1,13 @@
 module placement_blind_claim {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, conditionalClaim: false }, logGuards = allGuards).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, conditionalClaim: false }, scenario = baseScenario, logGuards = allGuards).* from "./placement"
 }
 
-// A fixed scenario, because random simulation does not reach two processes of one epoch that both load before either fence.
 module placement_start_resent {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, startOnce: false, rejectsDuplicateStart: false, oneNode: true }, logGuards = allGuards).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, startOnce: false, rejectsDuplicateStart: false }, scenario = { ...baseScenario, oneNode: true }, logGuards = allGuards).* from "./placement"
 
   run sameEpochOtherProcessStopsTest =
     placementInit
@@ -19,11 +18,10 @@ module placement_start_resent {
       .expect(acknowledged == Set("r1") and log == List("r1") and logRefinesChangeLog)
 }
 
-// A fixed scenario, because random simulation does not reach two processes of one epoch that both load before either fence.
 module placement_start_resent_no_process_check {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, startOnce: false, rejectsDuplicateStart: false, oneNode: true }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, startOnce: false, rejectsDuplicateStart: false }, scenario = { ...baseScenario, oneNode: true }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
 
   run sameEpochServesStaleReadTest =
     placementInit
@@ -42,14 +40,13 @@ module placement_start_resent_no_process_check {
 module placement_no_workspace_check {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, workspaceCheck: false }, logGuards = allGuards).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, workspaceCheck: false }, scenario = baseScenario, logGuards = allGuards).* from "./placement"
 }
 
-// A fixed scenario, because random simulation does not reach a write in flight to an address that a later epoch takes.
 module placement_no_epoch_check {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, epochCheck: false }, logGuards = allGuards).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, epochCheck: false }, scenario = baseScenario, logGuards = allGuards).* from "./placement"
 
   run staleWriteReachesNewerProcessTest =
     placementInit
@@ -67,7 +64,7 @@ module placement_no_epoch_check {
 module placement_cached_route {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, lookupPerRequest: false }, logGuards = allGuards).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, lookupPerRequest: false }, scenario = baseScenario, logGuards = allGuards).* from "./placement"
 
   run cachedRouteMissesCommitTest =
     handedOver
@@ -80,7 +77,7 @@ module placement_cached_route {
 module placement_unrouted_write {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, routedWrites: false }, logGuards = allGuards).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, routedWrites: false }, scenario = baseScenario, logGuards = allGuards).* from "./placement"
 
   run unroutedWriteMissesCommitTest =
     warmStarted
@@ -93,7 +90,7 @@ module placement_unrouted_write {
 module placement_failover {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, maxFailovers: 2 }, logGuards = allGuards).* from "./placement"
+  import placement(placementGuards = allPlacementGuards, scenario = { ...baseScenario, maxFailovers: 2 }, logGuards = allGuards).* from "./placement"
 
   run reclaimedEpochOtherProcessStopsTest =
     launchedAcrossFailover
@@ -118,7 +115,7 @@ module placement_failover {
 module placement_failover_no_process_check {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, maxFailovers: 2 }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
+  import placement(placementGuards = allPlacementGuards, scenario = { ...baseScenario, maxFailovers: 2 }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
 
   run secondFailoverRecordsStaleProcessTest =
     launchedAcrossFailover
@@ -135,7 +132,7 @@ module placement_failover_no_process_check {
 module placement_failover_no_node_check {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, recordChecksNode: false, maxFailovers: 1 }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, recordChecksNode: false }, scenario = { ...baseScenario, maxFailovers: 1 }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
 
   run lateRecordMissesCommitTest = lateRecordMissesCommit
 }
@@ -143,7 +140,7 @@ module placement_failover_no_node_check {
 module placement_failover_duplicate_start {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
-  import placement(placementGuards = { ...allPlacementGuards, rejectsDuplicateStart: false, oneNode: true, maxFailovers: 1 }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
+  import placement(placementGuards = { ...allPlacementGuards, rejectsDuplicateStart: false }, scenario = { ...baseScenario, oneNode: true, maxFailovers: 1 }, logGuards = { ...allGuards, processCheck: false }).* from "./placement"
 
   run lateRecordMissesCommitTest = lateRecordMissesCommit
 }
