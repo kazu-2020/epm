@@ -213,6 +213,7 @@ module placement {
 
   action placementGhost = all { ghost, previousGrantedEpoch' = grantedEpoch }
 
+  // Not the steps that change no state, such as a second readRow of the same epoch: they used most of the steps of a random run.
   action placementStep = all {
     placementGhost,
     any {
@@ -222,12 +223,14 @@ module placement {
       nondet write = placement.writes.oneOf() deliverWrite(write),
       all { placement' = placement, nondet write = store.writesInFlight.oneOf() nondet replyLost = Set(true, false).oneOf() apply(write, replyLost) },
       all { placement' = placement, nondet reply = store.replies.oneOf() receiveReply(reply) },
-      nondet app = Apps.oneOf() any { readRow(app), claim(app) },
+      nondet app = Apps.oneOf() any { all { placement.seen.get(app) != grantedEpoch, readRow(app) }, claim(app) },
       nondet start = placement.starts.oneOf() nondet server = Servers.oneOf() any { loseStart(start), spawn(start, server) },
-      nondet server = Servers.oneOf() any { record(server), takeAddress(server), leaveAddress(server) },
+      nondet server = Servers.oneOf() any {
+        record(server), all { not(placement.otherWorkspace.contains(server)), takeAddress(server) }, leaveAddress(server),
+      },
       lookup,
       nondet read = placement.reads.oneOf() serve(read),
-      replicate,
+      all { placement.row.replica != { epoch: grantedEpoch, node: placement.row.node, serving: placement.serving }, replicate },
       failover,
     },
   }

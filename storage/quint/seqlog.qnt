@@ -224,11 +224,15 @@ module seqlog {
 
   action ghost = previous' = { slots: store.slots, acknowledged: clients.acknowledged }
 
+  // Not a send of a request that is already in flight: it changes no state and used about 70% of the steps of a random run.
   action step = all {
     ghost,
     any {
       nondet server = Servers.oneOf() any { grant(server), crash(server), load(server), flush(server), timeout(server), resolve(server) },
-      nondet server = Servers.oneOf() nondet request = Requests.oneOf() any { send(server, request), receive(server, request) },
+      nondet server = Servers.oneOf() nondet request = Requests.oneOf() any {
+        all { not(clients.requestsInFlight.contains({ server: server, request: request })), send(server, request) },
+        receive(server, request),
+      },
       nondet write = store.writesInFlight.oneOf() nondet replyLost = Set(true, false).oneOf() apply(write, replyLost),
       nondet reply = store.replies.oneOf() receiveReply(reply),
     },
