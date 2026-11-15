@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use dimension::{Dimension, MemberIndex};
 use formula::{CheckedExpression, EvaluateError};
-use measure::{CoordinateError, Delta, Measure, MeasureGlobalId};
+use measure::{CoordinateError, DeltaBuilder, Measure, MeasureGlobalId};
 
 use crate::compile::CompiledFormula;
 use crate::workspace::Workspace;
@@ -29,12 +29,12 @@ pub struct CalculateError {
 
 #[derive(Clone, Debug)]
 pub struct EditCheck {
-    empty: Arc<BTreeMap<MeasureGlobalId, Delta>>,
+    empty: Arc<BTreeMap<MeasureGlobalId, DeltaBuilder>>,
 }
 
 #[derive(Debug, Default)]
 pub struct Edits {
-    deltas: BTreeMap<MeasureGlobalId, Delta>,
+    deltas: BTreeMap<MeasureGlobalId, DeltaBuilder>,
 }
 
 #[derive(Clone, Debug)]
@@ -132,10 +132,18 @@ impl Calculated {
             .iter()
             .map(|formula| (formula.result().global_id, formula.expression()))
             .collect();
-        let measures = column_engine::edit(&self.measures, edits.deltas, &formulas, &dimensions)?
-            .iter()
-            .map(Measure::fold_deltas)
-            .collect();
+        let measures = column_engine::edit(
+            &self.measures,
+            edits
+                .deltas
+                .into_iter()
+                .map(|(measure, delta)| (measure, delta.finish())),
+            &formulas,
+            &dimensions,
+        )?
+        .iter()
+        .map(Measure::fold_deltas)
+        .collect();
         Ok(Calculated {
             dimensions: Arc::clone(&self.dimensions),
             formulas: Arc::clone(&self.formulas),

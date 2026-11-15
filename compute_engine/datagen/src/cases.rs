@@ -312,7 +312,7 @@ impl Default for Fixture {
         delta.set(&[MemberIndex(0), MemberIndex(0)], 5.0).unwrap();
         delta.delete(&[MemberIndex(1), MemberIndex(0)]).unwrap();
         delta.set(&[MemberIndex(2), MemberIndex(1)], 3.0).unwrap();
-        *revised = revised.apply(delta).unwrap();
+        *revised = revised.apply(delta.finish()).unwrap();
         Fixture {
             dimensions,
             inputs,

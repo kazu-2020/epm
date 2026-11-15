@@ -50,7 +50,7 @@ pub fn edit(
 fn apply(
     measures: &mut [Measure],
     global_id: MeasureGlobalId,
-    mut delta: Delta,
+    delta: Delta,
     changed: &mut HashMap<MeasureGlobalId, Region>,
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {

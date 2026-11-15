@@ -18,17 +18,26 @@ pub struct Delta {
 }
 
 impl Delta {
+    pub fn packed_coordinates(&self) -> &[u64] {
+        &self.packed_coordinates
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DeltaBuilder {
+    pub(crate) measure: MeasureGlobalId,
+    pub(crate) axes: Arc<Axes>,
+    pub(crate) packed_coordinates: Vec<u64>,
+    pub(crate) changes: Vec<Option<f64>>,
+}
+
+impl DeltaBuilder {
     pub fn set(&mut self, coordinate: &[MemberIndex], value: f64) -> Result<(), CoordinateError> {
         self.write(coordinate, normalize(value))
     }
 
     pub fn delete(&mut self, coordinate: &[MemberIndex]) -> Result<(), CoordinateError> {
         self.write(coordinate, None)
-    }
-
-    pub fn packed_coordinates(&mut self) -> &[u64] {
-        self.settle();
-        &self.packed_coordinates
     }
 
     // Not a sorted insert: a paste of a million cells in random order took 97 seconds.
@@ -43,24 +52,34 @@ impl Delta {
         Ok(())
     }
 
-    pub(crate) fn settle(&mut self) {
-        if first_unsorted(&self.packed_coordinates).is_none() {
-            return;
-        }
-        let mut writes: Vec<(u64, Option<f64>)> = self
-            .packed_coordinates
-            .drain(..)
-            .zip(self.changes.drain(..))
-            .collect();
-        writes.sort_by_key(|&(packed, _)| packed);
-        for (packed, change) in writes {
-            match self.changes.last_mut() {
-                Some(last) if self.packed_coordinates.last() == Some(&packed) => *last = change,
-                _ => {
-                    self.packed_coordinates.push(packed);
-                    self.changes.push(change);
+    pub fn finish(self) -> Delta {
+        let DeltaBuilder {
+            measure,
+            axes,
+            mut packed_coordinates,
+            mut changes,
+        } = self;
+        if first_unsorted(&packed_coordinates).is_some() {
+            let mut writes: Vec<(u64, Option<f64>)> = packed_coordinates
+                .drain(..)
+                .zip(changes.drain(..))
+                .collect();
+            writes.sort_by_key(|&(packed, _)| packed);
+            for (packed, change) in writes {
+                match changes.last_mut() {
+                    Some(last) if packed_coordinates.last() == Some(&packed) => *last = change,
+                    _ => {
+                        packed_coordinates.push(packed);
+                        changes.push(change);
+                    }
                 }
             }
+        }
+        Delta {
+            measure,
+            axes,
+            packed_coordinates,
+            changes,
         }
     }
 }
