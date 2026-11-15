@@ -2,6 +2,7 @@ module seqlog_test {
   import seqlog_design.* from "./seqlog"
   import seqlog(guards = allGuards).* from "./seqlog"
 
+  // Also catches a refence that skips reading the slot: 50000 random runs did not reach it.
   run oldAssigneeTakesSlotFirstTest =
     init
       .then(all { ghost, grant("A") })

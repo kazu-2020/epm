@@ -9,6 +9,8 @@ module seqlog_design {
   }
 }
 
+// The change log is the list of segments at <ws>/log/<Slot>, read from Slot 0 up to the first hole.
+// The guards and the reasons for them are in docs/adr/0006-change-log-writes-are-conditional-and-read-back.md.
 module seqlog {
   import change_log.* from "./change_log"
   import seqlog_design.*
@@ -75,6 +77,7 @@ module seqlog {
   pure def isStale(self: Server, slots: int -> Slot): bool =
     guards.epochCheck and lastSlot(slots) >= 0 and slots.get(lastSlot(slots)).epoch >= self.epoch
 
+  // Not a LIST followed by a read of the last segment: one step is enough, because a write between them ends in the 412 of the fence.
   pure def loads(server: str, self: Server, slots: int -> Slot): Outcome = {
     val free = lastSlot(slots) + 1
     val fence = { server: server, slot: free, epoch: self.epoch, process: self.process, requests: List(), attempt: 0 }
@@ -97,6 +100,7 @@ module seqlog {
     else if (guards.headsAfterRejection) keeps(replaces(self, reply.write, { write: reply.write, unknown: true }))
     else stops(self)
 
+  // Also the path of a 409 ConditionalRequestConflict: S3 returns it for concurrent conditional writes, and the server treats it as an unknown result.
   pure def timesOut(self: Server, p: Pending): Outcome =
     if (guards.readsBackUnknown) keeps(replaces(self, p.write, { ...p, unknown: true })) else succeeds(self, p.write)
 
@@ -139,6 +143,7 @@ module seqlog {
     previous' = { slots: Map(), acknowledged: Set() },
   }
 
+  // Each handover, restart and reload gets a new epoch, and the old Assignee can keep running without knowing it (SlateDB also increments writer_epoch at each open).
   action grant(server: str): bool = all {
     grantedEpoch < MaxEpoch,
     grantedEpoch' = grantedEpoch + 1,
@@ -195,7 +200,10 @@ module seqlog {
     }
   }
 
-  // Not applied at send time: a store can apply a write after the server stopped waiting for it.
+  // Not applied at send time: a store can apply a write after the server stopped waiting for it, a reply can be lost,
+  // and a resend can arrive apart from the first send (nanashi tessera/docs/persistence.md).
+  // If-None-Match writes only when the key is absent, and of concurrent conditional writes to one key only the first to finish succeeds:
+  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html, and RustFS 1.0.0 gave one winner in 50 rounds of 8 writers (storage/rustfs/conditional_write.py).
   action apply(write: Write, replyLost: bool): bool = all {
     store.writesInFlight.contains(write),
     store' = applies(store, write, replyLost),
@@ -244,6 +252,7 @@ module seqlog {
   val refinesChangeLog: bool =
     allowedStep({ commits: replay(previous.slots), acknowledged: previous.acknowledged }, { commits: replay(store.slots), acknowledged: clients.acknowledged })
 
+  // Not covered by refinesChangeLog: an overwrite with the same content does not change the log.
   val segmentsNeverChange: bool = previous.slots.keys().forall(i =>
     store.slots.keys().contains(i) and store.slots.get(i) == previous.slots.get(i))
 
@@ -267,16 +276,19 @@ module seqlog {
 
   val slotsContiguous: bool = store.slots.keys().forall(i => i >= 0 and i < store.slots.keys().size())
 
+  // Only the newest Assignee: an old one keeps accepting until it learns of the handover. placement.qnt checks reads.
   val newestAssigneeSeesAcknowledged: bool = servers.keys().forall(server =>
     val self = servers.get(server)
     (self.phase == Ready and self.epoch == grantedEpoch) implies clients.acknowledged.subseteq(self.view.toSet()))
 
+  // The view is the list that Rust passes in Effect::Committed. A change of order does not show in the set of acknowledged requests.
   val viewIsLogPrefix: bool = servers.keys().forall(server =>
     val self = servers.get(server)
     val log = replay(store.slots)
     (self.phase == Ready and self.epoch == grantedEpoch) implies
       (if (self.view.length() > log.length()) false else log.slice(0, self.view.length()) == self.view))
 
+  // Witnesses: if a run does not reach these states, the properties pass without checking anything.
   val witnessTwoAcknowledged: bool = clients.acknowledged.size() >= 2
   val witnessCommitAfterHandover: bool = store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0)
   val witnessOwnResendRejected: bool = store.replies.exists(reply =>

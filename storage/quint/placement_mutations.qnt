@@ -131,6 +131,7 @@ module placement_failover_no_process_check {
       .expect(placement.served.epoch == 1 and placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
 }
 
+// This module and the next also turn off processCheck: with it on, the second process of one epoch stops at the fence, and no violation shows.
 module placement_failover_no_node_check {
   import placement_design.* from "./placement"
   import seqlog_design.* from "./seqlog"
