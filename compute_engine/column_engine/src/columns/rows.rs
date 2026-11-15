@@ -2,6 +2,7 @@ use std::iter;
 use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
+use measure::normalize;
 use rayon::prelude::*;
 
 use super::PARALLEL_ROWS;
@@ -147,6 +148,16 @@ fn merge(left: &[u64], right: &[u64], mut emit: impl FnMut(u64)) {
         };
         emit(next);
     }
+}
+
+fn is_normalized(value: f64) -> bool {
+    normalize(value).map(f64::to_bits) == Some(value.to_bits())
+}
+
+pub(super) fn all_normalized(values: &[f64]) -> bool {
+    values
+        .par_chunks(PARALLEL_ROWS)
+        .all(|piece| piece.iter().copied().all(is_normalized))
 }
 
 #[cfg(test)]

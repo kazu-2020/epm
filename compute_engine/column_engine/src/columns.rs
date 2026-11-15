@@ -92,16 +92,6 @@ fn dense_strides(member_counts: &[u32]) -> Option<(usize, Vec<usize>)> {
     (space <= DENSE_LIMIT).then_some((space, strides))
 }
 
-fn is_normalized(value: f64) -> bool {
-    normalize(value).map(f64::to_bits) == Some(value.to_bits())
-}
-
-fn all_normalized(values: &[f64]) -> bool {
-    values
-        .par_chunks(PARALLEL_ROWS)
-        .all(|piece| piece.iter().copied().all(is_normalized))
-}
-
 fn stable_order(packed_coordinates: &[u64]) -> Vec<usize> {
     let mut rows: Vec<usize> = (0..packed_coordinates.len()).collect();
     if !rows::ascending(packed_coordinates) {
@@ -207,7 +197,7 @@ impl Columns {
         values: impl Into<ScalarBuffer<f64>>,
     ) -> Columns {
         let values = values.into();
-        if rows::ascending(&packed_coordinates) && all_normalized(&values) {
+        if rows::ascending(&packed_coordinates) && rows::all_normalized(&values) {
             return Columns {
                 axes,
                 packing,
@@ -234,7 +224,7 @@ impl Columns {
     }
 
     fn normalized(self) -> Columns {
-        if all_normalized(&self.values) {
+        if rows::all_normalized(&self.values) {
             return self;
         }
         self.select(&rows::pieces(self.len()), |row| {

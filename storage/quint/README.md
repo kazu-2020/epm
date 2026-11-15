@@ -2,7 +2,7 @@
 
 変更ログの S3 への書き方が、Assignee の交代、クラッシュ、応答の消失、再送が重なっても壊れないかを確かめるモデル。変更ログは、`<ws>/log/<Slot>` に Slot の順に並ぶセグメントの列である。Assignee は次の Slot に If-None-Match で PUT し、200 なら ACK する。
 
-`seqlog.qnt` の範囲は「ログとフェンシング」だけにした。スナップショットと GC は入れていない。`placement.qnt` は、配置表、App server、読み取りを加えたモデルで、ほかのワークスペースの Assignee がアドレスを再利用する場合も含む。
+`seqlog.qnt` の範囲は「ログとフェンシング」だけにした。snapshot と GC は入れていない。`placement.qnt` は、配置表、App server、読み取りを加えたモデルで、ほかのワークスペースの Assignee がアドレスを再利用する場合も含む。
 
 ## ファイル
 
@@ -103,7 +103,7 @@ Assignee の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-
 
 ## 入れていないもの
 
-- スナップショット、GC、再計算済み番号、Request ID の窓。
+- snapshot、GC、再計算済み番号、Request ID の窓。
 - 複数のワークスペースの変更ログ、テナントの混入。キーの命名、ワークスペースごとのデータ鍵、IAM で守る。`placement.qnt` が扱うのは、アドレスの再利用でほかのワークスペースの Assignee へ要求が届く場合だけである。
 - 活性(いつか確定する、交代後にいつか書ける)。ランダムシミュレーションは活性を検査しない。
 - グループコミットにまとめる件数、ハッシュの鎖、Event ID、3分の打ち切り。

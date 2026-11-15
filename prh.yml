@@ -15,3 +15,5 @@ rules:
     pattern: 付け替え
   - expected: Assignee
     pattern: 担当
+  - expected: snapshot
+    pattern: スナップショット
