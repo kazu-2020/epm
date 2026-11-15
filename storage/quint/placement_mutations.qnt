@@ -12,10 +12,10 @@ module placement_start_resent {
 
   run sameEpochOtherProcessStopsTest =
     placementInit
-      .then(launched("X", "A")).then(table("spawn", "", "B"))
+      .then(launched("X", "A")).then(table(Spawn("B")))
       .then(fencedTogether)
       .expect(isReady("A") and isStopped("B"))
-      .then(table("record", "", "A")).then(committed("A", "r1"))
+      .then(table(Record("A"))).then(committed("A", "r1"))
       .expect(acknowledged == Set("r1") and log == List("r1") and logRefinesChangeLog)
 }
 
@@ -27,15 +27,15 @@ module placement_start_resent_no_process_check {
 
   run sameEpochServesStaleReadTest =
     placementInit
-      .then(launched("X", "A")).then(table("spawn", "", "B"))
+      .then(launched("X", "A")).then(table(Spawn("B")))
       .then(fencedTogether)
       .expect(isReady("A") and isReady("B"))
-      .then(table("record", "", "A")).then(committed("A", "r1"))
-      .then(table("record", "", "B"))
+      .then(table(Record("A"))).then(committed("A", "r1"))
+      .then(table(Record("B")))
       .then(looksUp(placement.serving)).then(servedOne)
       .expect(placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
-      .then(sent("B", "r2")).then(onLog("B", "flush", "")).then(onLog("B", "apply", ""))
-      .then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
+      .then(sent("B", "r2")).then(onLog("B", Flush)).then(onLog("B", ApplyWrite))
+      .then(onLog("B", ReceiveReply)).then(onLog("B", Resolve))
       .expect(isStopped("B") and acknowledged == Set("r1") and logRefinesChangeLog)
 }
 
@@ -55,10 +55,10 @@ module placement_no_epoch_check {
     placementInit
       .then(started("X", "A"))
       .then(routes({ server: "A", epoch: 1 }, "r1"))
-      .then(onLog("A", "stop", ""))
+      .then(onLog("A", StopProcess))
       .then(started("Y", "B"))
       .then(launched("X", "A")).then(fenced("A"))
-      .then(delivers).then(onLog("A", "receive", "r1")).then(onLog("A", "flush", "")).then(onLog("A", "apply", "")).then(onLog("A", "reply", ""))
+      .then(delivers).then(onLog("A", Receive("r1"))).then(onLog("A", Flush)).then(onLog("A", ApplyWrite)).then(onLog("A", ReceiveReply))
       .expect(acknowledged == Set("r1") and isReady("B"))
       .then(looksUp({ server: "B", epoch: 2 })).then(servedOne)
       .expect(placement.served.epoch == 2 and placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
@@ -84,8 +84,8 @@ module placement_unrouted_write {
 
   run unroutedWriteMissesCommitTest =
     warmStarted
-      .then(routes({ server: "B", epoch: 2 }, "r2")).then(delivers).then(onLog("B", "receive", "r2"))
-      .then(onLog("B", "flush", "")).then(onLog("B", "apply", "")).then(onLog("B", "reply", ""))
+      .then(routes({ server: "B", epoch: 2 }, "r2")).then(delivers).then(onLog("B", Receive("r2")))
+      .then(onLog("B", Flush)).then(onLog("B", ApplyWrite)).then(onLog("B", ReceiveReply))
       .then(looksUp({ server: "A", epoch: 1 })).then(servedOne)
       .expect(placement.served.epoch == 1 and placement.served.mustSee == Set("r1", "r2") and not(readSeesAcknowledgedAtLookup))
 }
@@ -98,18 +98,18 @@ module placement_failover {
   run reclaimedEpochOtherProcessStopsTest =
     launchedAcrossFailover
       .expect(isReady("A") and isStopped("B"))
-      .then(table("failover", "", ""))
-      .then(table("readRow", "X", "")).then(table("claim", "X", "A"))
-      .then(table("record", "", "A")).then(committed("A", "r1"))
+      .then(table(Failover))
+      .then(table(ReadRow("X"))).then(table(Claim({ app: "X", server: "A" })))
+      .then(table(Record("A"))).then(committed("A", "r1"))
       .then(looksUp(placement.serving)).then(servedOne)
       .expect(placement.served == { epoch: 1, view: Set("r1"), mustSee: Set("r1"), otherWorkspace: false } and logRefinesChangeLog)
 
   // No guard of this design stops this read: the fence is in the store, and the row no longer shows the later epoch.
   run failoverReturnsToFencedAssigneeTest =
     placementInit
-      .then(started("X", "A")).then(table("replicate", "", ""))
+      .then(started("X", "A")).then(table(Replicate))
       .then(started("Y", "B")).then(committed("B", "r1"))
-      .then(table("failover", "", ""))
+      .then(table(Failover))
       .expect(placement.serving == { server: "A", epoch: 1 } and isReady("A"))
       .then(looksUp(placement.serving)).then(servedOne)
       .expect(placement.served.epoch == 1 and placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
@@ -123,10 +123,10 @@ module placement_failover_no_process_check {
   run secondFailoverRecordsStaleProcessTest =
     launchedAcrossFailover
       .expect(isReady("A") and isReady("B"))
-      .then(table("record", "", "B")).then(committed("B", "r1"))
-      .then(table("failover", "", ""))
-      .then(table("readRow", "X", "")).then(table("claim", "X", "A"))
-      .then(table("record", "", "A"))
+      .then(table(Record("B"))).then(committed("B", "r1"))
+      .then(table(Failover))
+      .then(table(ReadRow("X"))).then(table(Claim({ app: "X", server: "A" })))
+      .then(table(Record("A")))
       .then(looksUp(placement.serving)).then(servedOne)
       .expect(placement.served.epoch == 1 and placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
 }

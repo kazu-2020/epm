@@ -270,59 +270,14 @@ module seqlog {
     (self.phase == Ready and self.epoch == grantedEpoch) implies
       (if (self.view.length() > log.length()) false else log.slice(0, self.view.length()) == self.view))
 
-  val witnessNotTwoAcknowledged: bool = clients.acknowledged.size() < 2
-  val witnessNoCommitAfterHandover: bool = not(store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0))
-  val witnessNoOwnResendRejected: bool = not(store.replies.exists(reply =>
-    not(reply.succeeded) and store.slots.get(reply.write.slot).epoch == reply.write.epoch))
-  val witnessNoOldAssigneeStopped: bool = servers.keys().forall(server => servers.get(server).phase != Stopped)
+  val witnessTwoAcknowledged: bool = clients.acknowledged.size() >= 2
+  val witnessCommitAfterHandover: bool = store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0)
+  val witnessOwnResendRejected: bool = store.replies.exists(reply =>
+    not(reply.succeeded) and store.slots.get(reply.write.slot).epoch == reply.write.epoch)
+  val witnessOldAssigneeStopped: bool = servers.keys().exists(server => servers.get(server).phase == Stopped)
 
   action applyOne: bool = nondet write = store.writesInFlight.oneOf() all { ghost, apply(write, false) }
   action replyOne: bool = nondet reply = store.replies.oneOf() all { ghost, receiveReply(reply) }
-
-  run oldAssigneeTakesSlotFirstTest =
-    init
-      .then(all { ghost, grant("A") })
-      .then(all { ghost, load("A") })
-      .then(applyOne)
-      .then(replyOne)
-      .then(all { ghost, send("A", "r1") })
-      .then(all { ghost, receive("A", "r1") })
-      .then(all { ghost, flush("A") })
-      .then(all { ghost, grant("B") })
-      .then(all { ghost, load("B") })
-      .expect(servers.get("B").pending.exists(p => p.write.slot == 1))
-      .then(nondet write = store.writesInFlight.filter(w => w.server == "A").oneOf() all { ghost, apply(write, false) })
-      .then(nondet write = store.writesInFlight.filter(w => w.server == "B").oneOf() all { ghost, apply(write, false) })
-      .then(nondet reply = store.replies.filter(r => r.write.server == "A").oneOf() all { ghost, receiveReply(reply) })
-      .then(nondet reply = store.replies.filter(r => r.write.server == "B").oneOf() all { ghost, receiveReply(reply) })
-      .then(all { ghost, resolve("B") })
-      .then(applyOne)
-      .then(replyOne)
-      .expect(and {
-        servers.get("B").phase == Ready,
-        servers.get("B").view == List("r1"),
-        clients.acknowledged == Set("r1"),
-        replay(store.slots) == List("r1"),
-        store.slots.get(2) == { epoch: 2, process: 2, requests: List() },
-        refinesChangeLog, newestAssigneeSeesAcknowledged, staleEpochNeverCommits,
-      })
-
-  run ownResendAcknowledgedTest =
-    init
-      .then(all { ghost, grant("A") })
-      .then(all { ghost, load("A") })
-      .then(applyOne)
-      .then(replyOne)
-      .then(all { ghost, send("A", "r1") })
-      .then(all { ghost, receive("A", "r1") })
-      .then(all { ghost, flush("A") })
-      .then(all { ghost, timeout("A") })
-      .then(all { ghost, resolve("A") })
-      .then(nondet write = store.writesInFlight.filter(w => w.attempt == 0).oneOf() all { ghost, apply(write, true) })
-      .then(nondet write = store.writesInFlight.filter(w => w.attempt == 1).oneOf() all { ghost, apply(write, false) })
-      .then(replyOne)
-      .then(all { ghost, resolve("A") })
-      .expect(servers.get("A").phase == Ready and clients.acknowledged == Set("r1") and refinesChangeLog)
 }
 
 module seqlog_designed {

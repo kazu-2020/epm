@@ -248,33 +248,36 @@ module placement {
   val readSeesAcknowledgedAtLookup: bool = placement.served.mustSee.subseteq(placement.served.view) or placement.served.otherWorkspace
   val neverReadsOtherWorkspace: bool = not(placement.served.otherWorkspace)
 
-  val witnessNoReadAfterLostStart: bool = not(placement.startLost > 0 and placement.served.epoch > placement.startLost)
-  val witnessNoAddressReuse: bool = not(placement.reads.exists(read =>
-    placement.otherWorkspace.contains(read.server) or (servers.get(read.server).phase != Down and servers.get(read.server).epoch != read.epoch)))
+  val witnessReadAfterLostStart: bool = placement.startLost > 0 and placement.served.epoch > placement.startLost
+  val witnessAddressReuse: bool = placement.reads.exists(read =>
+    placement.otherWorkspace.contains(read.server) or (servers.get(read.server).phase != Down and servers.get(read.server).epoch != read.epoch))
 
-  // Fixed scenarios, because random simulation does not reach a read after a handover.
-  action onLog(server: str, kind: str, request: str): bool = all {
+  // Steps of the fixed scenarios in placement_test.qnt and placement_mutations.qnt, because random simulation does not reach a read after a handover.
+  type LogStep = Load | ApplyWrite | ReceiveReply | Receive(str) | Flush | StopProcess | Resolve
+  type TableStep = ReadRow(str) | Claim({ app: str, server: str }) | Replicate | Failover | Spawn(str) | Record(str)
+
+  action onLog(server: str, logStep: LogStep): bool = all {
     placementGhost, placement' = placement,
-    any {
-      all { kind == "load", load(server) },
-      all { kind == "apply", nondet write = store.writesInFlight.filter(w => w.server == server).oneOf() apply(write, false) },
-      all { kind == "reply", nondet reply = store.replies.filter(r => r.write.server == server).oneOf() receiveReply(reply) },
-      all { kind == "receive", receive(server, request) },
-      all { kind == "flush", flush(server) },
-      all { kind == "stop", stopProcess(server) },
-      all { kind == "resolve", resolve(server) },
+    match logStep {
+      | Load => load(server)
+      | ApplyWrite => nondet write = store.writesInFlight.filter(w => w.server == server).oneOf() apply(write, false)
+      | ReceiveReply => nondet reply = store.replies.filter(r => r.write.server == server).oneOf() receiveReply(reply)
+      | Receive(request) => receive(server, request)
+      | Flush => flush(server)
+      | StopProcess => stopProcess(server)
+      | Resolve => resolve(server)
     },
   }
 
-  action table(kind: str, app: str, server: str): bool = all {
+  action table(tableStep: TableStep): bool = all {
     placementGhost,
-    any {
-      all { kind == "readRow", readRow(app) },
-      all { kind == "claim", claimOn(app, nodeOf(server)) },
-      all { kind == "replicate", replicate },
-      all { kind == "failover", failover },
-      all { kind == "spawn", nondet start = placement.starts.oneOf() spawn(start, server) },
-      all { kind == "record", record(server) },
+    match tableStep {
+      | ReadRow(app) => readRow(app)
+      | Claim(target) => claimOn(target.app, nodeOf(target.server))
+      | Replicate => replicate
+      | Failover => failover
+      | Spawn(server) => nondet start = placement.starts.oneOf() spawn(start, server)
+      | Record(server) => record(server)
     },
   }
   action routes(chosen: Route, request: str): bool = all { placementGhost, routeWriteTo(chosen, request) }
@@ -286,33 +289,33 @@ module placement {
   def isStopped(server: str): bool = servers.get(server).phase == Stopped
 
   run launched(app: str, server: str): bool =
-    table("readRow", app, "").then(table("claim", app, server)).then(table("spawn", "", server))
+    table(ReadRow(app)).then(table(Claim({ app: app, server: server }))).then(table(Spawn(server)))
 
   run started(app: str, server: str): bool =
-    launched(app, server).then(fenced(server)).then(table("record", "", server))
+    launched(app, server).then(fenced(server)).then(table(Record(server)))
 
   run fenced(server: str): bool =
-    onLog(server, "load", "").then(onLog(server, "apply", "")).then(onLog(server, "reply", ""))
+    onLog(server, Load).then(onLog(server, ApplyWrite)).then(onLog(server, ReceiveReply))
 
   run fencedTogether: bool =
-    onLog("A", "load", "").then(onLog("B", "load", ""))
-      .then(onLog("A", "apply", "")).then(onLog("B", "apply", ""))
-      .then(onLog("A", "reply", "")).then(onLog("B", "reply", "")).then(onLog("B", "resolve", ""))
+    onLog("A", Load).then(onLog("B", Load))
+      .then(onLog("A", ApplyWrite)).then(onLog("B", ApplyWrite))
+      .then(onLog("A", ReceiveReply)).then(onLog("B", ReceiveReply)).then(onLog("B", Resolve))
 
   run launchedAcrossFailover: bool =
     placementInit
       .then(launched("X", "A"))
-      .then(table("failover", "", ""))
+      .then(table(Failover))
       .then(launched("Y", "B"))
       .then(fencedTogether)
 
-  run sent(server: str, request: str): bool = routes(placement.serving, request).then(delivers).then(onLog(server, "receive", request))
+  run sent(server: str, request: str): bool = routes(placement.serving, request).then(delivers).then(onLog(server, Receive(request)))
 
   run committed(server: str, request: str): bool =
     sent(server, request)
-      .then(onLog(server, "flush", ""))
-      .then(onLog(server, "apply", ""))
-      .then(onLog(server, "reply", ""))
+      .then(onLog(server, Flush))
+      .then(onLog(server, ApplyWrite))
+      .then(onLog(server, ReceiveReply))
 
   run servedOne = nondet read = placement.reads.oneOf() all { placementGhost, serve(read) }
 
@@ -323,35 +326,16 @@ module placement {
       .then(started("Y", "B")).then(committed("B", "r2"))
       .expect(acknowledged == Set("r1", "r2") and isReady("A"))
 
-  // The read that chose the old Assignee before the handover is concurrent with r2, so it may miss r2.
-  run readAfterHandoverTest =
-    handedOver
-      .then(servedOne)
-      .expect(placement.served == { epoch: 1, view: Set("r1"), mustSee: Set("r1"), otherWorkspace: false })
-      .then(looksUp({ server: "B", epoch: 2 }))
-      .then(servedOne)
-      .expect(placement.served == { epoch: 2, view: Set("r1", "r2"), mustSee: Set("r1", "r2"), otherWorkspace: false })
-
   run warmStarted =
     placementInit
       .then(started("X", "A")).then(committed("A", "r1"))
       .then(launched("Y", "B")).then(fenced("B"))
       .expect(isReady("A") and isReady("B") and placement.serving == { server: "A", epoch: 1 })
 
-  run warmHandoverTest =
-    warmStarted
-      .then(looksUp(placement.serving)).then(servedOne)
-      .expect(placement.served == { epoch: 1, view: Set("r1"), mustSee: Set("r1"), otherWorkspace: false })
-      .then(sent("A", "r2")).then(onLog("A", "flush", "")).then(onLog("A", "apply", "")).then(onLog("A", "reply", "")).then(onLog("A", "resolve", ""))
-      .expect(acknowledged == Set("r1") and not(isReady("A")))
-      .then(table("record", "", "B")).then(committed("B", "r2"))
-      .then(looksUp(placement.serving)).then(servedOne)
-      .expect(placement.served == { epoch: 2, view: Set("r1", "r2"), mustSee: Set("r1", "r2"), otherWorkspace: false })
-
   run lateRecordMissesCommit: bool =
     launchedAcrossFailover
-      .then(table("record", "", "B")).then(committed("B", "r1"))
-      .then(table("record", "", "A"))
+      .then(table(Record("B"))).then(committed("B", "r1"))
+      .then(table(Record("A")))
       .then(looksUp(placement.serving)).then(servedOne)
       .expect(placement.served.epoch == 1 and placement.served.mustSee == Set("r1") and not(readSeesAcknowledgedAtLookup))
 }

@@ -11,8 +11,10 @@
 | `change_log.qnt` | 抽象の仕様。ワークスペースごとに追記だけの列が1本あり、1つの Request ID は高々1回だけ足され、ACK するのは列に入ったものだけ |
 | `seqlog.qnt` | 変更ログの書き方のモデル。Assignee、配置コントローラー(エポックを渡す)、Slot、クライアントの再送。守りは `seqlog_design` の `allGuards` に、サーバー数などの上限は `seqlog` の `pure val` に置く |
 | `seqlog_mutations.qnt` | 守りを1つずつ外したモデル(`{ ...allGuards, deduplication: false }` など)。検査が実際に落ちることを示す。`check.sh` は、ここのモジュールがすべて `breaks` か `holds` に入っているかを確かめる |
+| `seqlog_test.qnt` | 設計どおりのモデルの固定の手順(`quint test`)。手順の部品(`applyOne` など)は、変異のモジュールも使うので `seqlog.qnt` に置く |
 | `seqlog_replay.qnt` | Rust の実装に再生するトレースを作るための `replayStep`。`step` の一部の手順だけを許し、送信と停止にステップを使い切らないようにした |
 | `placement.qnt` | 配置表、App server、ランチャー、読み取り、書き込みの転送を `seqlog.qnt` に追加したモデル。PostgreSQL の切り替え(遅延するレプリカへの復帰)も含む。規則は `placement_design` の `allPlacementGuards` に置く(ADR 0012) |
+| `placement_test.qnt` | 設計どおりの配置のモデルの固定の手順。手順の部品(`onLog`、`table`、`started` など)は、変異のモジュールも使うので `placement.qnt` に置く |
 | `placement_mutations.qnt` | 規則を1個ずつ除外した module と、その違反を示す固定の手順。`check.sh` は、ここのモジュールがすべて `placement_breaks` か `placement_scenarios` に入っているかを確かめる。`placement_failover_no_node_check` と `placement_failover_duplicate_start` は `processCheck` も除外する。`processCheck` が有効だと同一エポックの2個目のプロセスがフェンスで停止し、どちらの規則の除外も違反にならないため |
 | `check.sh` | すべての検査をまとめて実行する |
 | `../postgres/epoch_race.py` | PostgreSQL と PgBouncer で、エポックを発行する UPDATE の同時実行を実測する |
@@ -28,7 +30,7 @@ storage/quint/check.sh          # 1モジュールあたり5万回のランダ�
 storage/quint/check.sh 5000     # 手早く確かめるとき。回数が少ないと変異が反例に届かず落ちることがあるので、そのときは既定の回数で実行し直す
 ```
 
-終了コードが 1 なら、次のどれかが起きた。設計どおりのモデル(`seqlog_designed`)で性質が破れた。到達するはずの状態に届かなかった。守りを外したモデルで、`check.sh` の `breaks` に書いた性質が破れなかった、または `holds` と `log_safe_without_guard` の性質が破れた。
+終了コードが 1 なら、次のどれかが起きた。設計どおりのモデル(`seqlog_designed`)で性質が破れた。到達するはずの状態(witness)に1回も届かなかった。守りを外したモデルで、`check.sh` の `breaks` に書いた性質が破れなかった、または `holds` と `log_safe_without_guard` の性質が破れた。
 
 placement の失敗は次の4種類である。
 
@@ -79,7 +81,7 @@ Assignee の守りと理由は `docs/adr/0006-change-log-writes-are-conditional-
 
 `placement.qnt` の `log` で始まる性質(`logRefinesChangeLog` など)は、上の同名の性質を配置のモデルで検査する。
 
-`witness` で始まる4つは、到達するはずの状態に本当に届くかの確認。その状態は、2件の ACK、交代後の Assignee が書いた Slot、自分の再送が先に通ったための 412、古い Assignee の停止である。届かないと、上の性質は何も調べずに通ってしまう。
+`witness` で始まる4つは、到達するはずの状態に本当に届くかの確認。その状態は、2件の ACK、交代後の Assignee が書いた Slot、自分の再送が先に通ったための 412、古い Assignee の停止である。届かないと、上の性質は何も調べずに通ってしまう。`check.sh` は性質と同じ実行に `--witnesses` で渡し、各 witness に届いたトレースが1個以上あることを確かめる。
 
 固定の手順は3つある。`oldAssigneeTakesSlotFirstTest` は、Assignee の交代の直後に古い Assignee の遅れた PUT が Slot を先に取る場面。フェンスのやり直しで中身を読むのを省く誤りも捕まえる(省いても5万回のランダムシミュレーションでは届かなかった)。`ownResendAcknowledgedTest` は、自分の再送が 412 になり、読んで自分の書き込みと分かって ACK する場面。`pipelineAcknowledgesPastHoleTest` は下の `seqlog_two_in_flight` の場面。
 
