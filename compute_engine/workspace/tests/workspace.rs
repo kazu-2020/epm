@@ -1,13 +1,9 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
-use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray};
 use datagen::cases::exact;
+use datagen::numbered_dimension;
 use datagen::representative::{self, Size};
-use dimension::{
-    AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
-    DimensionGlobalId, DimensionKind, MemberIndex,
-};
+use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberIndex};
 use formula::{AxisErrorKind, ResolveErrorKind};
 use measure::{CoordinateError, Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
@@ -209,32 +205,7 @@ fn renamed(result: &mut MeasureDefinition, name: &str) {
 }
 
 fn dimension(id: u128, members: u32) -> Dimension {
-    dimension_of_kind(id, members, DimensionKind::Ordinary)
-}
-
-fn dimension_of_kind(id: u128, members: u32, kind: DimensionKind) -> Dimension {
-    let natural_key = AttributeDefinition {
-        global_id: AttributeGlobalId(Ulid(id * 1000)),
-        name: "ID".into(),
-        kind: AttributeKind::Text,
-    };
-    let definition = DimensionDefinition::try_new(
-        DimensionGlobalId(Ulid(id)),
-        format!("D{id}"),
-        kind,
-        natural_key.global_id,
-        vec![natural_key],
-    )
-    .expect("one text attribute is a valid definition");
-    let global_ids = FixedSizeBinaryArray::try_from_iter(
-        (0..members).map(|member| Ulid(id << 64 | u128::from(member)).to_bytes()),
-    )
-    .expect("every member ULID is 16 bytes");
-    let natural_keys = StringArray::from_iter_values((0..members).map(|member| member.to_string()));
-    let columns: Vec<ArrayRef> = vec![Arc::new(global_ids), Arc::new(natural_keys)];
-    let members = RecordBatch::try_new(Arc::new(definition.schema()), columns)
-        .expect("the columns follow the dimension schema");
-    Dimension::try_new(definition, members, &[]).expect("the members are unique")
+    numbered_dimension(id, members, DimensionKind::Ordinary, &[])
 }
 
 #[test]
@@ -430,7 +401,7 @@ fn an_input_of_a_dimension_of_another_kind_is_an_error() {
     let calendar = || {
         vec![
             dimension(1, 2),
-            dimension_of_kind(2, 2, DimensionKind::Calendar),
+            numbered_dimension(2, 2, DimensionKind::Calendar, &[]),
         ]
     };
 

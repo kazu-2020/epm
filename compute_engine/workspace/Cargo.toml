@@ -10,6 +10,5 @@ formula = { path = "../formula" }
 measure = { path = "../measure" }
 
 [dev-dependencies]
-arrow-array = "60.1.0"
 datagen = { path = "../datagen" }
 ulid = "3.0.0"
