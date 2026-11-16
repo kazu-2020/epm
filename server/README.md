@@ -75,7 +75,7 @@ curl -X POST "$api/GetLag" -d '{}'
 - `GetLag` returns the last committed and the last recalculated sequence.
 - `recalculated` and `committed` are `null` until the first commit is recalculated or committed.
 
-After a start, the server reads the log. Until it reaches the end of the log, a `ReadCells` without `at_least` and `GetLag` do not show the commits of the log. To read your own edit, send the sequence from `SubmitEdit` as `at_least`.
+After a start, the server reads the log and then writes its fence. Until the fence is written, the four calls above return `unavailable`. A `GetLag` that is not `unavailable` shows that the server is ready (ADR 0012). After that, a `ReadCells` without `at_least` can still miss the newest commits, because the recalculation can be behind. To read your own edit, send the sequence from `SubmitEdit` as `at_least`.
 
 The errors in this table have the body `{"code": ..., "message": ...}` with a Connect code. Other errors, such as an unknown path (404), a method that is not `POST` (405), or a body larger than 2 MB (413), do not have this body.
 
@@ -84,6 +84,6 @@ The errors in this table have the body `{"code": ..., "message": ...}` with a Co
 | Malformed JSON, wrong content type, bad ULID, edit to a calculated measure, coordinate of the wrong length, member out of range | `invalid_argument` | 400 |
 | Unknown measure in a read | `not_found` | 404 |
 | The engine is too far behind | `resource_exhausted` | 429 |
-| The sequence is not committed yet | `unavailable` | 503 |
+| The server is loading the log, or the sequence is not committed yet | `unavailable` | 503 |
 
 If you get 429 or 503, try again later. When the assignee stops, the process exits and the connection closes.

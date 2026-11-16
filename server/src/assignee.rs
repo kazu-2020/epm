@@ -57,6 +57,9 @@ pub struct Lag {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct Stopped;
+
+#[derive(Debug, PartialEq)]
 pub enum SubmitError {
     Rejected(Rejection),
     Stopped,
@@ -75,7 +78,7 @@ pub struct Handle {
     submission_sender: mpsc::Sender<Submission<Rejection>>,
     engine_receiver: watch::Receiver<Arc<Engine>>,
     committed_count: Arc<AtomicU64>,
-    readiness_receiver: watch::Receiver<bool>,
+    loaded_receiver: watch::Receiver<bool>,
     #[cfg(feature = "apply_before_commit")]
     commit_sender: mpsc::UnboundedSender<(Slot, Commit)>,
 }
@@ -86,7 +89,7 @@ struct Admission {
     accepted_count: u64,
     busy_after: u64,
     committed_count: Arc<AtomicU64>,
-    readiness_sender: watch::Sender<bool>,
+    loaded_sender: watch::Sender<bool>,
 }
 
 enum Calculator {
@@ -117,20 +120,20 @@ pub fn start(
     let edit_check = engine.edit_check().clone();
     let engine = Arc::new(engine);
     let (engine_sender, engine_receiver) = watch::channel(Arc::clone(&engine));
-    let (readiness_sender, readiness_receiver) = watch::channel(false);
+    let (loaded_sender, loaded_receiver) = watch::channel(false);
     let admission = Admission {
         edit_check,
         engine_receiver: engine_receiver.clone(),
         accepted_count: engine_next,
         busy_after: settings.busy_after,
         committed_count: Arc::clone(&committed_count),
-        readiness_sender,
+        loaded_sender,
     };
     let handle = Handle {
         submission_sender,
         engine_receiver,
         committed_count: Arc::clone(&committed_count),
-        readiness_receiver,
+        loaded_receiver,
         #[cfg(feature = "apply_before_commit")]
         commit_sender: commit_sender.clone(),
     };
@@ -346,11 +349,9 @@ impl Handle {
         values(&self.engine_receiver.borrow(), cells)?;
         if at_least.is_some() {
             // Not NotCommitted at once: a new assignee counts the commits of the log only when it has read the log, and a committed sequence would look uncommitted.
-            self.readiness_receiver
-                .clone()
-                .wait_for(|ready| *ready)
+            self.wait_loaded()
                 .await
-                .map_err(|_| ReadError::Stopped)?;
+                .map_err(|Stopped| ReadError::Stopped)?;
         }
         let lag = self.lag();
         if lag.committed < at_least {
@@ -368,6 +369,19 @@ impl Handle {
 
     pub fn lag(&self) -> Lag {
         lag(&self.engine_receiver, &self.committed_count)
+    }
+
+    pub fn loaded(&self) -> bool {
+        *self.loaded_receiver.borrow()
+    }
+
+    pub async fn wait_loaded(&self) -> Result<(), Stopped> {
+        self.loaded_receiver
+            .clone()
+            .wait_for(|loaded| *loaded)
+            .await
+            .map(|_| ())
+            .map_err(|_| Stopped)
     }
 
     pub fn engine_receiver(&self) -> watch::Receiver<Arc<Engine>> {
@@ -416,7 +430,7 @@ impl Admit for Admission {
 
     fn ready(&mut self, next: Sequence) {
         self.committed_count.fetch_max(next.0, Ordering::SeqCst);
-        self.readiness_sender.send_replace(true);
+        self.loaded_sender.send_replace(true);
     }
 }
 
