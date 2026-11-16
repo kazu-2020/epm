@@ -196,7 +196,7 @@ fn edit_and_compare(model: &Model) {
                 None => delta.delete(&coordinate),
             }
             .expect("the coordinate fits");
-            delta
+            delta.finish()
         };
         let edited = delta(&measures[input]);
         inputs[input] = inputs[input]
@@ -231,7 +231,7 @@ fn two_deltas_for_one_measure_recalculate_the_cells_of_both() {
     let delta = |measure: &Measure, coordinate: &[MemberIndex]| {
         let mut delta = measure.delta();
         delta.set(coordinate, 1_234.5).expect("the coordinate fits");
-        delta
+        delta.finish()
     };
     let deltas = [
         (quantity, delta(&measures[input], first)),

@@ -280,10 +280,10 @@ fn delta_overrides_base_and_newer_delta_wins() {
     first.set(&coordinate(0, 0), 11.0).unwrap();
     first.set(&coordinate(1, 1), 5.0).unwrap();
     first.delete(&coordinate(0, 1)).unwrap();
-    let measure = measure.apply(first).unwrap();
+    let measure = measure.apply(first.finish()).unwrap();
     let mut second = measure.delta();
     second.set(&coordinate(1, 1), 6.0).unwrap();
-    let measure = measure.apply(second).unwrap();
+    let measure = measure.apply(second.finish()).unwrap();
 
     assert_eq!(measure.get(&coordinate(0, 0)).unwrap(), Some(11.0));
     assert_eq!(measure.get(&coordinate(0, 1)).unwrap(), None);
@@ -307,6 +307,7 @@ fn later_write_in_one_delta_replaces_the_earlier_one() {
     delta.set(&coordinate(1, 0), 1.0).unwrap();
     delta.set(&coordinate(0, 1), 3.0).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
+    let delta = delta.finish();
     assert_eq!(delta.packed_coordinates().len(), 2);
     assert!(delta.packed_coordinates().is_sorted());
     let measure = measure.apply(delta).unwrap();
@@ -320,7 +321,7 @@ fn writing_non_finite_empties_the_cell_and_zero_is_kept() {
     delta.set(&coordinate(0, 0), f64::NAN).unwrap();
     delta.set(&coordinate(0, 1), 0.0).unwrap();
     delta.set(&coordinate(1, 0), -0.0).unwrap();
-    let measure = measure.apply(delta).unwrap();
+    let measure = measure.apply(delta.finish()).unwrap();
     assert_eq!(measure.get(&coordinate(0, 0)).unwrap(), None);
     assert_eq!(measure.get(&coordinate(0, 1)).unwrap(), Some(0.0));
     assert_eq!(
@@ -363,7 +364,7 @@ fn delta_made_against_dimensions_of_another_size_is_rejected() {
     let mut delta = larger.delta();
     delta.set(&coordinate(2, 0), 1.0).unwrap();
     assert_eq!(
-        smaller.apply(delta).unwrap_err(),
+        smaller.apply(delta.finish()).unwrap_err(),
         MeasureError::DeltaAxesMismatch
     );
 }
@@ -375,7 +376,7 @@ fn delta_of_another_measure_is_rejected() {
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
     let cost = Measure::try_new(definition, batch, &[&periods(), &departments()]).unwrap();
     assert_eq!(
-        measure.apply(cost.delta()).unwrap_err(),
+        measure.apply(cost.delta().finish()).unwrap_err(),
         MeasureError::ForeignDelta(COST)
     );
 }
@@ -388,11 +389,11 @@ fn compaction_folds_deltas_into_a_sorted_base_without_changing_reads() {
     first.delete(&coordinate(0, 1)).unwrap();
     first.set(&coordinate(1, 1), 5.0).unwrap();
     first.set(&coordinate(2, 1), 7.0).unwrap();
-    let measure = measure.apply(first).unwrap();
+    let measure = measure.apply(first.finish()).unwrap();
     let mut second = measure.delta();
     second.delete(&coordinate(2, 1)).unwrap();
     second.set(&coordinate(1, 0), 0.0).unwrap();
-    let measure = measure.apply(second).unwrap();
+    let measure = measure.apply(second.finish()).unwrap();
 
     let measure = measure.compact();
 
@@ -428,7 +429,7 @@ fn applying_a_delta_leaves_the_earlier_version_unchanged() {
     let before = sales();
     let mut delta = before.delta();
     delta.set(&coordinate(0, 0), 11.0).unwrap();
-    let after = before.apply(delta).unwrap();
+    let after = before.apply(delta.finish()).unwrap();
     assert_eq!(before.get(&coordinate(0, 0)).unwrap(), Some(10.0));
     assert_eq!(after.get(&coordinate(0, 0)).unwrap(), Some(11.0));
 
@@ -442,11 +443,11 @@ fn committer_replays_the_deltas_it_applied_during_compaction_onto_the_compacted_
     let measure = sales();
     let mut first = measure.delta();
     first.set(&coordinate(0, 0), 11.0).unwrap();
-    let started = measure.apply(first).unwrap();
+    let started = measure.apply(first.finish()).unwrap();
     let compacted = started.compact();
     let mut later = started.delta();
     later.delete(&coordinate(2, 0)).unwrap();
-    let later = Arc::new(later);
+    let later = Arc::new(later.finish());
     let current = started.apply(later.clone()).unwrap();
 
     let replayed = compacted.apply(later).unwrap();
@@ -465,7 +466,7 @@ fn delta_lists_each_coordinate_with_its_latest_change() {
     delta.delete(&coordinate(0, 1)).unwrap();
     delta.set(&coordinate(1, 0), 2.0).unwrap();
     assert_eq!(
-        merged_changes(&measure.apply(delta).unwrap()),
+        merged_changes(&measure.apply(delta.finish()).unwrap()),
         vec![
             (coordinate(0, 1).to_vec(), None),
             (coordinate(1, 0).to_vec(), Some(2.0))
@@ -479,11 +480,11 @@ fn folding_deltas_leaves_one_layer_over_the_same_base() {
     let mut first = measure.delta();
     first.set(&coordinate(0, 0), 11.0).unwrap();
     first.set(&coordinate(1, 1), 5.0).unwrap();
-    let measure = measure.apply(first).unwrap();
+    let measure = measure.apply(first.finish()).unwrap();
     let mut second = measure.delta();
     second.delete(&coordinate(1, 1)).unwrap();
     second.set(&coordinate(0, 0), 12.0).unwrap();
-    let measure = measure.apply(second).unwrap();
+    let measure = measure.apply(second.finish()).unwrap();
 
     let folded = measure.fold_deltas();
 
@@ -515,7 +516,7 @@ fn folding_deltas_keeps_the_cells_that_only_one_delta_changes() {
             for (coordinate, value) in cells {
                 delta.set(coordinate, *value).unwrap();
             }
-            measure = measure.apply(delta).unwrap();
+            measure = measure.apply(delta.finish()).unwrap();
         }
 
         let changes = merged_changes(&measure.fold_deltas());
@@ -582,7 +583,7 @@ fn cells_read_through_the_deltas() {
     let mut delta = measure.delta();
     delta.set(&coordinate(1, 1), 5.0).unwrap();
     delta.delete(&coordinate(0, 1)).unwrap();
-    let measure = measure.apply(delta).unwrap();
+    let measure = measure.apply(delta.finish()).unwrap();
     assert_eq!(
         measure.cells().collect::<Vec<_>>(),
         [
@@ -827,6 +828,7 @@ fn coordinates_are_taken_and_given_in_the_declared_order_of_the_axes() {
     let mut delta = measure.delta();
     delta.set(&at(1, 2), 9.0).unwrap();
     delta.delete(&at(0, 1)).unwrap();
+    let delta = delta.finish();
     assert_eq!(
         delta.packed_coordinates(),
         [
@@ -877,7 +879,7 @@ fn base_functions_skip_the_pending_deltas_and_the_others_include_them() {
     let mut delta = measure.delta();
     delta.set(&coordinate(1, 1), 5.0).unwrap();
     delta.delete(&coordinate(0, 0)).unwrap();
-    let measure = measure.apply(delta).unwrap();
+    let measure = measure.apply(delta.finish()).unwrap();
 
     assert_eq!(measure.base_values().to_vec(), vec![10.0, 20.0, 30.0]);
     assert_eq!(measure.base_packed_coordinates().len(), 3);
@@ -901,33 +903,15 @@ fn base_functions_skip_the_pending_deltas_and_the_others_include_them() {
 fn an_empty_delta_adds_no_layer_and_a_delta_that_changes_nothing_keeps_the_cells() {
     let measure = sales();
 
-    let unchanged = measure.apply(measure.delta()).unwrap();
+    let unchanged = measure.apply(measure.delta().finish()).unwrap();
     assert_eq!(unchanged.delta_len(), 0);
 
     let mut delta = measure.delta();
     delta.delete(&coordinate(1, 0)).unwrap();
     delta.set(&coordinate(0, 0), 10.0).unwrap();
-    let applied = measure.apply(delta).unwrap();
+    let applied = measure.apply(delta.finish()).unwrap();
     assert_eq!(rows(&applied), rows(&measure));
     assert_eq!(applied.get(&coordinate(1, 0)).unwrap(), None);
-}
-
-#[test]
-fn a_shared_unsorted_delta_gives_the_same_cells_to_every_measure_it_is_applied_to() {
-    let measure = sales();
-    let mut delta = measure.delta();
-    delta.set(&coordinate(2, 1), 1.0).unwrap();
-    delta.set(&coordinate(0, 1), 2.0).unwrap();
-    delta.set(&coordinate(2, 1), 3.0).unwrap();
-    let shared = Arc::new(delta);
-
-    let first = measure.apply(Arc::clone(&shared)).unwrap();
-    let second = measure.apply(Arc::clone(&shared)).unwrap();
-
-    let expected = vec![(0, 0, 10.0), (0, 1, 2.0), (2, 0, 30.0), (2, 1, 3.0)];
-    assert_eq!(rows(&first), expected);
-    assert_eq!(rows(&second), expected);
-    assert_eq!(first.delta_len(), 2);
 }
 
 #[test]

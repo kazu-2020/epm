@@ -320,7 +320,9 @@ fn applied_edits_give_the_cells_of_a_workspace_that_starts_with_the_edited_input
     delta
         .set(&quantity(None).coordinate, 7.25)
         .expect("the coordinate fits");
-    *input = input.apply(delta).expect("the delta is of the input");
+    *input = input
+        .apply(delta.finish())
+        .expect("the delta is of the input");
     let expected = calculated(edited);
 
     assert_eq!(cells(&applied), cells(&expected));
@@ -378,7 +380,9 @@ fn a_workspace_takes_only_inputs_of_its_definitions_and_dimensions() {
     delta
         .set(&quantity(None).coordinate, 7.25)
         .expect("the coordinate fits");
-    edited[0] = edited[0].apply(delta).expect("the delta is of the input");
+    edited[0] = edited[0]
+        .apply(delta.finish())
+        .expect("the delta is of the input");
     let cells = |inputs: &[Measure]| -> Vec<Cells> {
         inputs
             .iter()

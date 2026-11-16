@@ -8,11 +8,11 @@ use dimension::{Dimension, DimensionGlobalId, MemberIndex};
 
 use crate::axes::Axes;
 use crate::definition::{MeasureDefinition, MeasureGlobalId};
-use crate::delta::Delta;
+use crate::delta::{Delta, DeltaBuilder};
 use crate::error::{CoordinateError, MeasureError};
 use crate::normalize::normalize;
 use crate::packing::CoordinatePacking;
-use crate::scan::{check_sorted, first_row, first_unsorted};
+use crate::scan::{check_sorted, first_row};
 
 #[derive(Debug, Clone)]
 pub struct Measure {
@@ -245,13 +245,8 @@ impl Measure {
             .map(|row| self.values[row]))
     }
 
-    pub fn delta(&self) -> Delta {
-        Delta {
-            measure: self.definition.global_id,
-            axes: self.axes.clone(),
-            packed_coordinates: Vec::new(),
-            changes: Vec::new(),
-        }
+    pub fn delta(&self) -> DeltaBuilder {
+        DeltaBuilder::new(self.definition.global_id, self.axes.clone())
     }
 
     pub fn delta_from_packed(
@@ -266,26 +261,24 @@ impl Measure {
         );
         check_sorted(&packed_coordinates)?;
         self.axes.check_in_range(&packed_coordinates)?;
-        Ok(Delta {
-            changes: changes
+        Ok(Delta::sorted(
+            self.definition.global_id,
+            self.axes.clone(),
+            packed_coordinates,
+            changes
                 .into_iter()
                 .map(|change| change.and_then(normalize))
                 .collect(),
-            packed_coordinates,
-            ..self.delta()
-        })
+        ))
     }
 
     pub fn apply(&self, delta: impl Into<Arc<Delta>>) -> Result<Measure, MeasureError> {
-        let mut delta = delta.into();
+        let delta = delta.into();
         if delta.measure != self.definition.global_id {
             return Err(MeasureError::ForeignDelta(delta.measure));
         }
         if delta.axes != self.axes {
             return Err(MeasureError::DeltaAxesMismatch);
-        }
-        if first_unsorted(&delta.packed_coordinates).is_some() {
-            Arc::make_mut(&mut delta).settle();
         }
         let mut measure = self.clone();
         if !delta.packed_coordinates.is_empty() {
@@ -300,11 +293,12 @@ impl Measure {
         }
         let (packed_coordinates, changes) = self.merged_changes();
         let mut measure = self.clone();
-        measure.deltas = vec![Arc::new(Delta {
+        measure.deltas = vec![Arc::new(Delta::sorted(
+            self.definition.global_id,
+            self.axes.clone(),
             packed_coordinates,
             changes,
-            ..self.delta()
-        })];
+        ))];
         measure
     }
 
