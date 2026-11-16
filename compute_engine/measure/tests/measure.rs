@@ -532,6 +532,37 @@ fn folding_deltas_keeps_the_cells_that_only_one_delta_changes() {
 }
 
 #[test]
+fn deltas_over_a_thirty_second_of_the_base_are_compacted_into_it() {
+    let months: Vec<String> = (1..=32).map(|month| format!("{month}月")).collect();
+    let months: Vec<&str> = months.iter().map(String::as_str).collect();
+    let measure = Measure::from_cells(
+        definition(SALES, vec![PERIOD, DEPARTMENT]),
+        (0..32)
+            .flat_map(|period| {
+                (0..2).map(move |department| (coordinate(period, department).to_vec(), 1.0))
+            })
+            .collect(),
+        &[&dimension(PERIOD, &months), &departments()],
+    )
+    .unwrap();
+    let edited = |cells: u32| {
+        let mut delta = measure.delta();
+        for period in 0..cells {
+            delta.set(&coordinate(period, 0), 2.0).unwrap();
+        }
+        measure.apply(delta.finish()).unwrap()
+    };
+
+    let small = edited(2).fold_deltas_or_compact();
+    let large = edited(3).fold_deltas_or_compact();
+
+    assert_eq!(small.delta_len(), 2);
+    assert_eq!(small.base_values(), measure.base_values());
+    assert_eq!(large.delta_len(), 0);
+    assert_eq!(rows(&large), rows(&edited(3)));
+}
+
+#[test]
 fn cells_given_in_any_order_build_a_sorted_measure() {
     let cells = vec![
         (coordinate(2, 0).to_vec(), 30.0),

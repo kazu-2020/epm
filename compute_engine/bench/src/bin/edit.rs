@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use datagen::representative::{self, Size};
 use dimension::Dimension;
 use formula::CheckedExpression;
-use measure::{MeasureDefinition, MeasureGlobalId};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 
 fn main() -> std::io::Result<()> {
     let usage = "usage: edit <directory> <edits per input>";
@@ -60,15 +60,17 @@ fn main() -> std::io::Result<()> {
             let global_id = measures[input].global_id();
             let started = Instant::now();
             measures = column_engine::edit(&measures, [(global_id, delta)], &order, &dimensions)
-                .expect("the edit recalculates");
-            times.push(started.elapsed());
-            eprintln!("{name}\t{edit}\t{:.3}s", started.elapsed().as_secs_f64());
-            // Not timed: each edit starts from a compacted base, so the times leave out the merge of the deltas that the server keeps.
-            for measure in &mut measures {
-                if measure.delta_len() > 0 {
-                    *measure = measure.compact();
-                }
-            }
+                .expect("the edit recalculates")
+                .iter()
+                .map(Measure::fold_deltas_or_compact)
+                .collect();
+            let elapsed = started.elapsed();
+            times.push(elapsed);
+            let delta_len: usize = measures.iter().map(Measure::delta_len).sum();
+            eprintln!(
+                "{name}\t{edit}\t{:.3}s\tdelta {delta_len}",
+                elapsed.as_secs_f64()
+            );
         }
         report(&name, &mut times);
         all.extend(times);
