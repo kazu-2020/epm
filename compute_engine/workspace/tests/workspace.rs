@@ -4,7 +4,7 @@ use datagen::cases::exact;
 use datagen::numbered_dimension;
 use datagen::representative::{self, Size};
 use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberIndex};
-use formula::{AxisErrorKind, ResolveErrorKind};
+use formula::{AxisErrorKind, EvaluateError, ResolveErrorKind};
 use measure::{CoordinateError, Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 use workspace::{
@@ -194,7 +194,7 @@ fn a_formula_error_names_the_result_and_the_step_that_failed() {
         }),
         WorkspaceError::Formula {
             result: SALES,
-            error: FormulaError::MissingDimension(DimensionGlobalId(Ulid(99))),
+            error: FormulaError::Plan(EvaluateError::MissingDimension(DimensionGlobalId(Ulid(99)))),
         }
     );
 }
@@ -237,9 +237,9 @@ fn a_result_in_the_middle_of_a_formula_wider_than_64_bits_is_an_error() {
         wide("SUM('左' * '右', BY 'D3')"),
         Err(WorkspaceError::Formula {
             result: MeasureGlobalId(Ulid(21)),
-            error: FormulaError::PackingTooWide(
+            error: FormulaError::Plan(EvaluateError::PackingTooWide(
                 (1..=5).map(|id| DimensionGlobalId(Ulid(id))).collect()
-            ),
+            )),
         })
     );
     assert_eq!(

@@ -9,7 +9,7 @@ pub enum EvaluateError {
     MissingMeasure(MeasureGlobalId),
     MeasureAxesChanged(MeasureGlobalId),
     MeasurePackingChanged(MeasureGlobalId),
-    PackingTooWide,
+    PackingTooWide(Vec<DimensionGlobalId>),
     MissingDimension(DimensionGlobalId),
     MissingAttribute(AttributeGlobalId),
     InvalidResult(MeasureError),
