@@ -303,10 +303,11 @@ impl Measure {
     }
 
     pub fn fold_deltas_or_compact(&self) -> Measure {
-        if self.delta_len() * COMPACTION_DIVISOR > self.values.len() {
-            self.compact()
+        let folded = self.fold_deltas();
+        if folded.delta_len() * COMPACTION_DIVISOR > folded.values.len() {
+            folded.compact()
         } else {
-            self.fold_deltas()
+            folded
         }
     }
 
@@ -344,7 +345,7 @@ impl Measure {
     }
 }
 
-// Not compacting on every edit: compaction copies the whole base. In the edit bench (issue #158), 16 and 32 tied for the fastest edits among 4, 8, 16, 32 and 64.
+// Not compacting on every edit: compaction copies the whole base.
 const COMPACTION_DIVISOR: usize = 32;
 
 fn merge_changes(

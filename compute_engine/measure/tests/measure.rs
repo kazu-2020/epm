@@ -545,21 +545,29 @@ fn deltas_over_a_thirty_second_of_the_base_are_compacted_into_it() {
         &[&dimension(PERIOD, &months), &departments()],
     )
     .unwrap();
-    let edited = |cells: u32| {
+    let edited = |measure: &Measure, cells: u32, value: f64| {
         let mut delta = measure.delta();
         for period in 0..cells {
-            delta.set(&coordinate(period, 0), 2.0).unwrap();
+            delta.set(&coordinate(period, 0), value).unwrap();
         }
         measure.apply(delta.finish()).unwrap()
     };
 
-    let small = edited(2).fold_deltas_or_compact();
-    let large = edited(3).fold_deltas_or_compact();
+    let small = edited(&measure, 2, 2.0).fold_deltas_or_compact();
+    let large = edited(&measure, 3, 2.0).fold_deltas_or_compact();
+    let overlapping = edited(&edited(&measure, 2, 2.0), 2, 3.0).fold_deltas_or_compact();
 
     assert_eq!(small.delta_len(), 2);
     assert_eq!(small.base_values(), measure.base_values());
     assert_eq!(large.delta_len(), 0);
-    assert_eq!(rows(&large), rows(&edited(3)));
+    assert_eq!(rows(&large), rows(&edited(&measure, 3, 2.0)));
+    assert_eq!(
+        overlapping.delta_len(),
+        2,
+        "cells changed by both deltas count once"
+    );
+    assert_eq!(overlapping.base_values(), measure.base_values());
+    assert_eq!(overlapping.get(&coordinate(0, 0)).unwrap(), Some(3.0));
 }
 
 #[test]
