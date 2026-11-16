@@ -55,7 +55,7 @@ pub fn read_measures(directory: &Path, dimensions: &[&Dimension]) -> std::io::Re
                     .map(|field| parse(field.name()).map(DimensionGlobalId))
                     .collect::<Result<_, _>>()?,
             )
-            .expect("the generator declares each axis once");
+            .map_err(std::io::Error::other)?;
             let batches = reader
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(std::io::Error::other)?;

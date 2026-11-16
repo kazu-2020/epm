@@ -152,6 +152,14 @@ fn measure_without_cells_is_valid() {
 }
 
 #[test]
+fn definition_keeps_its_id_name_and_axes_in_declared_order() {
+    let definition = definition(SALES, vec![DEPARTMENT, PERIOD]);
+    assert_eq!(definition.global_id(), SALES);
+    assert_eq!(definition.name(), "売上");
+    assert_eq!(definition.axes(), &[DEPARTMENT, PERIOD]);
+}
+
+#[test]
 fn repeated_axis_is_rejected() {
     assert_eq!(
         MeasureDefinition::try_new(SALES, "売上".into(), vec![PERIOD, DEPARTMENT, PERIOD])
