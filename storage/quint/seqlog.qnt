@@ -9,6 +9,7 @@ module seqlog_design {
   }
 }
 
+// The guards and the reasons for them are in docs/adr/0006-change-log-writes-are-conditional-and-read-back.md.
 module seqlog {
   import change_log.* from "./change_log"
   import seqlog_design.*
@@ -22,7 +23,7 @@ module seqlog {
   pure val MaxInFlight = 2
 
   // The epoch is at the start of the segment body, not in the key: the slot number alone is what two assignees fight for.
-  // Not the epoch alone in a fence: after a failover of the database, two processes can get the same epoch. A data write has process 0.
+  // Not the epoch alone in a fence: after a failover of the database, two processes can get the same epoch.
   type Slot = { epoch: int, process: int, requests: List[str] }
   type Write = { server: str, slot: int, epoch: int, process: int, requests: List[str], attempt: int }
   type Reply = { write: Write, succeeded: bool }
@@ -51,6 +52,87 @@ module seqlog {
 
   pure def lastSlot(slots: int -> Slot): int = slots.keys().fold(-1, (highest, i) => if (i > highest) i else highest)
 
+  type Outcome = { self: Server, acknowledged: Set[str], sent: Set[Write] }
+
+  pure def keeps(self: Server): Outcome = { self: self, acknowledged: Set(), sent: Set() }
+
+  pure def stops(self: Server): Outcome = keeps({ ...self, phase: Stopped, batch: List(), pending: Set() })
+
+  pure def succeeds(self: Server, write: Write): Outcome = {
+    self: {
+      ...self,
+      phase: if (isFence(write)) Ready else self.phase,
+      view: self.view.concat(write.requests),
+      pending: self.pending.filter(p => p.write != write),
+    },
+    acknowledged: write.requests.toSet(),
+    sent: Set(),
+  }
+
+  pure def replaces(self: Server, write: Write, after: Pending): Server =
+    { ...self, pending: self.pending.filter(p => p.write != write).union(Set(after)) }
+
+  pure def isStale(self: Server, slots: int -> Slot): bool =
+    guards.epochCheck and lastSlot(slots) >= 0 and slots.get(lastSlot(slots)).epoch >= self.epoch
+
+  // Not a LIST followed by a read of the last segment: one step is enough, because a write between them ends in the 412 of the fence.
+  pure def loads(server: str, self: Server, slots: int -> Slot): Outcome = {
+    val free = lastSlot(slots) + 1
+    val fence = { server: server, slot: free, epoch: self.epoch, process: self.process, requests: List(), attempt: 0 }
+    val loaded = { ...self, next: free + 1, view: replay(slots) }
+    if (isStale(self, slots)) stops(self)
+    else if (guards.fence) { self: { ...loaded, phase: Fencing, pending: Set({ write: fence, unknown: false }) }, acknowledged: Set(), sent: Set(fence) }
+    else keeps({ ...loaded, phase: Ready, next: free })
+  }
+
+  pure def receives(self: Server, request: str): Outcome = {
+    val inFlight = if (guards.inFlightDeduplication) self.pending.map(p => p.write.requests.toSet()).flatten() else Set()
+    if (guards.deduplication and self.view.toSet().contains(request)) { ...keeps(self), acknowledged: Set(request) }
+    else if (self.batch.toSet().union(inFlight).contains(request)) keeps(self)
+    else keeps({ ...self, batch: self.batch.append(request) })
+  }
+
+  // A 412 is not proof of a fence: the slot can hold this server's own write, from a resend or a late apply.
+  pure def receivesReply(self: Server, reply: Reply): Outcome =
+    if (reply.succeeded) succeeds(self, reply.write)
+    else if (guards.headsAfterRejection) keeps(replaces(self, reply.write, { write: reply.write, unknown: true }))
+    else stops(self)
+
+  // Also the path of a 409 ConditionalRequestConflict: S3 returns it for concurrent conditional writes, and the server treats it as an unknown result.
+  pure def timesOut(self: Server, p: Pending): Outcome =
+    if (guards.readsBackUnknown) keeps(replaces(self, p.write, { ...p, unknown: true })) else succeeds(self, p.write)
+
+  pure def isOwn(found: Slot, write: Write): bool =
+    if (guards.processCheck) found == slotOf(write) else found.epoch == write.epoch and found.requests == write.requests
+
+  pure def resolves(self: Server, p: Pending, slots: int -> Slot): Outcome = {
+    val write = p.write
+    if (not(slots.keys().contains(write.slot))) {
+      val again = { ...write, attempt: write.attempt + 1 }
+      if (write.attempt < MaxResends) { ...keeps(replaces(self, write, { write: again, unknown: false })), sent: Set(again) }
+      else keeps(replaces(self, write, { write: write, unknown: false }))
+    } else {
+      val found = slots.get(write.slot)
+      val refence = { ...write, slot: write.slot + 1, attempt: 0 }
+      if (isOwn(found, write)) succeeds(self, write)
+      else if (found.epoch < write.epoch and isFence(write)) {
+        self: { ...self, next: refence.slot + 1, view: self.view.concat(found.requests), pending: Set({ write: refence, unknown: false }) },
+        acknowledged: Set(),
+        sent: Set(refence),
+      }
+      else stops(self)
+    }
+  }
+
+  pure def applies(store: Store, write: Write, replyLost: bool): Store = {
+    val succeeded = not(guards.ifNoneMatch) or not(store.slots.keys().contains(write.slot))
+    {
+      slots: if (succeeded) store.slots.put(write.slot, slotOf(write)) else store.slots,
+      writesInFlight: store.writesInFlight.exclude(Set(write)),
+      replies: if (replyLost) store.replies else store.replies.union(Set({ write: write, succeeded: succeeded })),
+    }
+  }
+
   action init = all {
     store' = emptyStore,
     servers' = Servers.mapBy(_ => down),
@@ -59,6 +141,7 @@ module seqlog {
     previous' = { slots: Map(), acknowledged: Set() },
   }
 
+  // Not a stop of the other server: an old Assignee keeps running until it learns of the new epoch.
   action grant(server: str): bool = all {
     grantedEpoch < MaxEpoch,
     grantedEpoch' = grantedEpoch + 1,
@@ -72,32 +155,16 @@ module seqlog {
     store' = store, grantedEpoch' = grantedEpoch, clients' = clients,
   }
 
-  action stop(server: str): bool = all {
-    servers' = servers.set(server, { ...servers.get(server), phase: Stopped, batch: List(), pending: Set() }),
-    clients' = clients,
+  action become(server: str, outcome: Outcome): bool = all {
+    servers' = servers.set(server, outcome.self),
+    clients' = { ...clients, acknowledged: clients.acknowledged.union(outcome.acknowledged) },
+    store' = { ...store, writesInFlight: store.writesInFlight.union(outcome.sent) },
   }
 
-  action load(server: str): bool = {
-    val self = servers.get(server)
-    val slots = store.slots
-    val free = lastSlot(slots) + 1
-    val fence = { server: server, slot: free, epoch: self.epoch, process: self.process, requests: List(), attempt: 0 }
-    val loaded = { ...self, next: free + 1, view: replay(slots) }
-    val stale = guards.epochCheck and lastSlot(slots) >= 0 and slots.get(lastSlot(slots)).epoch >= self.epoch
-    all {
-      self.phase == Loading,
-      if (stale) stop(server)
-      else if (guards.fence) all {
-        servers' = servers.set(server, { ...loaded, phase: Fencing, pending: Set({ write: fence, unknown: false }) }),
-        clients' = clients,
-      } else all {
-        servers' = servers.set(server, { ...loaded, phase: Ready, next: free }), clients' = clients,
-      },
-      store' = if (guards.fence and not(stale))
-        { ...store, writesInFlight: store.writesInFlight.union(Set(fence)) }
-      else store,
-      grantedEpoch' = grantedEpoch,
-    }
+  action load(server: str): bool = all {
+    servers.get(server).phase == Loading,
+    become(server, loads(server, servers.get(server), store.slots)),
+    grantedEpoch' = grantedEpoch,
   }
 
   // A send is always allowed, not only before the acknowledgement, because the acknowledgement can be lost.
@@ -107,21 +174,13 @@ module seqlog {
   }
 
   action receive(server: str, request: str): bool = {
-    val self = servers.get(server)
     val message = { server: server, request: request }
-    val received = { ...clients, requestsInFlight: clients.requestsInFlight.exclude(Set(message)) }
-    val inFlight = if (guards.inFlightDeduplication) self.pending.map(p => p.write.requests.toSet()).flatten() else Set()
-    val held = self.batch.toSet().union(inFlight)
+    val outcome = receives(servers.get(server), request)
     all {
       clients.requestsInFlight.contains(message),
-      self.phase == Ready,
-      if (guards.deduplication and self.view.toSet().contains(request)) all {
-        servers' = servers, clients' = { ...received, acknowledged: clients.acknowledged.union(Set(request)) },
-      } else if (held.contains(request)) all {
-        servers' = servers, clients' = received,
-      } else all {
-        servers' = servers.set(server, { ...self, batch: self.batch.append(request) }), clients' = received,
-      },
+      servers.get(server).phase == Ready,
+      servers' = servers.set(server, outcome.self),
+      clients' = { requestsInFlight: clients.requestsInFlight.exclude(Set(message)), acknowledged: clients.acknowledged.union(outcome.acknowledged) },
       store' = store, grantedEpoch' = grantedEpoch,
     }
   }
@@ -139,96 +198,50 @@ module seqlog {
     }
   }
 
-  // Not applied at send time: a store can apply a write after the server stopped waiting for it.
-  action apply(write: Write, replyLost: bool): bool = {
-    val succeeded = not(guards.ifNoneMatch) or not(store.slots.keys().contains(write.slot))
-    all {
-      store.writesInFlight.contains(write),
-      store' = {
-        slots: if (succeeded) store.slots.put(write.slot, slotOf(write)) else store.slots,
-        writesInFlight: store.writesInFlight.exclude(Set(write)),
-        replies: if (replyLost) store.replies else store.replies.union(Set({ write: write, succeeded: succeeded })),
-      },
-      servers' = servers, grantedEpoch' = grantedEpoch, clients' = clients,
-    }
+  // Not applied at send time: a store can apply a write after the server stopped waiting for it, a reply can be lost,
+  // and a resend can arrive apart from the first send (nanashi tessera/docs/persistence.md).
+  // If-None-Match writes only when the key is absent, and of concurrent conditional writes to one key only the first to finish succeeds:
+  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html, and RustFS 1.0.0 gave one winner in 50 rounds of 8 writers (storage/rustfs/conditional_write.py).
+  action apply(write: Write, replyLost: bool): bool = all {
+    store.writesInFlight.contains(write),
+    store' = applies(store, write, replyLost),
+    servers' = servers, grantedEpoch' = grantedEpoch, clients' = clients,
   }
 
-  action succeed(server: str, self: Server, write: Write): bool = all {
-    servers' = servers.set(server, {
-      ...self,
-      phase: if (isFence(write)) Ready else self.phase,
-      view: self.view.concat(write.requests),
-      pending: self.pending.filter(p => p.write != write),
-    }),
-    clients' = { ...clients, acknowledged: clients.acknowledged.union(write.requests.toSet()) },
-  }
-
-  action replace(server: str, self: Server, write: Write, after: Pending): bool = all {
-    servers' = servers.set(server, { ...self, pending: self.pending.filter(p => p.write != write).union(Set(after)) }),
-    clients' = clients,
-  }
-
-  // A 412 is not proof of a fence: the slot can hold this server's own write, from a resend or a late apply.
   action receiveReply(reply: Reply): bool = {
-    val write = reply.write
-    val server = write.server
-    val self = servers.get(server)
+    val server = reply.write.server
+    val outcome = receivesReply(servers.get(server), reply)
     all {
       store.replies.contains(reply),
-      self.pending.contains({ write: write, unknown: false }),
-      if (reply.succeeded) succeed(server, self, write)
-      else if (guards.headsAfterRejection) replace(server, self, write, { write: write, unknown: true })
-      else stop(server),
+      servers.get(server).pending.contains({ write: reply.write, unknown: false }),
+      servers' = servers.set(server, outcome.self),
+      clients' = { ...clients, acknowledged: clients.acknowledged.union(outcome.acknowledged) },
       store' = { ...store, replies: store.replies.exclude(Set(reply)) },
       grantedEpoch' = grantedEpoch,
     }
   }
 
   action timeout(server: str): bool = {
-    val self = servers.get(server)
-    nondet p = self.pending.filter(p => not(p.unknown)).oneOf()
-    all {
-      if (guards.readsBackUnknown) replace(server, self, p.write, { ...p, unknown: true }) else succeed(server, self, p.write),
-      store' = store, grantedEpoch' = grantedEpoch,
-    }
+    nondet p = servers.get(server).pending.filter(p => not(p.unknown)).oneOf()
+    all { become(server, timesOut(servers.get(server), p)), grantedEpoch' = grantedEpoch }
   }
 
   action resolve(server: str): bool = {
-    val self = servers.get(server)
-    nondet p = self.pending.filter(p => p.unknown).oneOf()
-    val write = p.write
-    val taken = store.slots.keys().contains(write.slot)
-    val found = store.slots.get(write.slot)
-    val again = { ...write, attempt: write.attempt + 1 }
-    val refence = { ...write, slot: write.slot + 1, attempt: 0 }
-    val resend = not(taken) and write.attempt < MaxResends
-    val own = taken and (if (guards.processCheck) found == slotOf(write) else found.epoch == write.epoch and found.requests == write.requests)
-    val oldAssigneeTookFenceSlot = taken and found.epoch < write.epoch and isFence(write)
-    all {
-      if (not(taken)) replace(server, self, write, { write: if (resend) again else write, unknown: false })
-      else if (own) succeed(server, self, write)
-      else if (oldAssigneeTookFenceSlot) all {
-        servers' = servers.set(server, {
-          ...self, next: refence.slot + 1, view: self.view.concat(found.requests), pending: Set({ write: refence, unknown: false }),
-        }),
-        clients' = clients,
-      }
-      else stop(server),
-      store' =
-        if (resend) { ...store, writesInFlight: store.writesInFlight.union(Set(again)) }
-        else if (oldAssigneeTookFenceSlot) { ...store, writesInFlight: store.writesInFlight.union(Set(refence)) }
-        else store,
-      grantedEpoch' = grantedEpoch,
-    }
+    nondet p = servers.get(server).pending.filter(p => p.unknown).oneOf()
+    all { become(server, resolves(servers.get(server), p, store.slots)), grantedEpoch' = grantedEpoch }
   }
 
   action ghost = previous' = { slots: store.slots, acknowledged: clients.acknowledged }
 
+  // Not a send of a request that is already in flight: it changes no state and used about 70% of the steps of a random run.
   action step = all {
     ghost,
     any {
       nondet server = Servers.oneOf() any { grant(server), crash(server), load(server), flush(server), timeout(server), resolve(server) },
-      nondet server = Servers.oneOf() nondet request = Requests.oneOf() any { send(server, request), receive(server, request) },
+      nondet server = Servers.oneOf() nondet request = Requests.oneOf() any {
+        all { not(clients.requestsInFlight.contains({ server: server, request: request })), send(server, request) },
+        receive(server, request),
+      },
       nondet write = store.writesInFlight.oneOf() nondet replyLost = Set(true, false).oneOf() apply(write, replyLost),
       nondet reply = store.replies.oneOf() receiveReply(reply),
     },
@@ -237,6 +250,7 @@ module seqlog {
   val refinesChangeLog: bool =
     allowedStep({ commits: replay(previous.slots), acknowledged: previous.acknowledged }, { commits: replay(store.slots), acknowledged: clients.acknowledged })
 
+  // Not covered by refinesChangeLog: an overwrite that keeps the requests, or that lands past the first hole, does not change the log.
   val segmentsNeverChange: bool = previous.slots.keys().forall(i =>
     store.slots.keys().contains(i) and store.slots.get(i) == previous.slots.get(i))
 
@@ -260,69 +274,26 @@ module seqlog {
 
   val slotsContiguous: bool = store.slots.keys().forall(i => i >= 0 and i < store.slots.keys().size())
 
+  // Only the newest Assignee: an old one keeps accepting until it learns of the handover. placement.qnt checks reads.
   val newestAssigneeSeesAcknowledged: bool = servers.keys().forall(server =>
     val self = servers.get(server)
     (self.phase == Ready and self.epoch == grantedEpoch) implies clients.acknowledged.subseteq(self.view.toSet()))
 
+  // Not covered by newestAssigneeSeesAcknowledged: a change of order does not show in the set of acknowledged requests.
   val viewIsLogPrefix: bool = servers.keys().forall(server =>
     val self = servers.get(server)
     val log = replay(store.slots)
     (self.phase == Ready and self.epoch == grantedEpoch) implies
       (if (self.view.length() > log.length()) false else log.slice(0, self.view.length()) == self.view))
 
-  val witnessNotTwoAcknowledged: bool = clients.acknowledged.size() < 2
-  val witnessNoCommitAfterHandover: bool = not(store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0))
-  val witnessNoOwnResendRejected: bool = not(store.replies.exists(reply =>
-    not(reply.succeeded) and store.slots.get(reply.write.slot).epoch == reply.write.epoch))
-  val witnessNoOldAssigneeStopped: bool = servers.keys().forall(server => servers.get(server).phase != Stopped)
+  val witnessTwoAcknowledged: bool = clients.acknowledged.size() >= 2
+  val witnessCommitAfterHandover: bool = store.slots.keys().exists(i => store.slots.get(i).epoch >= 2 and store.slots.get(i).requests.length() > 0)
+  val witnessOwnResendRejected: bool = store.replies.exists(reply =>
+    not(reply.succeeded) and store.slots.keys().contains(reply.write.slot) and store.slots.get(reply.write.slot).epoch == reply.write.epoch)
+  val witnessOldAssigneeStopped: bool = servers.keys().exists(server => servers.get(server).phase == Stopped)
 
   action applyOne: bool = nondet write = store.writesInFlight.oneOf() all { ghost, apply(write, false) }
   action replyOne: bool = nondet reply = store.replies.oneOf() all { ghost, receiveReply(reply) }
-
-  run oldAssigneeTakesSlotFirstTest =
-    init
-      .then(all { ghost, grant("A") })
-      .then(all { ghost, load("A") })
-      .then(applyOne)
-      .then(replyOne)
-      .then(all { ghost, send("A", "r1") })
-      .then(all { ghost, receive("A", "r1") })
-      .then(all { ghost, flush("A") })
-      .then(all { ghost, grant("B") })
-      .then(all { ghost, load("B") })
-      .expect(servers.get("B").pending.exists(p => p.write.slot == 1))
-      .then(nondet write = store.writesInFlight.filter(w => w.server == "A").oneOf() all { ghost, apply(write, false) })
-      .then(nondet write = store.writesInFlight.filter(w => w.server == "B").oneOf() all { ghost, apply(write, false) })
-      .then(nondet reply = store.replies.filter(r => r.write.server == "A").oneOf() all { ghost, receiveReply(reply) })
-      .then(nondet reply = store.replies.filter(r => r.write.server == "B").oneOf() all { ghost, receiveReply(reply) })
-      .then(all { ghost, resolve("B") })
-      .then(applyOne)
-      .then(replyOne)
-      .expect(and {
-        servers.get("B").phase == Ready,
-        servers.get("B").view == List("r1"),
-        clients.acknowledged == Set("r1"),
-        replay(store.slots) == List("r1"),
-        store.slots.get(2) == { epoch: 2, process: 2, requests: List() },
-        refinesChangeLog, newestAssigneeSeesAcknowledged, staleEpochNeverCommits,
-      })
-
-  run ownResendAcknowledgedTest =
-    init
-      .then(all { ghost, grant("A") })
-      .then(all { ghost, load("A") })
-      .then(applyOne)
-      .then(replyOne)
-      .then(all { ghost, send("A", "r1") })
-      .then(all { ghost, receive("A", "r1") })
-      .then(all { ghost, flush("A") })
-      .then(all { ghost, timeout("A") })
-      .then(all { ghost, resolve("A") })
-      .then(nondet write = store.writesInFlight.filter(w => w.attempt == 0).oneOf() all { ghost, apply(write, true) })
-      .then(nondet write = store.writesInFlight.filter(w => w.attempt == 1).oneOf() all { ghost, apply(write, false) })
-      .then(replyOne)
-      .then(all { ghost, resolve("A") })
-      .expect(servers.get("A").phase == Ready and clients.acknowledged == Set("r1") and refinesChangeLog)
 }
 
 module seqlog_designed {

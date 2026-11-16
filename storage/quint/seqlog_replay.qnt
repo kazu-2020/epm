@@ -2,7 +2,7 @@ module seqlog_replay {
   import seqlog_design.* from "./seqlog"
   import seqlog(guards = allGuards).* from "./seqlog"
 
-  // Not `step`: in its random runs, sends and crashes use most of the steps, and few runs reach an acknowledgement.
+  // Not `step`: in its random runs, crashes use many of the steps, and few runs reach an acknowledgement.
   action replayStep = all {
     ghost,
     any {

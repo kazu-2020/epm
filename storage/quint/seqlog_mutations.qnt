@@ -28,6 +28,7 @@ module seqlog_no_epoch_check {
   import seqlog(guards = { ...allGuards, epochCheck: false }).* from "./seqlog"
 }
 
+// Not two PUTs in flight: S3 can apply them in either order, so a batch past a hole gets acknowledged, the second PUT of an old Assignee can land past a new fence, and the view can differ from the log in order.
 // A fixed scenario, because random simulation does not reach this acknowledgement past a hole.
 module seqlog_two_in_flight {
   import seqlog_design.* from "./seqlog"
@@ -50,6 +51,8 @@ module seqlog_two_in_flight {
       .expect(clients.acknowledged == Set("r2") and replay(store.slots) == List() and not(refinesChangeLog))
 }
 
+// Not a guard of safety: a server that stops at a 412 without reading only fails to acknowledge its own write.
+// Reading after a 412 keeps resends from stopping the Assignee, which is liveness.
 module seqlog_rejected_as_fenced {
   import seqlog_design.* from "./seqlog"
   import seqlog(guards = { ...allGuards, headsAfterRejection: false }).* from "./seqlog"
