@@ -126,8 +126,8 @@ impl<'a> Resolver<'a> {
     fn measure(&self, name: &str) -> Result<ResolvedExpressionKind, ResolveErrorKind> {
         match (self.find_measure(name), self.find_dimension(name)) {
             (Some(measure), _) => Ok(ResolvedExpressionKind::Measure {
-                global_id: measure.global_id,
-                axes: measure.axes.clone(),
+                global_id: measure.global_id(),
+                axes: measure.axes().to_vec(),
             }),
             (None, Some(_)) => Err(ResolveErrorKind::DimensionAsValue),
             (None, None) => Err(ResolveErrorKind::UnknownName),
@@ -178,7 +178,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn find_measure(&self, name: &str) -> Option<&'a MeasureDefinition> {
-        self.measures.iter().find(|measure| measure.name == name)
+        self.measures.iter().find(|measure| measure.name() == name)
     }
 
     fn find_dimension(&self, name: &str) -> Option<&'a Dimension> {

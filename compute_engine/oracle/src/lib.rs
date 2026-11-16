@@ -41,9 +41,9 @@ impl Oracle {
         }
         for measure in measures {
             let definition = measure.definition();
-            let table = measure_table(definition.global_id);
+            let table = measure_table(definition.global_id());
             let mut columns: Vec<String> = definition
-                .axes
+                .axes()
                 .iter()
                 .map(|&axis| format!("{} UINTEGER NOT NULL", column(axis)))
                 .collect();

@@ -117,10 +117,10 @@ fn evaluate_in(
     dimensions: &[&Dimension],
     region: &Region,
 ) -> Result<Columns, EvaluateError> {
-    if expression.result_axes() != result.axes {
-        return Err(EvaluateError::ResultAxesChanged(result.global_id));
+    if expression.result_axes() != result.axes() {
+        return Err(EvaluateError::ResultAxesChanged(result.global_id()));
     }
-    for &axis in &result.axes {
+    for &axis in result.axes() {
         find_dimension(dimensions, axis)?;
     }
     let evaluator = Evaluator {
@@ -141,7 +141,7 @@ fn evaluate_in(
             .all(|entry| entry.uses_left == 0 && entry.result.is_none())
     );
     Ok(columns
-        .broadcast(&result.axes, dimensions)?
+        .broadcast(result.axes(), dimensions)?
         .restrict(region))
 }
 
@@ -343,7 +343,7 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                     .iter()
                     .find(|measure| measure.global_id() == *global_id)
                     .ok_or(EvaluateError::MissingMeasure(*global_id))?;
-                if measure.definition().axes != *axes {
+                if measure.definition().axes() != *axes {
                     return Err(EvaluateError::MeasureAxesChanged(*global_id));
                 }
                 check_packing(measure, self.dimensions)?;

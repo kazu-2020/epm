@@ -55,9 +55,9 @@ impl Measure {
             .zip(base.columns())
             .find(|(_, column)| column.null_count() > 0)
         {
-            return Err(MeasureError::NullInColumn(field.name().clone()));
+            return Err(MeasureError::NullInColumn(field.name().to_string()));
         }
-        let columns: Vec<&[u32]> = base.columns()[..definition.axes.len()]
+        let columns: Vec<&[u32]> = base.columns()[..definition.axes().len()]
             .iter()
             .map(|column| &column.as_primitive::<UInt32Type>().values()[..])
             .collect();
@@ -74,7 +74,7 @@ impl Measure {
         let packed_coordinates = (0..base.num_rows())
             .map(|row| axes.pack_members(columns.iter().map(|column| column[row])))
             .collect();
-        let values = base.columns()[definition.axes.len()]
+        let values = base.columns()[definition.axes().len()]
             .as_primitive::<Float64Type>()
             .values();
         // Not the given buffer when it is part of a larger one: an IPC file read as one buffer would keep its member columns alive.
@@ -157,7 +157,7 @@ impl Measure {
     }
 
     pub fn global_id(&self) -> MeasureGlobalId {
-        self.definition.global_id
+        self.definition.global_id()
     }
 
     pub fn packing(&self) -> &CoordinatePacking {
@@ -246,7 +246,7 @@ impl Measure {
     }
 
     pub fn delta(&self) -> DeltaBuilder {
-        DeltaBuilder::new(self.definition.global_id, self.axes.clone())
+        DeltaBuilder::new(self.definition.global_id(), self.axes.clone())
     }
 
     pub fn delta_from_packed(
@@ -262,7 +262,7 @@ impl Measure {
         check_sorted(&packed_coordinates)?;
         self.axes.check_in_range(&packed_coordinates)?;
         Ok(Delta::sorted(
-            self.definition.global_id,
+            self.definition.global_id(),
             self.axes.clone(),
             packed_coordinates,
             changes
@@ -274,7 +274,7 @@ impl Measure {
 
     pub fn apply(&self, delta: impl Into<Arc<Delta>>) -> Result<Measure, MeasureError> {
         let delta = delta.into();
-        if delta.measure != self.definition.global_id {
+        if delta.measure != self.definition.global_id() {
             return Err(MeasureError::ForeignDelta(delta.measure));
         }
         if delta.axes != self.axes {
@@ -294,7 +294,7 @@ impl Measure {
         let (packed_coordinates, changes) = self.merged_changes();
         let mut measure = self.clone();
         measure.deltas = vec![Arc::new(Delta::sorted(
-            self.definition.global_id,
+            self.definition.global_id(),
             self.axes.clone(),
             packed_coordinates,
             changes,

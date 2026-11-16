@@ -306,7 +306,7 @@ impl Default for Fixture {
             .collect();
         let revised = inputs
             .iter_mut()
-            .find(|input| input.definition().name == "改定")
+            .find(|input| input.definition().name() == "改定")
             .expect("the fixture defines '改定'");
         let mut delta = revised.delta();
         delta.set(&[MemberIndex(0), MemberIndex(0)], 5.0).unwrap();
@@ -325,7 +325,7 @@ impl Fixture {
     pub fn definition(&self, name: &str) -> &MeasureDefinition {
         self.measure_definitions
             .iter()
-            .find(|definition| definition.name == name)
+            .find(|definition| definition.name() == name)
             .expect("the fixture defines every measure a case names")
     }
 
@@ -413,11 +413,8 @@ fn measure_definition(
     name: &str,
     axes: &[DimensionGlobalId],
 ) -> MeasureDefinition {
-    MeasureDefinition {
-        global_id: MeasureGlobalId(Ulid(global_id)),
-        name: name.into(),
-        axes: axes.to_vec(),
-    }
+    MeasureDefinition::try_new(MeasureGlobalId(Ulid(global_id)), name.into(), axes.to_vec())
+        .expect("the generator declares each axis once")
 }
 
 fn measure(

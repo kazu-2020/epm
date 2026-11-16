@@ -214,11 +214,12 @@ pub fn formulas() -> Vec<Formula> {
         .iter()
         .enumerate()
         .map(|(index, &(name, axes, text))| Formula {
-            result: MeasureDefinition {
-                global_id: MeasureGlobalId(Ulid(200 + index as u128)),
-                name: name.into(),
-                axes: axes.to_vec(),
-            },
+            result: MeasureDefinition::try_new(
+                MeasureGlobalId(Ulid(200 + index as u128)),
+                name.into(),
+                axes.to_vec(),
+            )
+            .expect("the generator declares each axis once"),
             text: text.into(),
         })
         .collect()
@@ -658,11 +659,12 @@ fn measure(
     values: Vec<f64>,
     references: &[&Dimension],
 ) -> Measure {
-    let definition = MeasureDefinition {
-        global_id: MeasureGlobalId(Ulid(100 + index)),
-        name: name.into(),
-        axes: axes.to_vec(),
-    };
+    let definition = MeasureDefinition::try_new(
+        MeasureGlobalId(Ulid(100 + index)),
+        name.into(),
+        axes.to_vec(),
+    )
+    .expect("the generator declares each axis once");
     let mut arrays: Vec<ArrayRef> = columns
         .into_iter()
         .map(|column| Arc::new(UInt32Array::from(column)) as ArrayRef)

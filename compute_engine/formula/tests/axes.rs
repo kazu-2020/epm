@@ -34,20 +34,20 @@ fn resolve_error_kinds(source: &str) -> Vec<ResolveErrorKind> {
 fn result(name: &str) -> MeasureDefinition {
     common::measures()
         .into_iter()
-        .find(|measure| measure.name == name)
+        .find(|measure| measure.name() == name)
         .expect("the result is a fixture measure")
 }
 
 fn check(result: &str, source: &str) -> Outcome {
     let result = self::result(result);
-    let check = formula::check_axes(&resolved(source).expression, &result.axes);
+    let check = formula::check_axes(&resolved(source).expression, result.axes());
     assert_eq!(
         check.checked.is_some(),
         check.broadcast.is_some() && check.errors.is_empty(),
         "{source}"
     );
     if let Some(checked) = &check.checked {
-        assert_eq!(checked.result_axes(), result.axes, "{source}");
+        assert_eq!(checked.result_axes(), result.axes(), "{source}");
     }
     let broadcast = check
         .broadcast
@@ -376,7 +376,7 @@ fn render(node: &CheckedNode) -> String {
 fn a_passing_check_keeps_the_resolved_tree_without_spans() {
     let check = formula::check_axes(
         &resolved("-SUM('売上' / 2, BY '部門'.'事業部', '期間') - 1").expression,
-        &result("事業部売上").axes,
+        result("事業部売上").axes(),
     );
     assert_eq!(check.errors, []);
     assert_eq!(
@@ -390,7 +390,7 @@ fn a_chain_of_additions_and_subtractions_splits_into_signed_terms_through_parent
 {
     let check = formula::check_axes(
         &resolved("'売上' - (2 - -'売上') + 1 * 3").expression,
-        &result("売上").axes,
+        result("売上").axes(),
     );
     assert_eq!(check.errors, []);
     let checked = check.checked.expect("the check passes");
@@ -417,7 +417,7 @@ fn a_bracket_removes_its_axis_and_filter_keeps_it() {
             "'売上'['部門': '開発'] + FILTER('売上'['期間': '1月'], '部門' IN ('営業', '開発'))",
         )
         .expression,
-        &result("売上計画").axes,
+        result("売上計画").axes(),
     );
     assert_eq!(
         render(check.checked.expect("the check passes").root()),

@@ -190,7 +190,7 @@ impl Manifest {
         for entry in &self.measures {
             let definition = definitions
                 .iter()
-                .find(|definition| definition.global_id == entry.global_id)
+                .find(|definition| definition.global_id() == entry.global_id)
                 .filter(|definition| axes(definition, dimensions).as_ref() == Some(&entry.axes))
                 .ok_or(SnapshotError::Definitions(entry.global_id))?;
             let mut packed_coordinates = Vec::new();
@@ -216,11 +216,11 @@ impl Manifest {
         if let Some(unmatched) = definitions.iter().find(|definition| {
             self.measures
                 .iter()
-                .filter(|entry| entry.global_id == definition.global_id)
+                .filter(|entry| entry.global_id == definition.global_id())
                 .count()
                 != 1
         }) {
-            return Err(SnapshotError::Definitions(unmatched.global_id));
+            return Err(SnapshotError::Definitions(unmatched.global_id()));
         }
         Ok(Snapshot {
             start: Start {
@@ -256,7 +256,7 @@ fn axes(
     dimensions: &[&Dimension],
 ) -> Option<Vec<(DimensionGlobalId, u32)>> {
     let mut found = definition
-        .axes
+        .axes()
         .iter()
         .map(|&axis| {
             dimensions
@@ -536,8 +536,8 @@ mod tests {
         let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
         let (objects, manifest) = encode(&snapshot(&workspace));
         let mut fewer = definitions(&workspace);
-        let missing = fewer.pop().expect("an input").global_id;
-        let first = fewer[0].global_id;
+        let missing = fewer.pop().expect("an input").global_id();
+        let first = fewer[0].global_id();
         assert_eq!(
             read_back(manifest.clone(), objects, &fewer, &dimensions).err(),
             Some(SnapshotError::Definitions(missing)),
@@ -545,7 +545,13 @@ mod tests {
         );
         let (objects, _) = encode(&snapshot(&workspace));
         let mut narrower = definitions(&workspace);
-        narrower[0].axes.pop();
+        let axes = narrower[0].axes();
+        narrower[0] = MeasureDefinition::try_new(
+            narrower[0].global_id(),
+            narrower[0].name().into(),
+            axes[..axes.len() - 1].to_vec(),
+        )
+        .unwrap();
         assert_eq!(
             read_back(manifest, objects, &narrower, &dimensions).err(),
             Some(SnapshotError::Definitions(first)),
@@ -561,7 +567,10 @@ mod tests {
         let (objects, manifest) = encode(&snapshot);
         let mut reversed = definitions(&workspace);
         for definition in &mut reversed {
-            definition.axes.reverse();
+            let axes = definition.axes().iter().rev().copied().collect();
+            *definition =
+                MeasureDefinition::try_new(definition.global_id(), definition.name().into(), axes)
+                    .unwrap();
         }
         assert_ne!(reversed, definitions(&workspace));
 
@@ -569,8 +578,8 @@ mod tests {
 
         for (read, written) in read.inputs.iter().zip(&snapshot.inputs) {
             assert_eq!(
-                read.definition().axes.len(),
-                written.definition().axes.len()
+                read.definition().axes().len(),
+                written.definition().axes().len()
             );
             let mut written: Vec<_> = written
                 .cells()
@@ -644,7 +653,7 @@ mod tests {
         for (entry, input) in manifest.measures.iter().zip(&workspace.inputs) {
             let mut axes: Vec<&Dimension> = input
                 .definition()
-                .axes
+                .axes()
                 .iter()
                 .map(|&axis| {
                     workspace

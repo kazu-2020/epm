@@ -29,7 +29,7 @@ fn main() -> std::io::Result<()> {
             let checked =
                 workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
                     .expect("the representative formulas pass the check");
-            (formula.result.global_id, checked)
+            (formula.result.global_id(), checked)
         })
         .collect();
     for (formula, (_, expression)) in formulas.iter().zip(&checked) {
@@ -44,7 +44,7 @@ fn main() -> std::io::Result<()> {
         .collect();
     let mut all = Vec::new();
     for input in 0..inputs {
-        let name = measures[input].definition().name.clone();
+        let name = measures[input].definition().name().to_string();
         let rows = measures[input].base_values().len();
         let mut times = Vec::new();
         for edit in 0..edits {

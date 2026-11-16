@@ -21,7 +21,6 @@ pub enum FormulaError {
     Syntax(Vec<SyntaxError>),
     Resolve(Vec<ResolveError>),
     Axes(Vec<AxisError>),
-    DuplicateAxis(DimensionGlobalId),
     MissingDimension(DimensionGlobalId),
     PackingTooWide(Vec<DimensionGlobalId>),
 }
@@ -64,10 +63,6 @@ pub fn compile(
     measures: &[MeasureDefinition],
     dimensions: &[&Dimension],
 ) -> Result<CheckedExpression, FormulaError> {
-    let mut declared = BTreeSet::new();
-    if let Some(&duplicate) = result.axes.iter().find(|&&axis| !declared.insert(axis)) {
-        return Err(FormulaError::DuplicateAxis(duplicate));
-    }
     let parsed = formula::parse(text);
     if !parsed.errors.is_empty() {
         return Err(FormulaError::Syntax(parsed.errors));
@@ -76,11 +71,11 @@ pub fn compile(
     if !resolved.errors.is_empty() {
         return Err(FormulaError::Resolve(resolved.errors));
     }
-    let check = formula::check_axes(&resolved.expression, &result.axes);
+    let check = formula::check_axes(&resolved.expression, result.axes());
     let Some(expression) = check.checked else {
         return Err(FormulaError::Axes(check.errors));
     };
-    fits(result.axes.iter().copied().collect(), dimensions)?;
+    fits(result.axes().iter().copied().collect(), dimensions)?;
     node_axes(expression.root(), dimensions)?;
     Ok(expression)
 }

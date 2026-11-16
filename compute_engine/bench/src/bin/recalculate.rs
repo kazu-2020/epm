@@ -30,9 +30,9 @@ fn main() -> std::io::Result<()> {
     for measure in &measures {
         eprintln!(
             "{}\t{}\tinput\t{} axes\t{} bytes",
-            measure.definition().name,
+            measure.definition().name(),
             measure.base_values().len(),
-            measure.definition().axes.len(),
+            measure.definition().axes().len(),
             measure.base_packed_coordinates().inner().capacity()
                 + measure.base_values().inner().capacity()
         );
@@ -52,10 +52,10 @@ fn main() -> std::io::Result<()> {
         .expect("the representative formulas evaluate");
         eprintln!(
             "{}\t{}\t{:.3}s\t{} axes\t{} bytes\t{}",
-            formula.result.name,
+            formula.result.name(),
             result.base_values().len(),
             step.elapsed().as_secs_f64(),
-            result.definition().axes.len(),
+            result.definition().axes().len(),
             result.base_packed_coordinates().inner().capacity()
                 + result.base_values().inner().capacity(),
             memory()
@@ -95,7 +95,7 @@ fn main() -> std::io::Result<()> {
         };
         eprintln!(
             "unique\t{}\t{}\tpacked_coordinates {packed_coordinates}\tvalues {values}{hash}",
-            measure.definition().name,
+            measure.definition().name(),
             measure.base_values().len(),
         );
     }

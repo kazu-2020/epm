@@ -192,12 +192,12 @@ impl common::Server for Assignees {
         let member = MemberIndex(u32::from(hash & 0x100 != 0));
         let value = (hash & 0x600 != 0).then(|| ((hash >> 12) % 8) as f64 / 4.0);
         let (measure, axes) = match (hash >> 20) % 8 {
-            0 => (result, result.axes.len()),
-            1 => (input, input.axes.len() + 1),
-            _ => (input, input.axes.len()),
+            0 => (result, result.axes().len()),
+            1 => (input, input.axes().len() + 1),
+            _ => (input, input.axes().len()),
         };
         server::edit::encode(&Edit {
-            measure: measure.global_id,
+            measure: measure.global_id(),
             coordinate: vec![member; axes],
             value,
         })
@@ -292,7 +292,7 @@ fn final_values(model: &Model, seed: u64, outcome: &common::Outcome) -> common::
             .iter()
             .zip(&expected)
             .find(|(measure, expected)| cells(measure) != cells(expected))
-            .map(|(measure, _)| format!("{} differs", measure.definition().name)),
+            .map(|(measure, _)| format!("{} differs", measure.definition().name())),
     };
     difference
         .map(|detail| ("finalValuesMatchEvaluate", detail))
@@ -584,13 +584,13 @@ fn final_values_agree_with_duckdb() {
         for (formula, measure) in model.workspace.formulas().iter().zip(results) {
             let result = formula.result();
             let expected = oracle
-                .evaluate(formula.expression(), result.global_id)
+                .evaluate(formula.expression(), result.global_id())
                 .expect("DuckDB evaluates the formula");
             assert_eq!(
                 cells(measure),
                 exact(&expected),
                 "seed {seed}: {}",
-                result.name
+                result.name()
             );
         }
     }

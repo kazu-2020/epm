@@ -76,14 +76,14 @@ proptest! {
             )
             .expect("the column engine evaluates a checked formula");
             let expected = oracle
-                .evaluate(&checked, result.global_id)
+                .evaluate(&checked, result.global_id())
                 .expect("the oracle evaluates a checked formula");
             let actual_cells: Vec<_> = actual.cells().collect();
             prop_assert_eq!(
                 exact(&actual_cells),
                 exact(&expected),
                 "{} = {} with {:?}",
-                result.name,
+                result.name(),
                 text,
                 configuration
             );
@@ -92,7 +92,7 @@ proptest! {
                 exact(&column_cells),
                 exact(&expected),
                 "column engine: {} = {} with {:?}",
-                result.name,
+                result.name(),
                 text,
                 configuration
             );

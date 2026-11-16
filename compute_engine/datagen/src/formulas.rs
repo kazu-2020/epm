@@ -46,8 +46,8 @@ impl Generator<'_> {
         let references = inputs
             .iter()
             .map(|input| Generated {
-                text: quote(&input.definition().name),
-                axes: input.definition().axes.clone(),
+                text: quote(input.definition().name()),
+                axes: input.definition().axes().to_vec(),
             })
             .collect();
         let mut formulas = Formulas {
@@ -92,14 +92,15 @@ impl Formulas<'_, '_, '_> {
                 }
             }
         };
-        let definition = MeasureDefinition {
-            global_id: MeasureGlobalId(self.generator.ulid()),
-            name: format!("計算{index}"),
+        let definition = MeasureDefinition::try_new(
+            MeasureGlobalId(self.generator.ulid()),
+            format!("計算{index}"),
             axes,
-        };
+        )
+        .expect("the generator declares each axis once");
         self.references.push(Generated {
-            text: quote(&definition.name),
-            axes: definition.axes.clone(),
+            text: quote(definition.name()),
+            axes: definition.axes().to_vec(),
         });
         Formula {
             result: definition,

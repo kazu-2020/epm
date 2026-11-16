@@ -132,13 +132,14 @@ impl Generator<'_> {
     }
 
     fn input(&mut self, index: usize, dimensions: &[Dimension]) -> Measure {
-        let definition = MeasureDefinition {
-            global_id: MeasureGlobalId(self.ulid()),
-            name: format!("入力{index}"),
-            axes: self.axes(dimensions),
-        };
+        let definition = MeasureDefinition::try_new(
+            MeasureGlobalId(self.ulid()),
+            format!("入力{index}"),
+            self.axes(dimensions),
+        )
+        .expect("the generator declares each axis once");
         let member_counts: Vec<u32> = definition
-            .axes
+            .axes()
             .iter()
             .map(|&axis| dimension(dimensions, axis).len())
             .collect();
