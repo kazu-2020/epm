@@ -55,7 +55,7 @@ impl Measure {
             .zip(base.columns())
             .find(|(_, column)| column.null_count() > 0)
         {
-            return Err(MeasureError::NullInColumn(field.name().to_string()));
+            return Err(MeasureError::NullInColumn(field.name().clone()));
         }
         let columns: Vec<&[u32]> = base.columns()[..definition.axes().len()]
             .iter()

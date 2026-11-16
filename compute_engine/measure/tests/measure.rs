@@ -169,6 +169,14 @@ fn repeated_axis_is_rejected() {
 }
 
 #[test]
+fn definition_without_axes_is_rejected() {
+    assert_eq!(
+        MeasureDefinition::try_new(SALES, "売上".into(), Vec::new()).unwrap_err(),
+        DefinitionError::NoAxes
+    );
+}
+
+#[test]
 fn axis_without_its_dimension_is_rejected() {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
@@ -411,14 +419,6 @@ fn compaction_folds_deltas_into_a_sorted_base_without_changing_reads() {
         &[&periods(), &departments()],
     );
     assert!(rebuilt.is_ok());
-}
-
-#[test]
-fn measure_without_axes_is_rejected() {
-    assert_eq!(
-        MeasureDefinition::try_new(SALES, "売上".into(), Vec::new()).unwrap_err(),
-        DefinitionError::NoAxes
-    );
 }
 
 #[test]
