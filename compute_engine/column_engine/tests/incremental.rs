@@ -20,6 +20,12 @@ struct Model {
     checked: Vec<(MeasureDefinition, CheckedExpression)>,
 }
 
+fn reversed(definition: &MeasureDefinition) -> MeasureDefinition {
+    let mut axes = definition.axes().to_vec();
+    axes.reverse();
+    MeasureDefinition::try_new(definition.global_id(), definition.name().into(), axes).unwrap()
+}
+
 impl Model {
     fn new() -> Model {
         Model::of(representative::generate(&SMALL, 7))
@@ -28,7 +34,7 @@ impl Model {
     fn with_results_reversed() -> Model {
         let mut workspace = representative::generate(&SMALL, 7);
         for formula in &mut workspace.formulas {
-            formula.result.axes.reverse();
+            formula.result = reversed(&formula.result);
         }
         Model::of(workspace)
     }
@@ -40,8 +46,7 @@ impl Model {
             .inputs
             .iter()
             .map(|input| {
-                let mut definition = input.definition().clone();
-                definition.axes.reverse();
+                let definition = reversed(input.definition());
                 let cells = input
                     .cells()
                     .map(|(mut coordinate, value)| {
@@ -105,15 +110,15 @@ impl Model {
                     .iter()
                     .map(|formula| &formula.result),
             )
-            .find(|definition| definition.name == name)
+            .find(|definition| definition.name() == name)
             .expect("the representative model has the measure")
-            .global_id
+            .global_id()
     }
 
     fn formulas(&self) -> Vec<(MeasureGlobalId, &CheckedExpression)> {
         self.checked
             .iter()
-            .map(|(result, expression)| (result.global_id, expression))
+            .map(|(result, expression)| (result.global_id(), expression))
             .collect()
     }
 
@@ -158,12 +163,12 @@ fn a_full_recalculation_matches_the_evaluator_when_every_measure_declares_axes_o
         let column = column_engine::evaluate(expression, result, &references, &dimensions)
             .expect("the column engine evaluates the formula");
         let expected = exact(&expected.cells().collect::<Vec<_>>());
-        assert!(!expected.is_empty(), "{} has cells", result.name);
+        assert!(!expected.is_empty(), "{} has cells", result.name());
         assert_eq!(
             exact(&column.cells().collect::<Vec<_>>()),
             expected,
             "{}",
-            result.name
+            result.name()
         );
         measures.push(column);
     }
@@ -181,7 +186,7 @@ fn edit_and_compare(model: &Model) {
         let coordinate: Vec<MemberIndex> = match random.random_range(0..3) {
             0 => inputs[input]
                 .definition()
-                .axes
+                .axes()
                 .iter()
                 .map(|&axis| MemberIndex(random.random_range(0..model.dimension(axis).len())))
                 .collect(),
@@ -253,7 +258,7 @@ fn assert_same_cells(measures: &[Measure], expected: &[Measure]) {
             exact(&measure.cells().collect::<Vec<_>>()),
             exact(&expected.cells().collect::<Vec<_>>()),
             "{}",
-            measure.definition().name
+            measure.definition().name()
         );
     }
 }

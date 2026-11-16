@@ -37,8 +37,6 @@ impl std::error::Error for CoordinateError {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MeasureError {
-    NoAxes,
-    DuplicateAxis(DimensionGlobalId),
     MissingDimension(DimensionGlobalId),
     SchemaMismatch {
         expected: SchemaRef,

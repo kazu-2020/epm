@@ -258,7 +258,7 @@ mod tests {
         let input = &engine.measures()[0];
         let edit = crate::Edit {
             measure: input.global_id(),
-            coordinate: vec![dimension::MemberIndex(0); input.definition().axes.len()],
+            coordinate: vec![dimension::MemberIndex(0); input.definition().axes().len()],
             value: Some(sequence as f64),
         };
         let (_, commit) = commit(sequence);

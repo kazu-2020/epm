@@ -13,10 +13,10 @@ fn render(expression: &ResolvedExpression) -> String {
         ResolvedExpressionKind::Measure { global_id, axes } => {
             let measure = common::measures()
                 .into_iter()
-                .find(|measure| measure.global_id == *global_id)
+                .find(|measure| measure.global_id() == *global_id)
                 .expect("resolution points at a fixture measure");
             let axes: Vec<_> = axes.iter().copied().map(common::dimension_name).collect();
-            format!("'{}'{{{}}}", measure.name, axes.join(","))
+            format!("'{}'{{{}}}", measure.name(), axes.join(","))
         }
         ResolvedExpressionKind::Negate(operand) => format!("(Negate {})", render(operand)),
         ResolvedExpressionKind::Binary {

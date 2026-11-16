@@ -10,8 +10,8 @@ use dimension::{
     DimensionGlobalId, DimensionKind, MemberIndex,
 };
 use measure::{
-    CoordinateError, CoordinatePacking, Measure, MeasureDefinition, MeasureError, MeasureGlobalId,
-    normalize,
+    CoordinateError, CoordinatePacking, DefinitionError, Measure, MeasureDefinition, MeasureError,
+    MeasureGlobalId, normalize,
 };
 use ulid::Ulid;
 
@@ -55,11 +55,7 @@ fn departments() -> Dimension {
 }
 
 fn definition(global_id: MeasureGlobalId, axes: Vec<DimensionGlobalId>) -> MeasureDefinition {
-    MeasureDefinition {
-        global_id,
-        name: "売上".into(),
-        axes,
-    }
+    MeasureDefinition::try_new(global_id, "売上".into(), axes).unwrap()
 }
 
 fn columns(rows: &[(u32, u32, f64)]) -> Vec<ArrayRef> {
@@ -156,12 +152,27 @@ fn measure_without_cells_is_valid() {
 }
 
 #[test]
+fn definition_keeps_its_id_name_and_axes_in_declared_order() {
+    let definition = definition(SALES, vec![DEPARTMENT, PERIOD]);
+    assert_eq!(definition.global_id(), SALES);
+    assert_eq!(definition.name(), "売上");
+    assert_eq!(definition.axes(), &[DEPARTMENT, PERIOD]);
+}
+
+#[test]
 fn repeated_axis_is_rejected() {
-    let definition = definition(SALES, vec![PERIOD, PERIOD]);
-    let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
     assert_eq!(
-        Measure::try_new(definition, batch, &[&periods()]).unwrap_err(),
-        MeasureError::DuplicateAxis(PERIOD)
+        MeasureDefinition::try_new(SALES, "売上".into(), vec![PERIOD, DEPARTMENT, PERIOD])
+            .unwrap_err(),
+        DefinitionError::DuplicateAxis(PERIOD)
+    );
+}
+
+#[test]
+fn definition_without_axes_is_rejected() {
+    assert_eq!(
+        MeasureDefinition::try_new(SALES, "売上".into(), Vec::new()).unwrap_err(),
+        DefinitionError::NoAxes
     );
 }
 
@@ -408,20 +419,6 @@ fn compaction_folds_deltas_into_a_sorted_base_without_changing_reads() {
         &[&periods(), &departments()],
     );
     assert!(rebuilt.is_ok());
-}
-
-#[test]
-fn measure_without_axes_is_rejected() {
-    let definition = definition(SALES, Vec::new());
-    let batch = RecordBatch::try_new(
-        Arc::new(definition.schema()),
-        vec![Arc::new(Float64Array::from(vec![0.1])) as ArrayRef],
-    )
-    .unwrap();
-    assert_eq!(
-        Measure::try_new(definition, batch, &[]).unwrap_err(),
-        MeasureError::NoAxes
-    );
 }
 
 #[test]

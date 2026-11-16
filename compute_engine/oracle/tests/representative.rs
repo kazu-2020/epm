@@ -40,21 +40,21 @@ fn every_engine_computes_the_small_representative_model_bit_for_bit_alike() {
             .expect("the column engine evaluates the formula");
         let expected = exact(
             &oracle
-                .evaluate(&checked, formula.result.global_id)
+                .evaluate(&checked, formula.result.global_id())
                 .expect("the oracle evaluates the formula"),
         );
-        assert!(!expected.is_empty(), "{} has cells", formula.result.name);
+        assert!(!expected.is_empty(), "{} has cells", formula.result.name());
         assert_eq!(
             exact(&evaluated.cells().collect::<Vec<_>>()),
             expected,
             "evaluator: {}",
-            formula.result.name
+            formula.result.name()
         );
         assert_eq!(
             exact(&column.cells().collect::<Vec<_>>()),
             expected,
             "column engine: {}",
-            formula.result.name
+            formula.result.name()
         );
         measures.push(column);
     }

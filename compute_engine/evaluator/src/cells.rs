@@ -91,7 +91,7 @@ impl Cells {
 
     pub(crate) fn from_measure(measure: &Measure) -> Cells {
         Cells {
-            axes: measure.definition().axes.clone(),
+            axes: measure.definition().axes().to_vec(),
             values: measure.cells().collect(),
         }
     }

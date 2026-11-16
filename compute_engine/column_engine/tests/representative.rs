@@ -78,14 +78,15 @@ fn model_larger_than_one_parallel_piece_matches_the_evaluator_on_one_and_four_th
 
 fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
     let mut workspace = representative::generate(size, 7);
-    let sales_axes = workspace.formulas[0].result.axes.clone();
+    let sales_axes = workspace.formulas[0].result.axes().to_vec();
     for (index, text) in extra_formulas.iter().enumerate() {
         workspace.formulas.push(Formula {
-            result: MeasureDefinition {
-                global_id: MeasureGlobalId(Ulid(300 + index as u128)),
-                name: text.to_string(),
-                axes: sales_axes.clone(),
-            },
+            result: MeasureDefinition::try_new(
+                MeasureGlobalId(Ulid(300 + index as u128)),
+                text.to_string(),
+                sales_axes.clone(),
+            )
+            .unwrap(),
             text: text.to_string(),
         });
     }
@@ -111,12 +112,12 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
         let column = column_engine::evaluate(&checked, &formula.result, &references, &dimensions)
             .expect("the column engine evaluates the formula");
         let expected = exact(&expected.cells().collect::<Vec<_>>());
-        assert!(!expected.is_empty(), "{} has cells", formula.result.name);
+        assert!(!expected.is_empty(), "{} has cells", formula.result.name());
         assert_eq!(
             exact(&column.cells().collect::<Vec<_>>()),
             expected,
             "{}",
-            formula.result.name
+            formula.result.name()
         );
         measures.push(column);
     }

@@ -12,10 +12,10 @@ pub fn evaluate(
     measures: &[&Measure],
     dimensions: &[&Dimension],
 ) -> Result<Measure, EvaluateError> {
-    if expression.result_axes() != result.axes {
-        return Err(EvaluateError::ResultAxesChanged(result.global_id));
+    if expression.result_axes() != result.axes() {
+        return Err(EvaluateError::ResultAxesChanged(result.global_id()));
     }
-    for &axis in &result.axes {
+    for &axis in result.axes() {
         find_dimension(dimensions, axis)?;
     }
     let evaluator = Evaluator {
@@ -24,7 +24,7 @@ pub fn evaluate(
     };
     evaluator
         .node(expression.root())?
-        .broadcast(&result.axes, dimensions)?
+        .broadcast(result.axes(), dimensions)?
         .into_measure(result.clone(), dimensions)
         .map_err(EvaluateError::InvalidResult)
 }
@@ -45,7 +45,7 @@ impl<'a> Evaluator<'a> {
                     .find(|measure| measure.global_id() == *global_id)
                     .ok_or(EvaluateError::MissingMeasure(*global_id))?;
                 // Not the resolved axes alone: the columns are laid out by the measure's own axes, which may have changed since the formula was resolved.
-                if measure.definition().axes != *axes {
+                if measure.definition().axes() != *axes {
                     return Err(EvaluateError::MeasureAxesChanged(*global_id));
                 }
                 Ok(Cells::from_measure(measure))

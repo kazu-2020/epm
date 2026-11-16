@@ -7,7 +7,7 @@ mod normalize;
 mod packing;
 mod scan;
 
-pub use crate::definition::{MeasureDefinition, MeasureGlobalId};
+pub use crate::definition::{DefinitionError, MeasureDefinition, MeasureGlobalId};
 pub use crate::delta::{Delta, DeltaBuilder};
 pub use crate::error::{CoordinateError, MeasureError};
 pub use crate::measure::Measure;

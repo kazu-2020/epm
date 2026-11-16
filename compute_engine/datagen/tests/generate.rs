@@ -90,12 +90,12 @@ fn a_few_members_hold_most_cells() {
     let input = workspace
         .inputs
         .iter()
-        .find(|input| input.definition().axes.len() == 2)
+        .find(|input| input.definition().axes().len() == 2)
         .expect("an input has both axes");
     let members = workspace
         .dimensions
         .iter()
-        .find(|dimension| dimension.global_id() == input.definition().axes[0])
+        .find(|dimension| dimension.global_id() == input.definition().axes()[0])
         .expect("the axis is a generated dimension")
         .len() as usize;
     let mut cells_per_member: HashMap<u32, usize> = HashMap::new();
@@ -144,10 +144,10 @@ fn the_representative_model_declares_its_axes_in_packing_order() {
     for definition in declared {
         assert!(
             definition
-                .axes
+                .axes()
                 .is_sorted_by_key(|&axis| packing_order(axis)),
             "{}",
-            definition.name
+            definition.name()
         );
     }
 }
@@ -165,7 +165,7 @@ fn the_quantity_has_exactly_the_requested_cells_when_they_do_not_divide_evenly()
     let quantity = workspace
         .inputs
         .iter()
-        .find(|input| input.definition().name == "数量")
+        .find(|input| input.definition().name() == "数量")
         .expect("the quantity is an input");
     assert_eq!(quantity.cells().len(), size.quantity_cells);
 }

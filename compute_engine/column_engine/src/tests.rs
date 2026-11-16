@@ -72,15 +72,15 @@ impl Model {
             .map(|formula| formula.result());
         let measure = definitions
             .chain(results)
-            .find(|definition| definition.name == measure)
+            .find(|definition| definition.name() == measure)
             .expect("the representative model has the measure")
-            .global_id;
+            .global_id();
         let changed = HashMap::from([(measure, region)]);
         let formula = self
             .workspace
             .formulas()
             .iter()
-            .find(|candidate| candidate.result().name == formula)
+            .find(|candidate| candidate.result().name() == formula)
             .expect("the formula exists");
         let dimensions: Vec<&Dimension> = self.workspace.dimensions().iter().collect();
         crate::changed_region(formula.expression(), &changed, &dimensions)

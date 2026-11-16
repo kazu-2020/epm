@@ -59,16 +59,14 @@ impl Workspace {
         let mut measure_ids = HashSet::new();
         if let Some(duplicate) = definitions
             .iter()
-            .find(|definition| !measure_ids.insert(definition.global_id))
+            .find(|definition| !measure_ids.insert(definition.global_id()))
         {
-            return Err(WorkspaceError::DuplicateMeasure(duplicate.global_id));
+            return Err(WorkspaceError::DuplicateMeasure(duplicate.global_id()));
         }
         // Not one set of names for each kind: a formula names a dimension and a measure in the same way, so the same name for both would pick one by its place in the formula.
         let mut names = HashSet::new();
         let dimension_names = dimensions.iter().map(Dimension::name);
-        let measure_names = definitions
-            .iter()
-            .map(|definition| definition.name.as_str());
+        let measure_names = definitions.iter().map(|definition| definition.name());
         if let Some(duplicate) = dimension_names
             .chain(measure_names)
             .find(|name| !names.insert(*name))
@@ -92,7 +90,7 @@ impl Workspace {
         }
         let mut compiled = BTreeMap::new();
         for formula in formulas {
-            let result = formula.result.global_id;
+            let result = formula.result.global_id();
             let formula = CompiledFormula::new(formula, &definitions, &references)
                 .map_err(|error| WorkspaceError::Formula { result, error })?;
             compiled.insert(result, formula);

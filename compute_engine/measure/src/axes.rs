@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use dimension::{Dimension, DimensionGlobalId, MemberIndex};
@@ -22,15 +21,8 @@ impl Axes {
         definition: &MeasureDefinition,
         dimensions: &[&Dimension],
     ) -> Result<Arc<Axes>, MeasureError> {
-        if definition.axes.is_empty() {
-            return Err(MeasureError::NoAxes);
-        }
-        let mut seen = HashSet::new();
-        let mut sorted = Vec::with_capacity(definition.axes.len());
-        for &axis in &definition.axes {
-            if !seen.insert(axis) {
-                return Err(MeasureError::DuplicateAxis(axis));
-            }
+        let mut sorted = Vec::with_capacity(definition.axes().len());
+        for &axis in definition.axes() {
             let dimension = dimensions
                 .iter()
                 .find(|dimension| dimension.global_id() == axis)
@@ -43,7 +35,7 @@ impl Axes {
             packing: CoordinatePacking::new(&member_counts).ok_or(MeasureError::PackingTooWide)?,
             member_counts,
             positions: definition
-                .axes
+                .axes()
                 .iter()
                 .map(|&axis| {
                     sorted

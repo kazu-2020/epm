@@ -60,7 +60,7 @@ fn formula(unchecked: &mut UncheckedWorkspace, result: MeasureGlobalId) -> &mut 
     unchecked
         .formulas
         .iter_mut()
-        .find(|formula| formula.result.global_id == result)
+        .find(|formula| formula.result.global_id() == result)
         .expect("the representative model has the formula")
 }
 
@@ -135,7 +135,10 @@ fn two_dimensions_or_two_measures_with_one_id_are_an_error() {
     );
     assert_eq!(
         error(|unchecked| {
-            formula(unchecked, COST).result.global_id = QUANTITY;
+            let result = &mut formula(unchecked, COST).result;
+            *result =
+                MeasureDefinition::try_new(QUANTITY, result.name().into(), result.axes().to_vec())
+                    .unwrap();
         }),
         WorkspaceError::DuplicateMeasure(QUANTITY)
     );
@@ -144,11 +147,11 @@ fn two_dimensions_or_two_measures_with_one_id_are_an_error() {
 #[test]
 fn one_name_for_two_measures_or_for_a_measure_and_a_dimension_is_an_error() {
     assert_eq!(
-        error(|unchecked| formula(unchecked, COST).result.name = "売上".into()),
+        error(|unchecked| renamed(&mut formula(unchecked, COST).result, "売上")),
         WorkspaceError::DuplicateName("売上".into())
     );
     assert_eq!(
-        error(|unchecked| formula(unchecked, COST).result.name = "期間".into()),
+        error(|unchecked| renamed(&mut formula(unchecked, COST).result, "期間")),
         WorkspaceError::DuplicateName("期間".into())
     );
 }
@@ -187,23 +190,22 @@ fn a_formula_error_names_the_result_and_the_step_that_failed() {
     ));
     assert_eq!(
         error(|unchecked| {
-            formula(unchecked, SALES)
-                .result
-                .axes
-                .push(DimensionGlobalId(Ulid(99)));
+            let result = &mut formula(unchecked, SALES).result;
+            let mut axes = result.axes().to_vec();
+            axes.push(DimensionGlobalId(Ulid(99)));
+            *result =
+                MeasureDefinition::try_new(result.global_id(), result.name().into(), axes).unwrap();
         }),
         WorkspaceError::Formula {
             result: SALES,
             error: FormulaError::MissingDimension(DimensionGlobalId(Ulid(99))),
         }
     );
-    assert_eq!(
-        error(|unchecked| formula(unchecked, SALES).result.axes.push(PERIOD)),
-        WorkspaceError::Formula {
-            result: SALES,
-            error: FormulaError::DuplicateAxis(PERIOD),
-        }
-    );
+}
+
+fn renamed(result: &mut MeasureDefinition, name: &str) {
+    *result = MeasureDefinition::try_new(result.global_id(), name.into(), result.axes().to_vec())
+        .unwrap();
 }
 
 fn dimension(id: u128, members: u32) -> Dimension {
@@ -241,10 +243,8 @@ fn a_result_in_the_middle_of_a_formula_wider_than_64_bits_is_an_error() {
         let dimensions: Vec<Dimension> = (1..=5).map(|id| dimension(id, 1 << 13)).collect();
         let references: Vec<&Dimension> = dimensions.iter().collect();
         let axes = |ids: &[u128]| ids.iter().map(|&id| DimensionGlobalId(Ulid(id))).collect();
-        let definition = |id: u128, name: &str, ids: &[u128]| MeasureDefinition {
-            global_id: MeasureGlobalId(Ulid(id)),
-            name: name.into(),
-            axes: axes(ids),
+        let definition = |id: u128, name: &str, ids: &[u128]| {
+            MeasureDefinition::try_new(MeasureGlobalId(Ulid(id)), name.into(), axes(ids)).unwrap()
         };
         let input = |id, name, ids: &[u128]| {
             Measure::from_cells(definition(id, name, ids), Vec::new(), &references)
@@ -406,11 +406,12 @@ fn a_workspace_takes_only_inputs_of_its_definitions_and_dimensions() {
 #[test]
 fn an_input_of_a_dimension_of_another_kind_is_an_error() {
     let ordinary = [dimension(1, 2), dimension(2, 2)];
-    let definition = MeasureDefinition {
-        global_id: MeasureGlobalId(Ulid(10)),
-        name: "入力".into(),
-        axes: ordinary.iter().map(Dimension::global_id).collect(),
-    };
+    let definition = MeasureDefinition::try_new(
+        MeasureGlobalId(Ulid(10)),
+        "入力".into(),
+        ordinary.iter().map(Dimension::global_id).collect(),
+    )
+    .unwrap();
     let input = || {
         Measure::from_cells(
             definition.clone(),
@@ -435,7 +436,9 @@ fn an_input_of_a_dimension_of_another_kind_is_an_error() {
 
     assert_eq!(
         workspace(calendar(), vec![input()]).err(),
-        Some(WorkspaceError::InputOfOtherDimensions(definition.global_id))
+        Some(WorkspaceError::InputOfOtherDimensions(
+            definition.global_id()
+        ))
     );
     let made_for_calendar = Measure::from_cells(
         definition.clone(),

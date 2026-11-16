@@ -157,15 +157,15 @@ async fn list_definitions(State(handle): State<Handle>) -> Json<Value> {
         .iter()
         .map(|measure| {
             let definition = measure.definition();
-            let kind = if engine.edit_check().is_input(definition.global_id) {
+            let kind = if engine.edit_check().is_input(definition.global_id()) {
                 "input"
             } else {
                 "calculated"
             };
             json!({
-                "ulid": definition.global_id.0.to_string(),
-                "name": definition.name,
-                "axes": definition.axes.iter().map(|axis| axis.0.to_string()).collect::<Vec<_>>(),
+                "ulid": definition.global_id().0.to_string(),
+                "name": definition.name(),
+                "axes": definition.axes().iter().map(|axis| axis.0.to_string()).collect::<Vec<_>>(),
                 "kind": kind,
             })
         })

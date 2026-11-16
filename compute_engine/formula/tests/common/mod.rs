@@ -77,10 +77,9 @@ pub fn dimensions_with_members() -> Vec<Dimension> {
 }
 
 pub fn measures() -> Vec<MeasureDefinition> {
-    let measure = |global_id, name: &str, axes: &[DimensionGlobalId]| MeasureDefinition {
-        global_id: MeasureGlobalId(Ulid(global_id)),
-        name: name.into(),
-        axes: axes.to_vec(),
+    let measure = |global_id, name: &str, axes: &[DimensionGlobalId]| {
+        MeasureDefinition::try_new(MeasureGlobalId(Ulid(global_id)), name.into(), axes.to_vec())
+            .unwrap()
     };
     vec![
         measure(11, "売上", &[DEPARTMENT, PERIOD]),
