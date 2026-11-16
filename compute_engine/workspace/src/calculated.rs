@@ -142,7 +142,7 @@ impl Calculated {
             &dimensions,
         )?
         .iter()
-        .map(Measure::fold_deltas)
+        .map(Measure::fold_deltas_or_compact)
         .collect();
         Ok(Calculated {
             dimensions: Arc::clone(&self.dimensions),

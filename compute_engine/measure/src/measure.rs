@@ -302,6 +302,15 @@ impl Measure {
         measure
     }
 
+    pub fn fold_deltas_or_compact(&self) -> Measure {
+        let folded = self.fold_deltas();
+        if folded.delta_len() * COMPACTION_DIVISOR > folded.values.len() {
+            folded.compact()
+        } else {
+            folded
+        }
+    }
+
     pub fn compact(&self) -> Measure {
         if self.deltas.is_empty() {
             return self.clone();
@@ -335,6 +344,9 @@ impl Measure {
         }
     }
 }
+
+// Not compacting on every edit: compaction copies the whole base.
+const COMPACTION_DIVISOR: usize = 32;
 
 fn merge_changes(
     old_packed_coordinates: &[u64],
