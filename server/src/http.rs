@@ -2,9 +2,10 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -70,11 +71,25 @@ pub enum Shutdown {
 }
 
 pub fn router(handle: Handle) -> Router {
+    // Not one layer on the Router: it also wraps the 404 of an unknown path and the 405 of a wrong method, and both would become 503.
+    let loaded = from_fn_with_state(handle.clone(), refuse_until_loaded);
     Router::new()
-        .route("/epm.v1.Workspace/SubmitEdit", post(submit_edit))
-        .route("/epm.v1.Workspace/ReadCells", post(read_cells))
-        .route("/epm.v1.Workspace/ListDefinitions", post(list_definitions))
-        .route("/epm.v1.Workspace/GetLag", post(get_lag))
+        .route(
+            "/epm.v1.Workspace/SubmitEdit",
+            post(submit_edit).route_layer(loaded.clone()),
+        )
+        .route(
+            "/epm.v1.Workspace/ReadCells",
+            post(read_cells).route_layer(loaded.clone()),
+        )
+        .route(
+            "/epm.v1.Workspace/ListDefinitions",
+            post(list_definitions).route_layer(loaded.clone()),
+        )
+        .route(
+            "/epm.v1.Workspace/GetLag",
+            post(get_lag).route_layer(loaded),
+        )
         .with_state(handle)
 }
 
@@ -102,6 +117,22 @@ pub async fn serve(
         }
         () = deadline_passed => Shutdown::Deadline,
     }
+}
+
+// Not a loaded flag in each answer: the App server records an Assignee only after a GetLag that is not unavailable (ADR 0012).
+async fn refuse_until_loaded(
+    State(handle): State<Handle>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !handle.loaded() {
+        return Failure::new(
+            Code::Unavailable,
+            "the assignee is loading the change log, retry later".to_owned(),
+        )
+        .into_response();
+    }
+    next.run(request).await
 }
 
 async fn submit_edit(

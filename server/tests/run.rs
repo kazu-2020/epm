@@ -1,3 +1,5 @@
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,20 +37,13 @@ struct Running {
 }
 
 fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Running {
-    let engine = Engine::new(
-        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
-    )
-    .expect("valid formulas");
-    let (handle, assignee) = server::start(
-        engine,
+    let (handle, assignee) = support::start(
+        support::engine(),
         Start::default(),
         settings,
         Arc::clone(store),
-        WORKSPACE.to_owned(),
-        AssigneeId {
-            epoch: Epoch(epoch),
-            process: ProcessId(u128::from(epoch)),
-        },
+        WORKSPACE,
+        epoch,
     );
     let exit = tokio::spawn(assignee);
     Running { handle, exit }
@@ -499,17 +494,8 @@ async fn a_new_assignee_starts_from_the_newest_snapshot_it_can_read() {
         "the snapshot before the broken one"
     );
     assert_eq!(quantity_in(&engine), Some(2.0));
-    let (handle, assignee) = server::start(
-        engine,
-        start,
-        settings(),
-        Arc::clone(&store),
-        WORKSPACE.to_owned(),
-        AssigneeId {
-            epoch: Epoch(2),
-            process: ProcessId(2),
-        },
-    );
+    let (handle, assignee) =
+        support::start(engine, start, settings(), Arc::clone(&store), WORKSPACE, 2);
     let b = tokio::spawn(assignee);
     assert_eq!(
         handle
@@ -543,20 +529,13 @@ async fn a_new_assignee_starts_from_the_newest_snapshot_it_can_read() {
 }
 
 fn start_from(start: Start) {
-    let engine = Engine::new(
-        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
-    )
-    .expect("valid formulas");
-    let _ = server::start(
-        engine,
+    let _ = support::start(
+        support::engine(),
         start,
         Settings::default(),
         Arc::new(InMemory::new()),
-        WORKSPACE.to_owned(),
-        AssigneeId {
-            epoch: Epoch(1),
-            process: ProcessId(1),
-        },
+        WORKSPACE,
+        1,
     );
 }
 

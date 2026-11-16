@@ -1,3 +1,5 @@
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,50 +7,49 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
-use change_log::{AssigneeId, Epoch, ProcessId, Start};
-use datagen::representative::{self, Size};
+use change_log::Start;
 use measure::MeasureGlobalId;
+use object_store::ObjectStore;
 use object_store::memory::InMemory;
+use object_store::throttle::{ThrottleConfig, ThrottledStore};
 use serde_json::{Value, json};
-use server::{Calculation, Engine, Settings};
+use server::{Calculation, Handle, Settings};
 use tower::ServiceExt;
 use ulid::Ulid;
-use workspace::Workspace;
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
 
 struct App {
+    handle: Handle,
     router: Router,
     coordinate: Vec<u32>,
     quantity: f64,
 }
 
-fn app(settings: Settings) -> App {
-    let engine = Engine::new(
-        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
-    )
-    .expect("valid formulas");
+async fn app(settings: Settings) -> App {
+    let app = app_on(settings, Arc::new(InMemory::new()), 1);
+    loaded(&app).await;
+    app
+}
+
+async fn loaded(app: &App) {
+    support::loaded(&app.handle).await;
+}
+
+fn app_on(settings: Settings, store: Arc<dyn ObjectStore>, epoch: u64) -> App {
+    let engine = support::engine();
     let (coordinate, quantity) = engine
         .measures()
         .iter()
         .find(|measure| measure.global_id() == QUANTITY)
         .and_then(|quantity| quantity.cells().next())
         .expect("the seed has a quantity");
-    let (handle, assignee) = server::start(
-        engine,
-        Start::default(),
-        settings,
-        Arc::new(InMemory::new()),
-        "ws".to_owned(),
-        AssigneeId {
-            epoch: Epoch(1),
-            process: ProcessId(1),
-        },
-    );
+    let (handle, assignee) = support::start(engine, Start::default(), settings, store, "ws", epoch);
     tokio::spawn(assignee);
     App {
-        router: server::http::router(handle),
+        router: server::http::router(handle.clone()),
+        handle,
         coordinate: coordinate.iter().map(|member| member.0).collect(),
         quantity,
     }
@@ -112,7 +113,7 @@ async fn refusal(app: &App, method: &str, body: Value) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn an_edit_changes_the_input_and_the_calculated_measure_that_reads_it() {
-    let app = app(Settings::default());
+    let app = app(Settings::default()).await;
     let (status, before) = read(&app, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -144,7 +145,7 @@ async fn an_edit_changes_the_input_and_the_calculated_measure_that_reads_it() {
 
 #[tokio::test]
 async fn a_null_value_clears_the_cell() {
-    let app = app(Settings::default());
+    let app = app(Settings::default()).await;
     assert_eq!(
         call(
             &app,
@@ -160,7 +161,7 @@ async fn a_null_value_clears_the_cell() {
 
 #[tokio::test]
 async fn a_resend_of_a_request_id_gets_the_same_commit_sequence() {
-    let app = app(Settings::default());
+    let app = app(Settings::default()).await;
     let body = edit("r1", QUANTITY, &app.coordinate, Some(1.0));
     let first = call(&app, "SubmitEdit", body.clone()).await;
     assert_eq!(first, (StatusCode::OK, json!({ "sequence": 0 })));
@@ -174,7 +175,7 @@ async fn a_resend_of_a_request_id_gets_the_same_commit_sequence() {
 
 #[tokio::test]
 async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
-    let app = app(Settings::default());
+    let app = app(Settings::default()).await;
     let (status, rejected) = call(
         &app,
         "SubmitEdit",
@@ -236,7 +237,8 @@ async fn each_refusal_has_its_connect_code() {
         busy_after: 0,
         calculation: Calculation::Simulated(Duration::from_secs(10)),
         ..Settings::default()
-    });
+    })
+    .await;
     let unknown = MeasureGlobalId(Ulid(999));
     let read_of = |at_least: u64, cell: Value| json!({ "at_least": at_least, "cells": [cell] });
     assert_eq!(
@@ -285,7 +287,7 @@ async fn each_refusal_has_its_connect_code() {
 
 #[tokio::test]
 async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions() {
-    let app = app(Settings::default());
+    let app = app(Settings::default()).await;
     let (status, definitions) = call(&app, "ListDefinitions", json!({})).await;
     assert_eq!(status, StatusCode::OK);
     let measures = definitions["measures"].as_array().expect("measures");
@@ -306,4 +308,71 @@ async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions()
         .expect("the axis is a listed dimension");
     assert_eq!(dimension["members"][0]["id"], 0);
     assert!(dimension["members"][0]["natural_key"].is_string());
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let first = app_on(Settings::default(), Arc::clone(&store), 1);
+    loaded(&first).await;
+    assert_eq!(
+        call(
+            &first,
+            "SubmitEdit",
+            edit("r1", QUANTITY, &first.coordinate, None)
+        )
+        .await,
+        (StatusCode::OK, json!({ "sequence": 0 }))
+    );
+    let config = ThrottleConfig {
+        wait_list_per_call: Duration::from_secs(3),
+        ..ThrottleConfig::default()
+    };
+    let second = app_on(
+        Settings::default(),
+        Arc::new(ThrottledStore::new(store, config)),
+        2,
+    );
+    let cells = json!({ "cells": [cell(QUANTITY, &second.coordinate)] });
+    for (method, body) in [
+        ("GetLag", json!({})),
+        ("ReadCells", cells.clone()),
+        ("ListDefinitions", json!({})),
+        ("SubmitEdit", edit("r2", QUANTITY, &second.coordinate, None)),
+    ] {
+        assert_eq!(
+            refusal(&second, method, body).await,
+            (StatusCode::SERVICE_UNAVAILABLE, json!("unavailable")),
+            "{method} while the log has a commit that is not loaded"
+        );
+    }
+    for (method, path, status) in [
+        ("POST", "/epm.v1.Workspace/Unknown", StatusCode::NOT_FOUND),
+        (
+            "GET",
+            "/epm.v1.Workspace/GetLag",
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Body::empty())
+            .expect("a request");
+        let response = second
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("a response");
+        assert_eq!(response.status(), status, "{method} {path} while loading");
+    }
+    loaded(&second).await;
+    let (status, lag) = call(&second, "GetLag", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        lag["committed"],
+        json!(0),
+        "the commit of the first assignee"
+    );
 }

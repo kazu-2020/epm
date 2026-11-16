@@ -1,3 +1,5 @@
+mod support;
+
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -5,8 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use change_log::{AssigneeId, Epoch, ProcessId, Start};
-use datagen::representative::{self, Size};
+use change_log::Start;
 use futures_util::stream::BoxStream;
 use measure::MeasureGlobalId;
 use object_store::memory::InMemory;
@@ -16,13 +17,12 @@ use object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use serde_json::{Value, json};
+use server::Settings;
 use server::http::Shutdown;
-use server::{Engine, Settings};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, oneshot};
 use ulid::Ulid;
-use workspace::Workspace;
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 
@@ -106,34 +106,28 @@ struct Running {
 }
 
 async fn run(deadline: Duration) -> Running {
-    let engine = Engine::new(
-        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
-    )
-    .expect("valid formulas");
     let store = Arc::new(Gate::default());
-    let (handle, assignee) = server::start(
-        engine,
+    let (handle, assignee) = support::start(
+        support::engine(),
         Start::default(),
         Settings::default(),
         Arc::clone(&store) as Arc<dyn ObjectStore>,
-        "ws".to_owned(),
-        AssigneeId {
-            epoch: Epoch(1),
-            process: ProcessId(1),
-        },
+        "ws",
+        1,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let address = listener.local_addr().expect("an address");
     let (shutdown, signal) = oneshot::channel::<()>();
     let stopped = tokio::spawn(server::http::serve(
         listener,
-        handle,
+        handle.clone(),
         assignee,
         async move {
             let _ = signal.await;
         },
         deadline,
     ));
+    support::loaded(&handle).await;
     Running {
         stopped,
         shutdown,
