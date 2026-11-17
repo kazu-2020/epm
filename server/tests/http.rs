@@ -195,7 +195,7 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
     no_value.as_object_mut().expect("an object").remove("value");
     let mut bad_global_id = edit("r3", QUANTITY, &app.coordinate, Some(1.0));
     bad_global_id["measure"] = json!("not a ULID");
-    let mut global_id_above_128_bits = edit("r3", QUANTITY, &app.coordinate, Some(1.0));
+    let mut global_id_above_128_bits = edit("r7", QUANTITY, &app.coordinate, Some(1.0));
     global_id_above_128_bits["measure"] = json!(format!("8{}", &QUANTITY.to_string()[1..]));
     let mut unknown_field = edit("r4", QUANTITY, &app.coordinate, Some(1.0));
     unknown_field["note"] = json!("x");

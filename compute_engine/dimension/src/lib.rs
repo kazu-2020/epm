@@ -16,7 +16,7 @@ const ULID_COLUMN: &str = "ulid";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DimensionGlobalId(pub Ulid);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidGlobalId;
 
 pub fn parse_global_id(text: &str) -> Result<Ulid, InvalidGlobalId> {
