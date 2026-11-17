@@ -6,7 +6,11 @@ use change_log::{Epoch, Exit, Sequence, Slot};
 use super::check::{acknowledged, decode, replay, slot_of};
 use super::simulate::{Outcome, Record, Refusal};
 
-pub fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
+#[allow(
+    clippy::too_many_lines,
+    reason = "each witness of the outcome is one block, read top to bottom"
+)]
+pub(crate) fn witnesses(outcome: &Outcome) -> BTreeSet<&'static str> {
     let mut seen = BTreeSet::new();
     let mut sent: BTreeMap<&str, Vec<&Bytes>> = BTreeMap::new();
     let mut epochs: BTreeMap<usize, u64> = BTreeMap::new();

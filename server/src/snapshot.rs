@@ -73,7 +73,11 @@ fn encode_in_chunks(
     {
         let mut out = BytesMut::new();
         for request_id in request_ids {
-            put_varint(&mut out, request_id.0.len() as u64);
+            put_varint(
+                &mut out,
+                u64::try_from(request_id.0.len())
+                    .expect("u64 holds every usize on supported targets"),
+            );
             out.put_slice(&request_id.0);
         }
         let (chunk, bytes) = compress(request_ids.len(), &out);
@@ -300,9 +304,9 @@ fn decompress(chunk: Chunk, bytes: &[u8], path: &str) -> Result<Bytes, SnapshotE
     let corrupt = || SnapshotError::Corrupt {
         path: path.to_owned(),
     };
-    let uncompressed =
-        zstd::bulk::decompress(bytes, chunk.length as usize).map_err(|_| corrupt())?;
-    if uncompressed.len() != chunk.length as usize {
+    let length = usize::try_from(chunk.length).expect("usize holds every u32 on supported targets");
+    let uncompressed = zstd::bulk::decompress(bytes, length).map_err(|_| corrupt())?;
+    if uncompressed.len() != length {
         return Err(corrupt());
     }
     Ok(uncompressed.into())
@@ -318,7 +322,7 @@ fn put_chunks(out: &mut BytesMut, chunks: &[Chunk]) {
 
 fn put_varint(out: &mut BytesMut, mut value: u64) {
     while value >= 0x80 {
-        out.put_u8((value & 0x7f) as u8 | 0x80);
+        out.put_u8(u8::try_from(value & 0x7f).expect("the mask leaves 7 bits") | 0x80);
         value >>= 7;
     }
     out.put_u8(u8::try_from(value).expect("the loop leaves value below 0x80"));
@@ -463,6 +467,10 @@ mod tests {
             .collect()
     }
 
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "a test helper: a path mismatch fails the test, it is not a decode error"
+    )]
     fn read_back(
         manifest: Bytes,
         objects: Vec<Object>,
@@ -693,7 +701,10 @@ mod tests {
         let mut manifest = Manifest::decode(manifest).expect("valid");
         let mut uncompressed = BytesMut::new();
         for name in ["r1", "", "r3", "extra"] {
-            put_varint(&mut uncompressed, name.len() as u64);
+            put_varint(
+                &mut uncompressed,
+                u64::try_from(name.len()).expect("u64 holds every usize on supported targets"),
+            );
             uncompressed.put_slice(name.as_bytes());
         }
         let (chunk, bytes) = compress(3, &uncompressed);

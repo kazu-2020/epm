@@ -22,12 +22,14 @@ use crate::{Edit, Engine, EngineAlarm, Exit, Rejection};
 
 const WAITING_REQUESTS: usize = 64;
 
+#[derive(Debug)]
 pub struct Settings {
     pub busy_after: u64,
     pub calculation: Calculation,
     pub snapshot_every: u64,
 }
 
+#[derive(Debug)]
 pub enum Calculation {
     Threads(NonZeroUsize),
     Simulated(Duration),
@@ -77,7 +79,7 @@ pub enum ReadError {
     Stopped,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Handle {
     submission_sender: mpsc::Sender<Submission<Rejection>>,
     engine_receiver: watch::Receiver<Arc<Engine>>,
@@ -94,6 +96,7 @@ struct Admission {
     committed: watch::Sender<Committed>,
 }
 
+#[derive(Debug)]
 enum Committed {
     LogNotRead,
     Next(Sequence),

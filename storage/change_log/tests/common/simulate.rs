@@ -31,23 +31,25 @@ const REQUESTS_PER_CLIENT: usize = 4;
 const WORKLOAD: Duration = Duration::from_secs(20);
 const CLIENT_WAIT: Duration = Duration::from_secs(2);
 const LATEST_APPLY: Duration = Duration::from_secs(2);
-const PROBE_WAIT: Duration = Duration::from_secs(60);
+const PROBE_WAIT: Duration = Duration::from_mins(1);
 const LATEST_REPLY: Duration = Duration::from_secs(1);
 const ACK_LOST_PERCENT: u64 = 20;
 const CRASH_AFTER_ACK_PERCENT: u64 = 10;
 
-pub type Submit =
+pub(crate) type Submit =
     Arc<dyn Fn(Request) -> BoxFuture<'static, Option<Result<Sequence, Refusal>>> + Send + Sync>;
 
-// Not built in the change_log simulations: AdmitAll never refuses, only the server does.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the change_log simulations never build it: AdmitAll never refuses, only the server does"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Refusal {
+pub(crate) enum Refusal {
     Busy,
     Invalid,
 }
 
-pub trait Server: Send + Sync {
+pub(crate) trait Server: Send + Sync {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> Started {
         let (submission_sender, submission_receiver) = mpsc::channel(64);
         let (commit_sender, commit_receiver) = mpsc::unbounded_channel();
@@ -87,7 +89,7 @@ pub trait Server: Send + Sync {
     }
 }
 
-pub struct Started {
+pub(crate) struct Started {
     pub exit: BoxFuture<'static, Result<Exit, String>>,
     pub submit: Submit,
     pub commit_receiver: Option<mpsc::UnboundedReceiver<(Slot, Commit)>>,
@@ -95,10 +97,10 @@ pub struct Started {
 }
 
 #[derive(Debug)]
-pub struct Rng(u64);
+pub(crate) struct Rng(u64);
 
 impl Rng {
-    pub fn new(seed: u64) -> Rng {
+    pub(crate) fn new(seed: u64) -> Rng {
         Rng(seed)
     }
 
@@ -115,7 +117,10 @@ impl Rng {
     }
 
     fn server(&mut self) -> usize {
-        usize::try_from(self.below(SERVERS as u64)).expect("below SERVERS")
+        usize::try_from(
+            self.below(u64::try_from(SERVERS).expect("u64 holds every usize on supported targets")),
+        )
+        .expect("below SERVERS")
     }
 
     fn percent(&mut self, chance: u64) -> bool {
@@ -133,7 +138,7 @@ impl Rng {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Record {
+pub(crate) enum Record {
     Granted {
         server: usize,
         epoch: u64,
@@ -201,7 +206,7 @@ fn record(history: &History, record: Record) {
 }
 
 #[derive(Debug)]
-pub struct Faults {
+pub(crate) struct Faults {
     inner: Arc<dyn ObjectStore>,
     rng: Mutex<Rng>,
     calm: AtomicBool,
@@ -583,12 +588,16 @@ async fn client(
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Outcome {
+pub(crate) struct Outcome {
     pub history: Vec<Record>,
     pub store: BTreeMap<String, Bytes>,
 }
 
-pub async fn simulate(
+#[allow(
+    clippy::too_many_lines,
+    reason = "one async block sets up the cluster and drives every actor of the simulation"
+)]
+pub(crate) async fn simulate(
     server: Arc<dyn Server>,
     inner: Arc<dyn ObjectStore>,
     workspace: &str,
@@ -604,9 +613,10 @@ pub async fn simulate(
     });
     let (servers, assignees): (Vec<_>, Assignees) =
         (0..SERVERS).map(|_| watch::channel(None)).unzip();
+    let store: Arc<dyn ObjectStore> = Arc::<Faults>::clone(&faults);
     let mut cluster = Cluster {
         server: Arc::clone(&server),
-        store: Arc::clone(&faults) as Arc<dyn ObjectStore>,
+        store,
         workspace: workspace.to_owned(),
         history: Arc::clone(&history),
         servers,
