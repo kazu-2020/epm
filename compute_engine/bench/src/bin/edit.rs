@@ -59,17 +59,23 @@ fn main() -> std::io::Result<()> {
                 .expect("a packed coordinate of the base fits the measure");
             let global_id = measures[input].global_id();
             let started = Instant::now();
-            measures = column_engine::edit(&measures, [(global_id, delta)], &order, &dimensions)
-                .expect("the edit recalculates")
-                .iter()
-                .map(Measure::fold_deltas_or_compact)
-                .collect();
+            let edited = column_engine::edit(&measures, [(global_id, delta)], &order, &dimensions)
+                .expect("the edit recalculates");
+            let evaluated = started.elapsed();
+            measures = edited.iter().map(Measure::fold_deltas_or_compact).collect();
             let elapsed = started.elapsed();
-            times.push(elapsed);
+            let compacted = edited
+                .iter()
+                .zip(&measures)
+                .filter(|(before, after)| before.delta_len() > 0 && after.delta_len() == 0)
+                .count();
+            times.push(Edit { elapsed, compacted });
             let delta_len: usize = measures.iter().map(Measure::delta_len).sum();
             eprintln!(
-                "{name}\t{edit}\t{:.3}s\tdelta {delta_len}",
-                elapsed.as_secs_f64()
+                "{name}\t{edit}\t{:.3}s\tevaluate {:.3}s\tfold {:.3}s\tcompacted {compacted}\tdelta {delta_len}",
+                elapsed.as_secs_f64(),
+                evaluated.as_secs_f64(),
+                (elapsed - evaluated).as_secs_f64()
             );
         }
         report(&name, &mut times);
@@ -79,16 +85,25 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn report(name: &str, times: &mut [Duration]) {
-    times.sort();
-    let at = |quantile: f64| {
-        times[((times.len() as f64 * quantile).ceil() as usize).saturating_sub(1)].as_secs_f64()
-    };
+struct Edit {
+    elapsed: Duration,
+    compacted: usize,
+}
+
+fn report(name: &str, times: &mut [Edit]) {
+    times.sort_by_key(|edit| edit.elapsed);
+    let rank = |quantile: f64| ((times.len() as f64 * quantile).ceil() as usize).saturating_sub(1);
+    let at = |quantile: f64| times[rank(quantile)].elapsed.as_secs_f64();
+    let compacting = |edits: &[Edit]| edits.iter().filter(|edit| edit.compacted > 0).count();
+    let slowest = &times[rank(0.99)..];
     println!(
-        "{name}\tedits {}\tp50 {:.3}s\tp99 {:.3}s\tmax {:.3}s",
+        "{name}\tedits {}\tp50 {:.3}s\tp99 {:.3}s\tmax {:.3}s\tcompacting {}\tcompacting at p99 and above {}/{}",
         times.len(),
         at(0.5),
         at(0.99),
-        at(1.0)
+        at(1.0),
+        compacting(times),
+        compacting(slowest),
+        slowest.len()
     );
 }

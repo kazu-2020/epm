@@ -33,7 +33,10 @@ for scale in "$@"; do
     if [ "$scale" = 1 ]; then
         hyperfine --runs 5 --export-json out/recalculate.json --export-markdown out/recalculate.md 'bin/new/recalculate data-1 column'
         timed out/recalculate-time.txt new 1
-        bin/new/edit data-1 100 > out/edit.txt 2> out/edit-log.txt
+        # Not one run: the p99 of 500 edits rests on its 5 slowest edits, so one run swings it.
+        for round in 1 2 3 4 5; do
+            bin/new/edit data-1 100 > "out/edit-$round.txt" 2> "out/edit-log-$round.txt"
+        done
         for threads in 1 "$most"; do
             # Not the cycles event: cpu-clock works on a VM without the PMU.
             RAYON_NUM_THREADS=$threads taskset -c "$(cpus "$threads")" perf record -e cpu-clock -g -o "perf-$threads.data" bin/new/recalculate data-1 column > /dev/null 2>&1 &&
