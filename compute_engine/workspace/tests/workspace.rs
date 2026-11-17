@@ -475,4 +475,5 @@ fn a_workspace_global_id_above_128_bits_is_not_another_workspace() {
             "{text:?}"
         );
     }
+    assert_eq!(InvalidWorkspaceGlobalId.to_string(), "not a ULID");
 }
