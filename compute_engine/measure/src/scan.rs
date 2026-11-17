@@ -46,15 +46,19 @@ pub(crate) fn first_unsorted(packed_coordinates: &[u64]) -> Option<usize> {
 mod tests {
     use super::*;
 
+    fn checked_rows() -> u64 {
+        u64::try_from(CHECKED_ROWS).expect("CHECKED_ROWS fits in u64")
+    }
+
     #[test]
     fn the_first_bad_row_is_found_across_the_border_of_two_pieces() {
-        let packed_coordinates: Vec<u64> = (0..=CHECKED_ROWS as u64).chain([0]).collect();
+        let packed_coordinates: Vec<u64> = (0..=checked_rows()).chain([0]).collect();
 
         assert_eq!(first_unsorted(&packed_coordinates), Some(CHECKED_ROWS + 1));
-        let last_of_the_first_piece: Vec<u64> = (0..CHECKED_ROWS as u64).chain([0]).collect();
+        let last_of_the_first_piece: Vec<u64> = (0..checked_rows()).chain([0]).collect();
         assert_eq!(first_unsorted(&last_of_the_first_piece), Some(CHECKED_ROWS));
         assert_eq!(
-            first_row(&packed_coordinates, |&packed| packed == CHECKED_ROWS as u64),
+            first_row(&packed_coordinates, |&packed| packed == checked_rows()),
             Some(CHECKED_ROWS)
         );
     }
@@ -64,20 +68,20 @@ mod tests {
         assert_eq!(first_unsorted(&[]), None);
         assert_eq!(first_unsorted(&[7]), None);
         assert_eq!(first_unsorted(&[7, 7]), Some(1));
-        assert_eq!(first_row(&[] as &[u64], |_| true), None);
+        assert_eq!(first_row::<u64>(&[], |_| true), None);
         assert_eq!(first_row(&[7u64], |&packed| packed == 7), Some(0));
     }
 
     #[test]
     fn a_bad_row_at_the_end_of_two_full_pieces_is_found() {
-        let sorted: Vec<u64> = (0..2 * CHECKED_ROWS as u64).collect();
+        let sorted: Vec<u64> = (0..2 * checked_rows()).collect();
         assert_eq!(first_unsorted(&sorted), None);
 
         let mut last_repeated = sorted.clone();
         last_repeated[2 * CHECKED_ROWS - 1] = last_repeated[2 * CHECKED_ROWS - 2];
         assert_eq!(first_unsorted(&last_repeated), Some(2 * CHECKED_ROWS - 1));
         assert_eq!(
-            first_row(&sorted, |&packed| packed + 1 == 2 * CHECKED_ROWS as u64),
+            first_row(&sorted, |&packed| packed + 1 == 2 * checked_rows()),
             Some(2 * CHECKED_ROWS - 1)
         );
     }

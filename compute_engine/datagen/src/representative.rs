@@ -672,5 +672,5 @@ fn measure(
     arrays.push(Arc::new(Float64Array::from(values)));
     let base = RecordBatch::try_new(Arc::new(definition.schema()), arrays)
         .expect("the columns follow the measure schema");
-    Measure::try_new(definition, base, references).expect("the representative cells are valid")
+    Measure::try_new(definition, &base, references).expect("the representative cells are valid")
 }

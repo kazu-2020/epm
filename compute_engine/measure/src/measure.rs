@@ -29,7 +29,7 @@ pub struct Measure {
 impl Measure {
     pub fn try_new(
         definition: MeasureDefinition,
-        base: RecordBatch,
+        base: &RecordBatch,
         dimensions: &[&Dimension],
     ) -> Result<Self, MeasureError> {
         let axes = Axes::new(&definition, dimensions)?;
@@ -86,6 +86,10 @@ impl Measure {
         Self::checked(definition, axes, packed_coordinates, values)
     }
 
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "a length mismatch is a caller bug, not an input error"
+    )]
     pub fn try_from_packed(
         definition: MeasureDefinition,
         packed_coordinates: ScalarBuffer<u64>,
@@ -192,13 +196,13 @@ impl Measure {
             .axes
             .positions
             .iter()
-            .map(|&position| {
+            .map(|&position| -> ArrayRef {
                 Arc::new(UInt32Array::from_iter_values(
                     measure
                         .packed_coordinates
                         .iter()
                         .map(|&packed| measure.axes.packing.member(packed, position)),
-                )) as ArrayRef
+                ))
             })
             .collect();
         columns.push(Arc::new(Float64Array::new(measure.values.clone(), None)));
@@ -246,9 +250,13 @@ impl Measure {
     }
 
     pub fn delta(&self) -> DeltaBuilder {
-        DeltaBuilder::new(self.definition.global_id(), self.axes.clone())
+        DeltaBuilder::new(self.definition.global_id(), Arc::clone(&self.axes))
     }
 
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "a length mismatch is a caller bug, not an input error"
+    )]
     pub fn delta_from_packed(
         &self,
         packed_coordinates: Vec<u64>,
@@ -263,7 +271,7 @@ impl Measure {
         self.axes.check_in_range(&packed_coordinates)?;
         Ok(Delta::sorted(
             self.definition.global_id(),
-            self.axes.clone(),
+            Arc::clone(&self.axes),
             packed_coordinates,
             changes
                 .into_iter()
@@ -287,6 +295,7 @@ impl Measure {
         Ok(measure)
     }
 
+    #[must_use]
     pub fn fold_deltas(&self) -> Measure {
         if matches!(self.deltas[..], [] | [_]) {
             return self.clone();
@@ -295,13 +304,14 @@ impl Measure {
         let mut measure = self.clone();
         measure.deltas = vec![Arc::new(Delta::sorted(
             self.definition.global_id(),
-            self.axes.clone(),
+            Arc::clone(&self.axes),
             packed_coordinates,
             changes,
         ))];
         measure
     }
 
+    #[must_use]
     pub fn fold_deltas_or_compact(&self) -> Measure {
         let folded = self.fold_deltas();
         if folded.delta_len() * COMPACTION_DIVISOR > folded.values.len() {
@@ -311,6 +321,7 @@ impl Measure {
         }
     }
 
+    #[must_use]
     pub fn compact(&self) -> Measure {
         if self.deltas.is_empty() {
             return self.clone();
@@ -337,7 +348,7 @@ impl Measure {
         values.extend_from_slice(&self.values[start..]);
         Measure {
             definition: self.definition.clone(),
-            axes: self.axes.clone(),
+            axes: Arc::clone(&self.axes),
             packed_coordinates: packed_coordinates.into(),
             values: values.into(),
             deltas: Vec::new(),
