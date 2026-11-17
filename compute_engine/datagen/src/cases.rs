@@ -403,7 +403,7 @@ fn dimension(
         natural_key_attribute(global_id).global_id,
         [vec![natural_key_attribute(global_id)], attributes].concat(),
     )
-    .expect("each fixture dimension has a text natural key and distinct attributes");
+    .expect("each fixture dimension has a text natural key and distinct attributes that do not reference their own dimension");
     let global_ids = FixedSizeBinaryArray::try_from_iter(
         (0..natural_keys.len()).map(|row| Ulid(global_id.0.0 * 100 + row as u128).to_bytes()),
     )
@@ -418,7 +418,7 @@ fn dimension(
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns)
         .expect("each fixture dimension has at most one attribute besides its natural key, with one value per member");
     Dimension::try_new(definition, batch, targets)
-        .expect("each fixture dimension has distinct natural keys and is built after the dimensions it references")
+        .expect("each fixture dimension has distinct natural keys, is built after the dimensions it references, and its reference values point at existing members")
 }
 
 fn measure_definition(
