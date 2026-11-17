@@ -1,3 +1,4 @@
+mod coordinate;
 mod support;
 
 use std::fmt;
@@ -108,11 +109,12 @@ struct Running {
 
 async fn run(deadline: Duration) -> Running {
     let store = Arc::new(Gate::default());
+    let object_store: Arc<dyn ObjectStore> = Arc::<Gate>::clone(&store);
     let (handle, assignee) = support::start(
         support::engine(),
         Start::default(),
         Settings::default(),
-        Arc::clone(&store) as Arc<dyn ObjectStore>,
+        object_store,
         1,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
@@ -139,11 +141,11 @@ async fn run(deadline: Duration) -> Running {
 async fn send_submit_edit(address: SocketAddr) -> TcpStream {
     let body = json!({
         "request_id": "r1",
-        "measure": QUANTITY.0.to_string(),
-        "coordinate": support::named(&support::engine(), QUANTITY, &[0, 1, 1, 0, 1].map(MemberIndex))
+        "measure": QUANTITY.to_string(),
+        "coordinate": coordinate::named(&support::engine(), QUANTITY, &[0, 1, 1, 0, 1].map(MemberIndex))
             .into_iter()
             .map(|(dimension, member)| {
-                json!({ "dimension": dimension.0.to_string(), "member": member.0.to_string() })
+                json!({ "dimension": dimension.to_string(), "member": member.to_string() })
             })
             .collect::<Vec<_>>(),
         "value": 3.0,
@@ -163,7 +165,7 @@ async fn send_submit_edit(address: SocketAddr) -> TcpStream {
 
 #[tokio::test]
 async fn a_shutdown_waits_for_the_edit_in_flight_and_then_stops_with_success() {
-    let running = run(Duration::from_secs(60)).await;
+    let running = run(Duration::from_mins(1)).await;
     let mut stream = send_submit_edit(running.address).await;
     running.store.started.notified().await;
     running

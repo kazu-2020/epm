@@ -53,10 +53,10 @@ impl fmt::Display for CellError {
                 )
             }
             CellError::MissingAxis(axis) => {
-                write!(f, "the coordinate has no member of axis {}", axis.0)
+                write!(f, "the coordinate has no member of axis {axis}")
             }
             CellError::NoMember { axis, member } => {
-                write!(f, "member {} is not in dimension {}", member.0, axis.0)
+                write!(f, "member {member} is not in dimension {axis}")
             }
         }
     }

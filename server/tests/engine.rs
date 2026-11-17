@@ -1,4 +1,4 @@
-mod support;
+mod coordinate;
 
 use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence, Slot};
@@ -24,7 +24,7 @@ fn engine() -> Engine {
 fn quantity(coordinate: [u32; 5], value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: support::named(&engine(), QUANTITY, &coordinate.map(MemberIndex)),
+        coordinate: coordinate::named(&engine(), QUANTITY, &coordinate.map(MemberIndex)),
         value,
     }
 }
@@ -153,7 +153,7 @@ fn a_batch_gives_the_values_of_its_commits_one_by_one() {
     let second = [2, 1, 0, 1, 0];
     let price = Edit {
         measure: PRICE,
-        coordinate: support::named(&engine(), PRICE, &[0, 1, 1].map(MemberIndex)),
+        coordinate: coordinate::named(&engine(), PRICE, &[0, 1, 1].map(MemberIndex)),
         value: Some(9.0),
     };
     let edits = [
@@ -187,7 +187,10 @@ fn edits_to_one_cell_keep_one_delta_entry_however_many_batches_arrive() {
     let coordinate = [0, 1, 1, 0, 1];
     let mut engine = engine();
     for sequence in 0..20 {
-        let edit = quantity(coordinate, Some(sequence as f64));
+        let edit = quantity(
+            coordinate,
+            Some(f64::from(u8::try_from(sequence).expect("below 20"))),
+        );
         engine = applied(&engine, &[commit(sequence, &edit)]);
     }
     let input = engine

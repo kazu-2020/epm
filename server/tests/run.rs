@@ -1,3 +1,4 @@
+mod coordinate;
 mod support;
 
 use std::sync::Arc;
@@ -72,7 +73,7 @@ fn id(name: &str) -> RequestId {
 fn quantity(value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: support::named(&support::engine(), QUANTITY, &CELL.map(MemberIndex)),
+        coordinate: coordinate::named(&support::engine(), QUANTITY, &CELL.map(MemberIndex)),
         value,
     }
 }
@@ -83,7 +84,7 @@ fn cells() -> Vec<(MeasureGlobalId, Coordinate)> {
         .map(|measure| {
             (
                 measure,
-                support::named(&engine, measure, &CELL.map(MemberIndex)),
+                coordinate::named(&engine, measure, &CELL.map(MemberIndex)),
             )
         })
         .to_vec()

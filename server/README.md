@@ -29,14 +29,16 @@ export AWS_ALLOW_HTTP=true
 ## Run the server
 
 ```bash
-cargo run --locked -- --listen 127.0.0.1:8080 --workspace 01JCQ7ZK3M5V8W9X0Y1Z2A3B4C
+cargo run --locked -- --listen 127.0.0.1:8080 --workspace 01JCQ7ZK3M5V8W9X0Y1Z2A3B4C --epoch 1
 ```
 
 - `--workspace`: the WorkspaceGlobalId (a ULID). It is the prefix of the change log and the snapshots in the bucket. It is necessary. If it is not a ULID, the server does not start.
 - `--listen`: the address. The default is `127.0.0.1:8080`.
-- `--epoch`: the epoch of this process. The default is the current time in milliseconds. Each start must use a larger epoch than the last start.
+- `--epoch`: the epoch of this process. It is necessary. Each start must use a larger epoch than the last start of the same workspace. The placement table issues it (ADR 0012).
 
 The workspace definition is fixed in the code (`src/main.rs`). When the assignee stops, the process exits with code 1. Start a new process to continue. SIGINT (Ctrl-C) and SIGTERM stop the server. It finishes the requests in progress and exits with code 0. If the requests do not finish in 5 seconds, or a second signal comes first, it exits with code 1.
+
+The server writes its log to stderr through `tracing`. The default level is `info`. To change the level, set `RUST_LOG` (for example `RUST_LOG=warn`).
 
 ## Run the demo
 

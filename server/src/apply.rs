@@ -272,7 +272,9 @@ mod tests {
                     (axis, member.expect("a member").global_id())
                 })
                 .collect(),
-            value: Some(sequence as f64),
+            value: Some(f64::from(
+                u32::try_from(sequence).expect("a test sequence fits in u32"),
+            )),
         };
         let (_, commit) = commit(sequence);
         (
@@ -284,8 +286,8 @@ mod tests {
         )
     }
 
-    fn applied(applier: &mut Applier, effects: Vec<Effect>) -> Vec<Effect> {
-        let [Effect::Calculate { engine, commits }] = &effects[..] else {
+    fn applied(applier: &mut Applier, effects: &[Effect]) -> Vec<Effect> {
+        let [Effect::Calculate { engine, commits }] = effects else {
             panic!("{effects:?}")
         };
         applier.step(Event::Finished(engine.apply_batch(commits)))
@@ -302,7 +304,7 @@ mod tests {
 
     fn published(applier: &mut Applier, engine: &Engine, sequence: u64, slot: u64) -> Vec<Effect> {
         let effects = applier.step(Event::Committed(vec![edit(sequence, slot, engine)]));
-        applied(applier, effects)
+        applied(applier, &effects)
     }
 
     #[test]
@@ -337,7 +339,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            written(&applied(&mut applier, effects)),
+            written(&applied(&mut applier, &effects)),
             Some((Slot(6), 5)),
             "a failed write is tried again, and holds only the published commits"
         );

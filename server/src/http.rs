@@ -9,7 +9,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use bytes::Bytes;
 use change_log::{RequestId, Sequence};
-use dimension::{DimensionGlobalId, MemberGlobalId, MemberIndex};
+use dimension::{DimensionGlobalId, MemberGlobalId, MemberIndex, parse_global_id};
 use measure::MeasureGlobalId;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -171,9 +171,9 @@ async fn list_definitions(State(handle): State<Handle>) -> Result<Json<Value>, F
                 "calculated"
             };
             json!({
-                "ulid": definition.global_id().0.to_string(),
+                "ulid": definition.global_id().to_string(),
                 "name": definition.name(),
-                "axes": definition.axes().iter().map(|axis| axis.0.to_string()).collect::<Vec<_>>(),
+                "axes": definition.axes().iter().map(ToString::to_string).collect::<Vec<_>>(),
                 "kind": kind,
             })
         })
@@ -185,11 +185,11 @@ async fn list_definitions(State(handle): State<Handle>) -> Result<Json<Value>, F
             let members: Vec<Value> = (0..dimension.len())
                 .filter_map(|id| dimension.member(MemberIndex(id)))
                 .map(|member| {
-                    json!({ "ulid": member.global_id().0.to_string(), "natural_key": member.natural_key() })
+                    json!({ "ulid": member.global_id().to_string(), "natural_key": member.natural_key() })
                 })
                 .collect();
             json!({
-                "ulid": dimension.global_id().0.to_string(),
+                "ulid": dimension.global_id().to_string(),
                 "name": dimension.name(),
                 "members": members,
             })
@@ -227,7 +227,8 @@ fn parse<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, Fai
 }
 
 fn measure(text: &str) -> Result<MeasureGlobalId, Failure> {
-    ulid("measure", text).map(MeasureGlobalId)
+    text.parse()
+        .map_err(|error| Failure::new(Code::InvalidArgument, format!("measure {text:?}: {error}")))
 }
 
 fn coordinate(members: Vec<AxisMember>) -> Result<Coordinate, Failure> {
@@ -243,7 +244,7 @@ fn coordinate(members: Vec<AxisMember>) -> Result<Coordinate, Failure> {
 }
 
 fn ulid(name: &str, text: &str) -> Result<Ulid, Failure> {
-    Ulid::from_string(text)
+    parse_global_id(text)
         .map_err(|error| Failure::new(Code::InvalidArgument, format!("{name} {text:?}: {error}")))
 }
 
@@ -261,7 +262,7 @@ fn submit_failure(error: SubmitError) -> Failure {
         SubmitError::Rejected(Rejection::Invalid(invalid)) => {
             let message = match invalid {
                 Invalid::Undecodable(_) => "the edit cannot be decoded".to_owned(),
-                Invalid::NotAnInput(measure) => format!("measure {} is not an input", measure.0),
+                Invalid::NotAnInput(measure) => format!("measure {measure} is not an input"),
                 Invalid::Coordinate(error) => error.to_string(),
                 Invalid::Cell(error) => error.to_string(),
             };
@@ -289,7 +290,7 @@ fn read_failure(error: ReadError) -> Failure {
             )
         }
         ReadError::NoMeasure(measure) => {
-            Failure::new(Code::NotFound, format!("no measure {}", measure.0))
+            Failure::new(Code::NotFound, format!("no measure {measure}"))
         }
         ReadError::Coordinate(error) => Failure::new(Code::InvalidArgument, error.to_string()),
         ReadError::Cell(error) => Failure::new(Code::InvalidArgument, error.to_string()),
