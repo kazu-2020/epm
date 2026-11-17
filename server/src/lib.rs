@@ -11,7 +11,7 @@ use std::ops::RangeInclusive;
 use change_log::{Commit, RequestId, Sequence, Slot, Start};
 use dimension::Dimension;
 use formula::EvaluateError;
-use measure::{CoordinateError, Measure, MeasureGlobalId};
+use measure::{Measure, MeasureGlobalId};
 use workspace::{CalculateError, Calculated, CellError, EditCheck, Edits, Workspace};
 
 pub use crate::assignee::{
@@ -38,7 +38,6 @@ pub struct Engine {
 pub enum Invalid {
     Undecodable(DecodeError),
     NotAnInput(MeasureGlobalId),
-    Coordinate(CoordinateError),
     Cell(CellError),
 }
 
@@ -83,6 +82,18 @@ impl Engine {
 
     pub fn dimensions(&self) -> &[Dimension] {
         self.calculated.dimensions()
+    }
+
+    pub fn axes<'e>(
+        &'e self,
+        measure: &'e Measure,
+    ) -> impl ExactSizeIterator<Item = &'e Dimension> {
+        measure.definition().axes().iter().map(|&axis| {
+            self.dimensions()
+                .iter()
+                .find(|dimension| dimension.global_id() == axis)
+                .expect("every measure of the engine is made from its dimensions")
+        })
     }
 
     pub fn edit_check(&self) -> &EditCheck {

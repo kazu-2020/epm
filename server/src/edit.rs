@@ -35,7 +35,6 @@ pub(crate) fn add(
 fn invalid(error: EditError) -> Invalid {
     match error {
         EditError::NotAnInput(measure) => Invalid::NotAnInput(measure),
-        EditError::Coordinate(error) => Invalid::Coordinate(error),
         EditError::Cell(error) => Invalid::Cell(error),
     }
 }

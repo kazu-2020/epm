@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use dimension::Dimension;
 use formula::{CheckedExpression, EvaluateError};
-use measure::{CoordinateError, DeltaBuilder, Measure, MeasureGlobalId};
+use measure::{DeltaBuilder, Measure, MeasureGlobalId};
 
 use crate::cell::{CellError, Coordinate, resolve};
 use crate::compile::CompiledFormula;
@@ -20,8 +20,6 @@ pub struct Edit {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditError {
     NotAnInput(MeasureGlobalId),
-    // Not unreachable after a resolve: a measure keeps a copy of the member counts, which grows stale when a dimension gains members (#165).
-    Coordinate(CoordinateError),
     Cell(CellError),
 }
 
@@ -82,7 +80,10 @@ impl EditCheck {
             Some(value) => delta.set(&coordinate, value),
             None => delta.delete(&coordinate),
         }
-        .map_err(EditError::Coordinate)
+        .expect(
+            "Workspace::try_new checks that the member counts of every input match its dimensions",
+        );
+        Ok(())
     }
 }
 

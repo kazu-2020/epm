@@ -46,7 +46,7 @@ fn app_on(settings: Settings, store: Arc<dyn ObjectStore>, epoch: u64) -> App {
         .find(|measure| measure.global_id() == QUANTITY)
         .and_then(|quantity| quantity.cells().next())
         .expect("the seed has a quantity");
-    let coordinate: Vec<Value> = coordinate::named(&engine, QUANTITY, &coordinate)
+    let coordinate: Vec<Value> = coordinate::named(QUANTITY, &coordinate)
         .iter()
         .map(|(dimension, member)| {
             json!({ "dimension": dimension.to_string(), "member": member.to_string() })

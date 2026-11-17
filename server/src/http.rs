@@ -262,7 +262,6 @@ fn submit_failure(error: SubmitError) -> Failure {
             let message = match invalid {
                 Invalid::Undecodable(_) => "the edit cannot be decoded".to_owned(),
                 Invalid::NotAnInput(measure) => format!("measure {measure} is not an input"),
-                Invalid::Coordinate(error) => error.to_string(),
                 Invalid::Cell(error) => error.to_string(),
             };
             Failure::new(Code::InvalidArgument, message)
@@ -291,7 +290,6 @@ fn read_failure(error: ReadError) -> Failure {
         ReadError::NoMeasure(measure) => {
             Failure::new(Code::NotFound, format!("no measure {measure}"))
         }
-        ReadError::Coordinate(error) => Failure::new(Code::InvalidArgument, error.to_string()),
         ReadError::Cell(error) => Failure::new(Code::InvalidArgument, error.to_string()),
         ReadError::Stopped => Failure::new(Code::Unavailable, "the assignee stopped".to_owned()),
     }

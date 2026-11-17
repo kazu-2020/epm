@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use datagen::cases::exact;
 use datagen::numbered_dimension;
@@ -68,31 +69,8 @@ fn quantity_cell() -> [MemberIndex; 5] {
     [0, 1, 1, 0, 1].map(MemberIndex)
 }
 
-fn named(
-    unchecked: &UncheckedWorkspace,
-    axes: &[DimensionGlobalId],
-    members: &[MemberIndex],
-) -> Coordinate {
-    axes.iter()
-        .zip(members)
-        .map(|(&axis, &member)| {
-            let dimension = unchecked
-                .dimensions
-                .iter()
-                .find(|dimension| dimension.global_id() == axis)
-                .expect("the axis is a dimension");
-            (
-                axis,
-                dimension
-                    .member(member)
-                    .expect("the member exists")
-                    .global_id(),
-            )
-        })
-        .collect()
-}
-
-fn quantity(value: Option<f64>) -> Edit {
+// Not a fresh model for each edit: generating the representative model repeats for every call.
+static QUANTITY_CELL: LazyLock<Coordinate> = LazyLock::new(|| {
     let unchecked = generated();
     let input = &unchecked.inputs[0];
     assert_eq!(
@@ -100,9 +78,20 @@ fn quantity(value: Option<f64>) -> Edit {
         QUANTITY,
         "the first input is the quantity"
     );
+    let axes = input.definition().axes().iter().map(|&axis| {
+        unchecked
+            .dimensions
+            .iter()
+            .find(|dimension| dimension.global_id() == axis)
+            .expect("the axis is a dimension")
+    });
+    Coordinate::named(axes, &quantity_cell()).expect("the members exist")
+});
+
+fn quantity(value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: named(&unchecked, input.definition().axes(), &quantity_cell()),
+        coordinate: QUANTITY_CELL.clone(),
         value,
     }
 }
@@ -613,6 +602,29 @@ fn a_coordinate_names_a_member_by_its_global_id_in_whatever_row_the_member_is() 
     assert_eq!(
         resolve([&moved].into_iter(), &coordinate),
         Ok(vec![MemberIndex(0)])
+    );
+}
+
+#[test]
+fn a_coordinate_named_from_member_indexes_resolves_to_the_same_indexes() {
+    let unchecked = generated();
+    let declared = &unchecked.dimensions;
+    let members: Vec<MemberIndex> = declared.iter().map(|_| MemberIndex(1)).collect();
+    let coordinate =
+        Coordinate::named(declared.iter(), &members).expect("every dimension has two members");
+
+    assert_eq!(resolve(declared.iter(), &coordinate), Ok(members.clone()));
+    assert_eq!(
+        Coordinate::named(declared.iter(), &members[1..]),
+        None,
+        "one member for each dimension"
+    );
+    let mut outside = members;
+    outside[0] = MemberIndex(u32::MAX);
+    assert_eq!(
+        Coordinate::named(declared.iter(), &outside),
+        None,
+        "a member outside the dimension"
     );
 }
 

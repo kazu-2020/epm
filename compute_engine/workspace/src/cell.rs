@@ -9,6 +9,23 @@ impl Coordinate {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (DimensionGlobalId, MemberGlobalId)> + '_ {
         self.0.iter().copied()
     }
+
+    pub fn named<'d>(
+        declared: impl ExactSizeIterator<Item = &'d Dimension>,
+        members: &[MemberIndex],
+    ) -> Option<Coordinate> {
+        if declared.len() != members.len() {
+            return None;
+        }
+        declared
+            .zip(members)
+            .map(|(dimension, &member)| {
+                dimension
+                    .member(member)
+                    .map(|member| (dimension.global_id(), member.global_id()))
+            })
+            .collect()
+    }
 }
 
 impl FromIterator<(DimensionGlobalId, MemberGlobalId)> for Coordinate {

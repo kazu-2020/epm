@@ -73,20 +73,14 @@ fn id(name: &str) -> RequestId {
 fn quantity(value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: coordinate::named(&support::engine(), QUANTITY, &CELL.map(MemberIndex)),
+        coordinate: coordinate::named(QUANTITY, &CELL.map(MemberIndex)),
         value,
     }
 }
 
 fn cells() -> Vec<(MeasureGlobalId, Coordinate)> {
-    let engine = support::engine();
     [QUANTITY, SALES]
-        .map(|measure| {
-            (
-                measure,
-                coordinate::named(&engine, measure, &CELL.map(MemberIndex)),
-            )
-        })
+        .map(|measure| (measure, coordinate::named(measure, &CELL.map(MemberIndex))))
         .to_vec()
 }
 

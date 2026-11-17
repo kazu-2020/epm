@@ -258,20 +258,11 @@ mod tests {
         let input = &engine.measures()[0];
         let edit = crate::Edit {
             measure: input.global_id(),
-            coordinate: input
-                .definition()
-                .axes()
-                .iter()
-                .map(|&axis| {
-                    let dimension = engine
-                        .dimensions()
-                        .iter()
-                        .find(|dimension| dimension.global_id() == axis)
-                        .expect("the axis is a dimension");
-                    let member = dimension.member(dimension::MemberIndex(0));
-                    (axis, member.expect("a member").global_id())
-                })
-                .collect(),
+            coordinate: workspace::Coordinate::named(
+                engine.axes(input),
+                &vec![dimension::MemberIndex(0); input.definition().axes().len()],
+            )
+            .expect("every dimension has a first member"),
             value: Some(f64::from(
                 u32::try_from(sequence).expect("a test sequence fits in u32"),
             )),

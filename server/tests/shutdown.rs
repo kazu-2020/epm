@@ -142,7 +142,7 @@ async fn send_submit_edit(address: SocketAddr) -> TcpStream {
     let body = json!({
         "request_id": "r1",
         "measure": QUANTITY.to_string(),
-        "coordinate": coordinate::named(&support::engine(), QUANTITY, &[0, 1, 1, 0, 1].map(MemberIndex))
+        "coordinate": coordinate::named(QUANTITY, &[0, 1, 1, 0, 1].map(MemberIndex))
             .iter()
             .map(|(dimension, member)| {
                 json!({ "dimension": dimension.to_string(), "member": member.to_string() })

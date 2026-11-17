@@ -24,7 +24,7 @@ fn engine() -> Engine {
 fn quantity(coordinate: [u32; 5], value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: coordinate::named(&engine(), QUANTITY, &coordinate.map(MemberIndex)),
+        coordinate: coordinate::named(QUANTITY, &coordinate.map(MemberIndex)),
         value,
     }
 }
@@ -157,7 +157,7 @@ fn a_batch_gives_the_values_of_its_commits_one_by_one() {
     let second = [2, 1, 0, 1, 0];
     let price = Edit {
         measure: PRICE,
-        coordinate: coordinate::named(&engine(), PRICE, &[0, 1, 1].map(MemberIndex)),
+        coordinate: coordinate::named(PRICE, &[0, 1, 1].map(MemberIndex)),
         value: Some(9.0),
     };
     let edits = [
