@@ -146,7 +146,7 @@ fn parse(mut words: impl Iterator<Item = String>) -> Result<Arguments, String> {
                 workspace = Some(
                     value
                         .parse()
-                        .map_err(|_| format!("--workspace {value:?} is not a ULID"))?,
+                        .map_err(|error| format!("--workspace {value:?}: {error}"))?,
                 );
             }
             "--epoch" => {
@@ -180,7 +180,7 @@ mod tests {
         );
         assert_eq!(
             workspace(&["--workspace", "demo~"]),
-            Err("--workspace \"demo~\" is not a ULID".to_owned())
+            Err("--workspace \"demo~\": not a ULID".to_owned())
         );
     }
 }

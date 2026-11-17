@@ -28,6 +28,14 @@ impl FromStr for WorkspaceGlobalId {
     }
 }
 
+impl fmt::Display for InvalidWorkspaceGlobalId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("not a ULID")
+    }
+}
+
+impl std::error::Error for InvalidWorkspaceGlobalId {}
+
 impl fmt::Display for WorkspaceGlobalId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)

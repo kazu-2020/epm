@@ -103,7 +103,12 @@ struct Run {
 }
 
 impl common::Server for Assignees {
-    fn start(&self, store: Arc<dyn ObjectStore>, _: String, epoch: u64) -> common::Started {
+    fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
+        assert_eq!(
+            workspace,
+            WORKSPACE.to_string(),
+            "the harness serves WORKSPACE"
+        );
         let mut settings = Settings {
             calculation: Calculation::Simulated(CALCULATION),
             snapshot_every: 1 + self.seed % 3,
