@@ -6,7 +6,7 @@ grep -E 'Maximum resident set size|Elapsed' out/recalculate-time.txt || true
 echo
 echo '## edit'
 echo '```'
-cat out/edit.txt || true
+grep -H '^all' out/edit-*.txt || true
 echo '```'
 echo
 echo '## threads'
