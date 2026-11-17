@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use change_log::{AssigneeId, Epoch, ProcessId};
 use datagen::representative::{self, Size};
@@ -30,7 +30,7 @@ async fn main() -> ExitCode {
         Ok(arguments) => arguments,
         Err(message) => {
             eprintln!(
-                "{message}\nusage: server --workspace ULID [--listen ADDRESS] [--epoch NUMBER]"
+                "{message}\nusage: server --workspace ULID --epoch NUMBER [--listen ADDRESS]"
             );
             return ExitCode::from(2);
         }
@@ -131,13 +131,8 @@ async fn main() -> ExitCode {
 fn parse(mut words: impl Iterator<Item = String>) -> Result<Arguments, String> {
     let mut listen = "127.0.0.1:8080".to_owned();
     let mut workspace = None;
-    // Not the tail of the log: two processes that start together would always take the same epoch; the clock makes that need the same millisecond.
-    let mut epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("the clock is after 1970")
-        .as_millis()
-        .try_into()
-        .expect("the time in milliseconds fits in 64 bits");
+    // Not a default from the clock: the conditional UPDATE of the placement table issues each epoch once (ADR 0012), and a clock can repeat or go back.
+    let mut epoch = None;
     while let Some(flag) = words.next() {
         let value = words.next().ok_or(format!("{flag} needs a value"))?;
         match flag.as_str() {
@@ -150,9 +145,11 @@ fn parse(mut words: impl Iterator<Item = String>) -> Result<Arguments, String> {
                 );
             }
             "--epoch" => {
-                epoch = value
-                    .parse()
-                    .map_err(|_| format!("--epoch {value:?} is not a number"))?
+                epoch = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--epoch {value:?} is not a number"))?,
+                );
             }
             _ => return Err(format!("unknown flag {flag}")),
         }
@@ -160,7 +157,7 @@ fn parse(mut words: impl Iterator<Item = String>) -> Result<Arguments, String> {
     Ok(Arguments {
         listen,
         workspace: workspace.ok_or("--workspace is required")?,
-        epoch,
+        epoch: epoch.ok_or("--epoch is required")?,
     })
 }
 
@@ -172,15 +169,34 @@ mod tests {
         parse(words.iter().map(|word| (*word).to_owned())).map(|arguments| arguments.workspace)
     }
 
+    fn epoch(words: &[&str]) -> Result<u64, String> {
+        parse(words.iter().map(|word| (*word).to_owned())).map(|arguments| arguments.epoch)
+    }
+
+    const WORKSPACE: &str = "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C";
+
     #[test]
     fn the_workspace_is_a_required_ulid() {
         assert_eq!(
-            workspace(&["--listen", "127.0.0.1:0"]),
+            workspace(&["--listen", "127.0.0.1:0", "--epoch", "1"]),
             Err("--workspace is required".to_owned())
         );
         assert_eq!(
-            workspace(&["--workspace", "demo~"]),
+            workspace(&["--workspace", "demo~", "--epoch", "1"]),
             Err("--workspace \"demo~\": not a ULID".to_owned())
         );
+    }
+
+    #[test]
+    fn the_epoch_is_a_required_number() {
+        assert_eq!(
+            epoch(&["--workspace", WORKSPACE]),
+            Err("--epoch is required".to_owned())
+        );
+        assert_eq!(
+            epoch(&["--workspace", WORKSPACE, "--epoch", "one"]),
+            Err("--epoch \"one\" is not a number".to_owned())
+        );
+        assert_eq!(epoch(&["--workspace", WORKSPACE, "--epoch", "3"]), Ok(3));
     }
 }
