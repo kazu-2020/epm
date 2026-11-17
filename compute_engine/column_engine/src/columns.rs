@@ -127,8 +127,10 @@ impl<'c> Index<'c> {
                         .zip(columns.packing.unpack(packed))
                         .map(|(stride, member)| stride * member as usize)
                         .sum();
-                    rows[slot] = u32::try_from(row)
-                        .expect("dense_strides keeps space at or below DENSE_LIMIT");
+                    debug_assert_eq!(rows[slot], u32::MAX, "packed coordinates repeat");
+                    rows[slot] = u32::try_from(row).expect(
+                        "packed coordinates do not repeat, so the rows fit in space, which dense_strides keeps at or below DENSE_LIMIT",
+                    );
                 }
                 (strides, rows)
             });
