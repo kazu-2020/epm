@@ -1,11 +1,9 @@
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Request, State};
+use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
-use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -20,7 +18,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use ulid::Ulid;
 
-use crate::{Edit, Exit, Handle, Invalid, ReadError, Rejection, SubmitError};
+use crate::{Edit, Exit, Handle, Invalid, Loading, ReadError, Rejection, SubmitError};
 
 // Not only the body limit: the change log keeps every Request ID, and each new assignee reads them all again.
 const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
@@ -71,25 +69,11 @@ pub enum Shutdown {
 }
 
 pub fn router(handle: Handle) -> Router {
-    // Not one layer on the Router: it also wraps the 404 of an unknown path and the 405 of a wrong method, and both would become 503.
-    let loaded = from_fn_with_state(handle.clone(), refuse_until_loaded);
     Router::new()
-        .route(
-            "/epm.v1.Workspace/SubmitEdit",
-            post(submit_edit).route_layer(loaded.clone()),
-        )
-        .route(
-            "/epm.v1.Workspace/ReadCells",
-            post(read_cells).route_layer(loaded.clone()),
-        )
-        .route(
-            "/epm.v1.Workspace/ListDefinitions",
-            post(list_definitions).route_layer(loaded.clone()),
-        )
-        .route(
-            "/epm.v1.Workspace/GetLag",
-            post(get_lag).route_layer(loaded),
-        )
+        .route("/epm.v1.Workspace/SubmitEdit", post(submit_edit))
+        .route("/epm.v1.Workspace/ReadCells", post(read_cells))
+        .route("/epm.v1.Workspace/ListDefinitions", post(list_definitions))
+        .route("/epm.v1.Workspace/GetLag", post(get_lag))
         .with_state(handle)
 }
 
@@ -117,22 +101,6 @@ pub async fn serve(
         }
         () = deadline_passed => Shutdown::Deadline,
     }
-}
-
-// Not a loaded flag in each answer: the App server records an Assignee only after a GetLag that is not unavailable (ADR 0012).
-async fn refuse_until_loaded(
-    State(handle): State<Handle>,
-    request: Request,
-    next: Next,
-) -> Response {
-    if !handle.loaded() {
-        return Failure::new(
-            Code::Unavailable,
-            "the assignee is loading the change log, retry later".to_owned(),
-        )
-        .into_response();
-    }
-    next.run(request).await
 }
 
 async fn submit_edit(
@@ -181,8 +149,8 @@ async fn read_cells(
     })))
 }
 
-async fn list_definitions(State(handle): State<Handle>) -> Json<Value> {
-    let engine = Arc::clone(&handle.engine_receiver().borrow());
+async fn list_definitions(State(handle): State<Handle>) -> Result<Json<Value>, Failure> {
+    let engine = handle.definitions().map_err(loading_failure)?;
     let measures: Vec<Value> = engine
         .measures()
         .iter()
@@ -216,15 +184,17 @@ async fn list_definitions(State(handle): State<Handle>) -> Json<Value> {
             })
         })
         .collect();
-    Json(json!({ "measures": measures, "dimensions": dimensions }))
+    Ok(Json(
+        json!({ "measures": measures, "dimensions": dimensions }),
+    ))
 }
 
-async fn get_lag(State(handle): State<Handle>) -> Json<Value> {
-    let lag = handle.lag();
-    Json(json!({
+async fn get_lag(State(handle): State<Handle>) -> Result<Json<Value>, Failure> {
+    let lag = handle.lag().map_err(loading_failure)?;
+    Ok(Json(json!({
         "committed": lag.committed.map(|sequence| sequence.0),
         "recalculated": lag.recalculated.map(|sequence| sequence.0),
-    }))
+    })))
 }
 
 // Not the Json extractor of axum: its rejection is plain text, not the error body of this API.
@@ -255,8 +225,17 @@ fn coordinate(members: Vec<u32>) -> Vec<MemberIndex> {
     members.into_iter().map(MemberIndex).collect()
 }
 
+// Not a loaded flag in each answer: the App server records an Assignee only after a GetLag that is not unavailable (ADR 0012).
+fn loading_failure(Loading: Loading) -> Failure {
+    Failure::new(
+        Code::Unavailable,
+        "the assignee is loading the change log, retry later".to_owned(),
+    )
+}
+
 fn submit_failure(error: SubmitError) -> Failure {
     match error {
+        SubmitError::Loading => loading_failure(Loading),
         SubmitError::Rejected(Rejection::Invalid(invalid)) => {
             let message = match invalid {
                 Invalid::Undecodable(_) => "the edit cannot be decoded".to_owned(),
@@ -275,6 +254,7 @@ fn submit_failure(error: SubmitError) -> Failure {
 
 fn read_failure(error: ReadError) -> Failure {
     match error {
+        ReadError::Loading => loading_failure(Loading),
         ReadError::NotCommitted(lag) => {
             let committed = match lag.committed {
                 Some(sequence) => format!("the last Commit Sequence is {}", sequence.0),
