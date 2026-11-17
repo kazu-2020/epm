@@ -6,8 +6,8 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use dimension::{
     AttributeDefinition, AttributeGlobalId, AttributeKind, DefinitionError, Dimension,
-    DimensionDefinition, DimensionError, DimensionGlobalId, DimensionKind, MemberGlobalId,
-    MemberIndex,
+    DimensionDefinition, DimensionError, DimensionGlobalId, DimensionKind, InvalidGlobalId,
+    MemberGlobalId, MemberIndex, parse_global_id,
 };
 use ulid::Ulid;
 
@@ -517,4 +517,23 @@ fn packing_order_puts_the_calendar_then_the_version_then_the_rest_by_global_id()
         .map(|dimension| dimension.global_id().0.0)
         .collect();
     assert_eq!(global_ids, [3, 2, 1, 4]);
+}
+
+#[test]
+fn a_global_id_reads_and_prints_as_one_canonical_ulid() {
+    assert_eq!(DEPARTMENT.to_string(), "00000000000000000000000034");
+    assert_eq!(NATURAL_KEY.to_string(), "000000000000000000000000CG");
+    assert_eq!(
+        parse_global_id("01jcq7zk3m5v8w9x0y1z2a3b4c").map(|ulid| ulid.to_string()),
+        Ok("01JCQ7ZK3M5V8W9X0Y1Z2A3B4C".to_owned())
+    );
+    for text in [
+        "80000000000000000000000034",
+        "ZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+        "demo~",
+        "",
+    ] {
+        assert_eq!(parse_global_id(text), Err(InvalidGlobalId), "{text:?}");
+    }
+    assert_eq!(InvalidGlobalId.to_string(), "not a ULID");
 }
