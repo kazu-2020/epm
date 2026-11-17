@@ -11,6 +11,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::LevelFilter;
 use ulid::Ulid;
 use workspace::{Workspace, WorkspaceGlobalId};
 
@@ -30,7 +31,9 @@ struct Arguments {
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
         )
         .with_writer(std::io::stderr)
         .init();
