@@ -9,6 +9,8 @@ use server::Settings;
 use server::http::Shutdown;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
 use ulid::Ulid;
 use workspace::{Workspace, WorkspaceGlobalId};
 
@@ -26,9 +28,16 @@ struct Arguments {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     let arguments = match parse(std::env::args().skip(1)) {
         Ok(arguments) => arguments,
         Err(message) => {
+            // Not a log event: the usage text is for the person at the terminal.
             eprintln!(
                 "{message}\nusage: server --workspace ULID [--listen ADDRESS] [--epoch NUMBER]"
             );
@@ -36,13 +45,13 @@ async fn main() -> ExitCode {
         }
     };
     let Ok(bucket) = std::env::var("EPM_S3_BUCKET") else {
-        eprintln!("set EPM_S3_BUCKET");
+        error!("set EPM_S3_BUCKET");
         return ExitCode::from(2);
     };
     let store = match AmazonS3Builder::from_env().with_bucket_name(bucket).build() {
         Ok(store) => Arc::new(store),
         Err(error) => {
-            eprintln!("S3: {error}");
+            error!(%error, "S3");
             return ExitCode::FAILURE;
         }
     };
@@ -60,7 +69,7 @@ async fn main() -> ExitCode {
             _ = interrupt.recv() => {}
             _ = terminate.recv() => {}
         }
-        eprintln!("stopped by a second signal before the requests finished");
+        warn!("stopped by a second signal before the requests finished");
         std::process::exit(1);
     });
     let mut shutdown = Box::pin(async move {
@@ -75,10 +84,10 @@ async fn main() -> ExitCode {
         )
         .await
         .expect("valid formulas");
-        eprintln!(
-            "engine ready in {:?} from Commit Sequence {}",
-            started.elapsed(),
-            start.request_ids.len()
+        info!(
+            elapsed = ?started.elapsed(),
+            commit_sequence = start.request_ids.len(),
+            "engine ready"
         );
         tokio::net::TcpListener::bind(&arguments.listen)
             .await
@@ -88,18 +97,20 @@ async fn main() -> ExitCode {
         started = starting => match started {
             Ok(started) => started,
             Err(error) => {
-                eprintln!("listen on {}: {error}", arguments.listen);
+                error!(listen = %arguments.listen, %error, "listen");
                 return ExitCode::FAILURE;
             }
         },
         () = &mut shutdown => {
-            eprintln!("stopped by a signal during the start");
+            info!("stopped by a signal during the start");
             return ExitCode::SUCCESS;
         }
     };
-    eprintln!(
-        "workspace {} epoch {} listening on {}",
-        arguments.workspace, arguments.epoch, arguments.listen
+    info!(
+        workspace = %arguments.workspace,
+        epoch = arguments.epoch,
+        listen = %arguments.listen,
+        "listening"
     );
     let (handle, assignee) = server::start(
         engine,
@@ -115,14 +126,15 @@ async fn main() -> ExitCode {
     match server::http::serve(listener, handle, assignee, shutdown, SHUTDOWN_DEADLINE).await {
         Shutdown::Drained => ExitCode::SUCCESS,
         Shutdown::Deadline => {
-            eprintln!(
-                "the requests did not finish in {SHUTDOWN_DEADLINE:?} after the shutdown signal"
+            error!(
+                deadline = ?SHUTDOWN_DEADLINE,
+                "the requests did not finish before the deadline after the shutdown signal"
             );
             ExitCode::FAILURE
         }
         // Not a restart in this process after an exit: the same epoch must not write again (ADR 0006).
         Shutdown::Assignee(exit) => {
-            eprintln!("the assignee stopped: {exit:?}");
+            error!(?exit, "the assignee stopped");
             ExitCode::FAILURE
         }
     }

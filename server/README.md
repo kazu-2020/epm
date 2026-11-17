@@ -38,6 +38,8 @@ cargo run --locked -- --listen 127.0.0.1:8080 --workspace 01JCQ7ZK3M5V8W9X0Y1Z2A
 
 The workspace definition is fixed in the code (`src/main.rs`). When the assignee stops, the process exits with code 1. Start a new process to continue. SIGINT (Ctrl-C) and SIGTERM stop the server. It finishes the requests in progress and exits with code 0. If the requests do not finish in 5 seconds, or a second signal comes first, it exits with code 1.
 
+The server writes its log to stderr through `tracing`. The default level is `info`. To change the level, set `RUST_LOG` (for example `RUST_LOG=warn`).
+
 ## Run the demo
 
 `demo.sh` builds the server, starts it, and checks these items:
