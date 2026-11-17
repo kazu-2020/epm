@@ -400,6 +400,7 @@ impl Handle {
     pub async fn wait_loaded(&self) -> Result<(), Stopped> {
         let mut committed_receiver = self.committed.subscribe();
         tokio::select! {
+            biased;
             _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::Next(_))) => Ok(()),
             () = self.submission_sender.closed() => Err(Stopped),
         }
