@@ -81,7 +81,7 @@ pub enum ReadError {
 pub struct Handle {
     submission_sender: mpsc::Sender<Submission<Rejection>>,
     engine_receiver: watch::Receiver<Arc<Engine>>,
-    committed_count: CommittedCount,
+    committed: watch::Sender<Committed>,
     #[cfg(feature = "apply_before_commit")]
     commit_sender: mpsc::UnboundedSender<(Slot, Commit)>,
 }
@@ -91,15 +91,13 @@ struct Admission {
     engine_receiver: watch::Receiver<Arc<Engine>>,
     accepted_count: u64,
     busy_after: u64,
-    committed_count: CommittedCount,
+    committed: watch::Sender<Committed>,
 }
 
 enum Committed {
     LogNotRead,
-    Count(u64),
+    Next(Sequence),
 }
-
-type CommittedCount = watch::Sender<Committed>;
 
 enum Calculator {
     Thread(rayon::ThreadPool),
@@ -125,7 +123,7 @@ pub fn start(
     let (submission_sender, submission_receiver) = mpsc::channel(WAITING_REQUESTS);
     let (commit_sender, commit_receiver) = mpsc::unbounded_channel();
     let engine_next = engine.next.0;
-    let committed_count = CommittedCount::new(Committed::LogNotRead);
+    let committed = watch::Sender::new(Committed::LogNotRead);
     let edit_check = engine.edit_check().clone();
     let engine = Arc::new(engine);
     let (engine_sender, engine_receiver) = watch::channel(Arc::clone(&engine));
@@ -134,12 +132,12 @@ pub fn start(
         engine_receiver: engine_receiver.clone(),
         accepted_count: engine_next,
         busy_after: settings.busy_after,
-        committed_count: committed_count.clone(),
+        committed: committed.clone(),
     };
     let handle = Handle {
         submission_sender,
         engine_receiver,
-        committed_count: committed_count.clone(),
+        committed: committed.clone(),
         #[cfg(feature = "apply_before_commit")]
         commit_sender: commit_sender.clone(),
     };
@@ -160,7 +158,7 @@ pub fn start(
                 commit_receiver,
                 &calculator,
                 &engine_sender,
-                &committed_count,
+                &committed,
                 (&store, &workspace),
             ) => {
                 Exit::Engine(alarm)
@@ -175,7 +173,7 @@ async fn apply(
     mut commit_receiver: mpsc::UnboundedReceiver<(Slot, Commit)>,
     calculator: &Calculator,
     engine_sender: &watch::Sender<Arc<Engine>>,
-    committed_count: &CommittedCount,
+    committed: &watch::Sender<Committed>,
     (store, workspace): (&Arc<dyn ObjectStore>, &str),
 ) -> EngineAlarm {
     let mut calculation = None;
@@ -190,7 +188,7 @@ async fn apply(
                     batch.push(commit);
                 }
                 let last = batch.last().expect("the batch starts with a commit").1.sequence;
-                raise(committed_count, last.0 + 1);
+                raise(committed, last.next());
                 if cfg!(feature = "skip_commit") {
                     batch.retain(|(_, commit)| commit.sequence != Sequence(1));
                 }
@@ -318,7 +316,7 @@ impl Handle {
         request_id: RequestId,
         edit: &Edit,
     ) -> Result<Sequence, SubmitError> {
-        if self.committed_count().is_err() {
+        if self.next_sequence().is_err() {
             return Err(if self.submission_sender.is_closed() {
                 SubmitError::Stopped
             } else {
@@ -348,7 +346,7 @@ impl Handle {
             .map_err(|_| SubmitError::Stopped)?
             .map_err(SubmitError::Rejected)?;
         // Not left to the apply loop: this ACK can reach the caller before the loop receives the commit, and a read of this sequence would be refused.
-        raise(&self.committed_count, sequence.0 + 1);
+        raise(&self.committed, sequence.next());
         Ok(sequence)
     }
 
@@ -380,29 +378,29 @@ impl Handle {
 
     pub fn lag(&self) -> Result<Lag, Loading> {
         let recalculated = self.engine_receiver.borrow().recalculated();
-        let committed_count = self.committed_count()?;
+        let next = self.next_sequence()?;
         Ok(Lag {
-            committed: committed_count.checked_sub(1).map(Sequence),
+            committed: next.0.checked_sub(1).map(Sequence),
             recalculated,
         })
     }
 
     pub fn definitions(&self) -> Result<Arc<Engine>, Loading> {
-        self.committed_count()?;
+        self.next_sequence()?;
         Ok(Arc::clone(&self.engine_receiver.borrow()))
     }
 
-    fn committed_count(&self) -> Result<u64, Loading> {
-        match *self.committed_count.borrow() {
+    fn next_sequence(&self) -> Result<Sequence, Loading> {
+        match *self.committed.borrow() {
             Committed::LogNotRead => Err(Loading),
-            Committed::Count(count) => Ok(count),
+            Committed::Next(next) => Ok(next),
         }
     }
 
     pub async fn wait_loaded(&self) -> Result<(), Stopped> {
-        let mut committed_receiver = self.committed_count.subscribe();
+        let mut committed_receiver = self.committed.subscribe();
         tokio::select! {
-            _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::Count(_))) => Ok(()),
+            _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::Next(_))) => Ok(()),
             () = self.submission_sender.closed() => Err(Stopped),
         }
     }
@@ -452,14 +450,14 @@ impl Admit for Admission {
     }
 
     fn ready(&mut self, next: Sequence) {
-        self.committed_count.send_replace(Committed::Count(next.0));
+        self.committed.send_replace(Committed::Next(next));
     }
 }
 
-fn raise(committed_count: &CommittedCount, count: u64) {
-    committed_count.send_if_modified(|committed_count| match committed_count {
-        Committed::Count(committed_count) if *committed_count < count => {
-            *committed_count = count;
+fn raise(committed: &watch::Sender<Committed>, next: Sequence) {
+    committed.send_if_modified(|committed| match committed {
+        Committed::Next(current) if *current < next => {
+            *current = next;
             true
         }
         _ => false,

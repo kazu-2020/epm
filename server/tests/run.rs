@@ -330,7 +330,7 @@ async fn every_call_is_loading_until_the_assignee_has_read_the_log() {
         assignee.handle.submit(id("r1"), &quantity(None)).await,
         Err(SubmitError::Loading)
     );
-    assert!(assignee.handle.definitions().is_err());
+    assert!(matches!(assignee.handle.definitions(), Err(Loading)));
     assert_eq!(
         started.elapsed(),
         Duration::ZERO,
