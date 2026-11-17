@@ -165,6 +165,12 @@ pub struct Dimension {
     by_natural_key: UniqueIndex,
 }
 
+const MEMBER_COUNT_FITS: &str = "Dimension::try_new keeps the member count within u32";
+
+fn member_index(row: usize) -> MemberIndex {
+    MemberIndex(u32::try_from(row).expect(MEMBER_COUNT_FITS))
+}
+
 // Not HashMap<Ulid, MemberIndex>: the ULID and Natural Key bytes already live in the Arrow arrays.
 #[derive(Debug)]
 struct UniqueIndex {
@@ -185,7 +191,7 @@ impl UniqueIndex {
             ) {
                 Entry::Occupied(_) => return Err(value),
                 Entry::Vacant(slot) => {
-                    slot.insert(MemberIndex(row as u32));
+                    slot.insert(member_index(row));
                 }
             }
         }
@@ -275,7 +281,7 @@ impl Dimension {
                 {
                     return Err(DimensionError::DanglingTarget {
                         attribute: attribute.name().into(),
-                        member: MemberIndex(row as u32),
+                        member: member_index(row),
                         target: MemberIndex(value),
                     });
                 }
@@ -285,7 +291,7 @@ impl Dimension {
         let global_ids = global_id_column(&members);
         let natural_keys = natural_key_column(&definition, &members);
         for row in 0..rows {
-            let member = MemberIndex(row as u32);
+            let member = member_index(row);
             if global_ids.is_null(row) {
                 return Err(DimensionError::NullGlobalId(member));
             }
@@ -326,7 +332,7 @@ impl Dimension {
     }
 
     pub fn len(&self) -> u32 {
-        self.members.num_rows() as u32
+        u32::try_from(self.members.num_rows()).expect(MEMBER_COUNT_FITS)
     }
 
     pub fn is_empty(&self) -> bool {

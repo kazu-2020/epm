@@ -8,3 +8,6 @@ arrow-array = "60.1.0"
 arrow-schema = "60.1.0"
 hashbrown = "0.17"
 ulid = "3.0.0"
+
+[lints]
+workspace = true

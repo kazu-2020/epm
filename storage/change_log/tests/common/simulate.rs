@@ -529,7 +529,7 @@ async fn client(
 ) {
     for (name, payload) in requests {
         while Instant::now() < end {
-            let server = rng.below(SERVERS as u64) as usize;
+            let server = usize::try_from(rng.below(SERVERS as u64)).expect("below SERVERS");
             let assignee = assignees[server].borrow().clone();
             let reply = match assignee {
                 Some((epoch, assignee)) => {
@@ -649,7 +649,7 @@ pub async fn simulate(
                 () = &mut pause => break,
             }
         }
-        let server = rng.below(SERVERS as u64) as usize;
+        let server = usize::try_from(rng.below(SERVERS as u64)).expect("below SERVERS");
         if rng.percent(60) {
             cluster.grant(server);
         } else {

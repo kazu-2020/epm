@@ -187,8 +187,10 @@ impl common::Server for Assignees {
         let mut hasher = DefaultHasher::new();
         (self.seed, request).hash(&mut hasher);
         let hash = hasher.finish();
-        let input = &self.inputs[(hash % self.inputs.len() as u64) as usize];
-        let result = &self.results[(hash % self.results.len() as u64) as usize];
+        let input = &self.inputs
+            [usize::try_from(hash % self.inputs.len() as u64).expect("below the input count")];
+        let result = &self.results
+            [usize::try_from(hash % self.results.len() as u64).expect("below the result count")];
         let member = MemberIndex(u32::from(hash & 0x100 != 0));
         let value = (hash & 0x600 != 0).then(|| ((hash >> 12) % 8) as f64 / 4.0);
         let (measure, axes) = match (hash >> 20) % 8 {

@@ -52,6 +52,10 @@ impl CoordinatePacking {
         self.masks[axis] << self.shifts[axis]
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "each mask is at most 32 bits wide"
+    )]
     pub fn member(&self, packed: u64, axis: usize) -> u32 {
         ((packed >> self.shifts[axis]) & self.masks[axis]) as u32
     }

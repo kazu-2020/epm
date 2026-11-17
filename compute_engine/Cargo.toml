@@ -2,6 +2,12 @@
 resolver = "3"
 members = ["bench", "column_engine", "datagen", "dimension", "evaluator", "formula", "measure", "oracle", "workspace"]
 
+[workspace.lints.clippy]
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+
 [profile.mutants]
 inherits = "test"
 debug = "none"
