@@ -12,3 +12,6 @@ measure = { path = "../measure" }
 [dev-dependencies]
 datagen = { path = "../datagen" }
 ulid = "3.0.0"
+
+[lints]
+workspace = true

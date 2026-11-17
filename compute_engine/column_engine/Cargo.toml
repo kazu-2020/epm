@@ -16,3 +16,6 @@ evaluator = { path = "../evaluator" }
 rand = "0.10.3"
 ulid = "3.0.0"
 workspace = { path = "../workspace" }
+
+[lints]
+workspace = true

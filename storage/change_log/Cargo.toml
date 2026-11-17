@@ -16,6 +16,12 @@ two_in_flight = []
 rejected_as_fenced = []
 commit_rejected = []
 
+[lints.clippy]
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+
 [dependencies]
 bytes = "1.12.1"
 futures-util = "0.3.34"

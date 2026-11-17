@@ -50,8 +50,9 @@ impl Region {
                 .iter()
                 .zip(seen)
                 .map(|(&axis, members)| {
-                    let members = (0..members.len() as u32)
-                        .filter(|&member| members[member as usize])
+                    let members = (0u32..)
+                        .zip(members)
+                        .filter_map(|(member, inside)| inside.then_some(member))
                         .collect();
                     (axis, members)
                 })
