@@ -9,7 +9,7 @@ use server::Settings;
 use server::http::Shutdown;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 use ulid::Ulid;
@@ -34,18 +34,18 @@ async fn main() -> ExitCode {
     let arguments = match parse(std::env::args().skip(1)) {
         Ok(arguments) => arguments,
         Err(message) => {
-            print_usage(&message);
+            print_to_terminal(&format!("{message}\n{USAGE}"));
             return ExitCode::from(2);
         }
     };
     let Ok(bucket) = std::env::var("EPM_S3_BUCKET") else {
-        error!("set EPM_S3_BUCKET");
+        print_to_terminal("set EPM_S3_BUCKET");
         return ExitCode::from(2);
     };
     let store = match AmazonS3Builder::from_env().with_bucket_name(bucket).build() {
         Ok(store) => Arc::new(store),
         Err(error) => {
-            error!(%error, "could not configure the S3 client");
+            print_to_terminal(&format!("could not configure the S3 client: {error}"));
             return ExitCode::FAILURE;
         }
     };
@@ -118,10 +118,10 @@ async fn main() -> ExitCode {
 
 #[expect(
     clippy::print_stderr,
-    reason = "the usage text is for the person at the terminal, not a log event"
+    reason = "a configuration error before the start is for the person at the terminal, and RUST_LOG must not hide it"
 )]
-fn print_usage(message: &str) {
-    eprintln!("{message}\n{USAGE}");
+fn print_to_terminal(text: &str) {
+    eprintln!("{text}");
 }
 
 fn initialize_log() {
@@ -149,7 +149,7 @@ fn first_signal() -> impl Future<Output = ()> {
             _ = interrupt.recv() => {}
             _ = terminate.recv() => {}
         }
-        warn!("stopped by a second signal before the requests finished");
+        error!("stopped by a second signal before the requests finished");
         std::process::exit(1);
     });
     async move {
