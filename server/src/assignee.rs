@@ -314,8 +314,12 @@ impl Handle {
         request_id: RequestId,
         edit: &Edit,
     ) -> Result<Sequence, SubmitError> {
-        if self.committed_count.borrow().is_none() {
-            return Err(SubmitError::Loading);
+        if self.committed_count().is_err() {
+            return Err(if self.submission_sender.is_closed() {
+                SubmitError::Stopped
+            } else {
+                SubmitError::Loading
+            });
         }
         let payload = crate::edit::encode(edit);
         #[cfg(feature = "apply_before_commit")]
@@ -349,7 +353,13 @@ impl Handle {
         at_least: Option<Sequence>,
         cells: &[(MeasureGlobalId, Vec<MemberIndex>)],
     ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
-        let lag = self.lag().map_err(|Loading| ReadError::Loading)?;
+        let lag = self.lag().map_err(|Loading| {
+            if self.submission_sender.is_closed() {
+                ReadError::Stopped
+            } else {
+                ReadError::Loading
+            }
+        })?;
         // Not after the committed check: a read that can never succeed would get NotCommitted, and the caller would try it again.
         values(&self.engine_receiver.borrow(), cells)?;
         if lag.committed < at_least {
@@ -368,7 +378,7 @@ impl Handle {
     pub fn lag(&self) -> Result<Lag, Loading> {
         // Not the committed count first: a batch that finishes between the two reads would show more recalculated than committed.
         let recalculated = self.engine_receiver.borrow().recalculated();
-        let committed_count = (*self.committed_count.borrow()).ok_or(Loading)?;
+        let committed_count = self.committed_count()?;
         Ok(Lag {
             committed: committed_count.checked_sub(1).map(Sequence),
             recalculated,
@@ -376,8 +386,12 @@ impl Handle {
     }
 
     pub fn definitions(&self) -> Result<Arc<Engine>, Loading> {
-        self.lag()?;
+        self.committed_count()?;
         Ok(Arc::clone(&self.engine_receiver.borrow()))
+    }
+
+    fn committed_count(&self) -> Result<u64, Loading> {
+        (*self.committed_count.borrow()).ok_or(Loading)
     }
 
     pub async fn wait_loaded(&self) -> Result<(), Stopped> {

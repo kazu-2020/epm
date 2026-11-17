@@ -348,6 +348,24 @@ async fn every_call_is_loading_until_the_assignee_has_read_the_log() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_assignee_that_stops_before_it_has_read_the_log_is_stopped() {
+    let store = store();
+    let _newer = start(&store, 2, Settings::default()).await;
+    let older = start_loading(&store, 1, Settings::default());
+    let exit = older.exit.await.expect("the older assignee ends");
+    assert!(matches!(exit, Exit::ChangeLog(_)), "{exit:?}");
+    assert_eq!(older.handle.lag(), Err(Loading));
+    assert_eq!(
+        older.handle.read(None, &cells()).await,
+        Err(ReadError::Stopped)
+    );
+    assert_eq!(
+        older.handle.submit(id("r1"), &quantity(None)).await,
+        Err(SubmitError::Stopped)
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence() {
     let assignee = start(&store(), 1, slow(1000)).await;
     assert_eq!(
