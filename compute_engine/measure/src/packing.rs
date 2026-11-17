@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoordinatePacking {
     shifts: Vec<u32>,
-    masks: Vec<u64>,
+    masks: Vec<u32>,
     width: u32,
 }
 
@@ -24,7 +24,10 @@ impl CoordinatePacking {
         }
         Some(CoordinatePacking {
             shifts,
-            masks: widths.iter().map(|&width| (1u64 << width) - 1).collect(),
+            masks: widths
+                .iter()
+                .map(|&width| u32::MAX.checked_shr(u32::BITS - width).unwrap_or(0))
+                .collect(),
             width,
         })
     }
@@ -33,7 +36,7 @@ impl CoordinatePacking {
         self.shifts.iter().zip(&self.masks).zip(members).fold(
             0,
             |packed, ((&shift, &mask), member)| {
-                debug_assert!(u64::from(member) <= mask);
+                debug_assert!(member <= mask);
                 packed | (u64::from(member) << shift)
             },
         )
@@ -45,19 +48,16 @@ impl CoordinatePacking {
     }
 
     pub fn fits(&self, axis: usize, member: u32) -> bool {
-        u64::from(member) <= self.masks[axis]
+        member <= self.masks[axis]
     }
 
     pub fn axis_mask(&self, axis: usize) -> u64 {
-        self.masks[axis] << self.shifts[axis]
+        u64::from(self.masks[axis]) << self.shifts[axis]
     }
 
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "each mask is at most 32 bits wide"
-    )]
     pub fn member(&self, packed: u64, axis: usize) -> u32 {
-        ((packed >> self.shifts[axis]) & self.masks[axis]) as u32
+        u32::try_from((packed >> self.shifts[axis]) & u64::from(self.masks[axis]))
+            .expect("a u32 mask keeps the member within u32")
     }
 
     pub(crate) fn holds(&self, packed: u64) -> bool {

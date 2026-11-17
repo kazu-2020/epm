@@ -128,7 +128,7 @@ impl<'c> Index<'c> {
                         .map(|(stride, member)| stride * member as usize)
                         .sum();
                     rows[slot] = u32::try_from(row)
-                        .expect("a row is below space, and dense_strides keeps space at or below DENSE_LIMIT");
+                        .expect("dense_strides keeps space at or below DENSE_LIMIT");
                 }
                 (strides, rows)
             });
