@@ -112,7 +112,6 @@ async fn run(deadline: Duration) -> Running {
         Start::default(),
         Settings::default(),
         Arc::clone(&store) as Arc<dyn ObjectStore>,
-        "ws",
         1,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");

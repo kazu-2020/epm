@@ -14,7 +14,7 @@ use measure::{CoordinateError, MeasureGlobalId};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use tokio::sync::{mpsc, oneshot, watch};
-use workspace::EditCheck;
+use workspace::{EditCheck, WorkspaceGlobalId};
 
 use crate::apply::{Applier, Effect, Event};
 use crate::edit;
@@ -106,7 +106,7 @@ pub fn start(
     start: Start,
     settings: Settings,
     store: Arc<dyn ObjectStore>,
-    workspace: String,
+    workspace: WorkspaceGlobalId,
     id: AssigneeId,
 ) -> (Handle, impl Future<Output = Exit>) {
     assert!(
@@ -138,6 +138,7 @@ pub fn start(
         commit_sender: commit_sender.clone(),
     };
     let request_ids = start.request_ids.clone();
+    let workspace = workspace.0.to_string();
     let run = async move {
         let calculator = match settings.calculation {
             Calculation::Threads(threads) => Calculator::Thread(pool(threads)),

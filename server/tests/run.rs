@@ -25,7 +25,6 @@ use tokio::time::Instant;
 use ulid::Ulid;
 use workspace::Workspace;
 
-const WORKSPACE: &str = "ws~";
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
 const CELL: [u32; 5] = [0, 1, 1, 0, 1];
@@ -42,7 +41,6 @@ fn start(store: &Arc<dyn ObjectStore>, epoch: u64, settings: Settings) -> Runnin
         Start::default(),
         settings,
         Arc::clone(store),
-        WORKSPACE,
         epoch,
     );
     let exit = tokio::spawn(assignee);
@@ -394,7 +392,7 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_assignee() {
     let unchecked = tokio::spawn(async move {
         serve(
             writer,
-            WORKSPACE,
+            &support::WORKSPACE.0.to_string(),
             AssigneeId {
                 epoch: Epoch(1),
                 process: ProcessId(1),
@@ -444,7 +442,7 @@ fn quantity_in(engine: &Engine) -> Option<f64> {
 async fn restored(store: &Arc<dyn ObjectStore>) -> (Engine, Start) {
     server::restore(
         store.as_ref(),
-        WORKSPACE,
+        support::WORKSPACE,
         Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
     )
     .await
@@ -452,7 +450,10 @@ async fn restored(store: &Arc<dyn ObjectStore>) -> (Engine, Start) {
 }
 
 fn snapshot_object(count: usize, name: &str) -> Path {
-    Path::from(format!("{WORKSPACE}/snapshot/{count:020}/{name}"))
+    Path::from(format!(
+        "{}/snapshot/{count:020}/{name}",
+        support::WORKSPACE.0
+    ))
 }
 
 #[tokio::test(start_paused = true)]
@@ -494,8 +495,7 @@ async fn a_new_assignee_starts_from_the_newest_snapshot_it_can_read() {
         "the snapshot before the broken one"
     );
     assert_eq!(quantity_in(&engine), Some(2.0));
-    let (handle, assignee) =
-        support::start(engine, start, settings(), Arc::clone(&store), WORKSPACE, 2);
+    let (handle, assignee) = support::start(engine, start, settings(), Arc::clone(&store), 2);
     let b = tokio::spawn(assignee);
     assert_eq!(
         handle
@@ -534,7 +534,6 @@ fn start_from(start: Start) {
         start,
         Settings::default(),
         Arc::new(InMemory::new()),
-        WORKSPACE,
         1,
     );
 }

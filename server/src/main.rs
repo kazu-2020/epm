@@ -10,7 +10,7 @@ use server::http::Shutdown;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
 use ulid::Ulid;
-use workspace::Workspace;
+use workspace::{Workspace, WorkspaceGlobalId};
 
 // shortcut: the workspace definition is fixed in code because the log does not hold it, put it in the log when users define their own.
 const SIZE: Size = Size::TINY;
@@ -20,7 +20,7 @@ const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
 
 struct Arguments {
     listen: String,
-    workspace: String,
+    workspace: WorkspaceGlobalId,
     epoch: u64,
 }
 
@@ -30,7 +30,7 @@ async fn main() -> ExitCode {
         Ok(arguments) => arguments,
         Err(message) => {
             eprintln!(
-                "{message}\nusage: server [--listen ADDRESS] [--workspace NAME] [--epoch NUMBER]"
+                "{message}\nusage: server --workspace ULID [--listen ADDRESS] [--epoch NUMBER]"
             );
             return ExitCode::from(2);
         }
@@ -70,7 +70,7 @@ async fn main() -> ExitCode {
         let started = Instant::now();
         let (engine, start) = server::restore(
             store.as_ref(),
-            &arguments.workspace,
+            arguments.workspace,
             Workspace::try_new(representative::generate(&SIZE, SEED)).expect("a valid workspace"),
         )
         .await
@@ -99,7 +99,7 @@ async fn main() -> ExitCode {
     };
     eprintln!(
         "workspace {} epoch {} listening on {}",
-        arguments.workspace, arguments.epoch, arguments.listen
+        arguments.workspace.0, arguments.epoch, arguments.listen
     );
     let (handle, assignee) = server::start(
         engine,
@@ -129,29 +129,64 @@ async fn main() -> ExitCode {
 }
 
 fn parse(mut words: impl Iterator<Item = String>) -> Result<Arguments, String> {
-    let mut arguments = Arguments {
-        listen: "127.0.0.1:8080".to_owned(),
-        workspace: "demo".to_owned(),
-        // Not the tail of the log: two processes that start together would always take the same epoch; the clock makes that need the same millisecond.
-        epoch: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("the clock is after 1970")
-            .as_millis()
-            .try_into()
-            .expect("the time in milliseconds fits in 64 bits"),
-    };
+    let mut listen = "127.0.0.1:8080".to_owned();
+    let mut workspace = None;
+    // Not the tail of the log: two processes that start together would always take the same epoch; the clock makes that need the same millisecond.
+    let mut epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is after 1970")
+        .as_millis()
+        .try_into()
+        .expect("the time in milliseconds fits in 64 bits");
     while let Some(flag) = words.next() {
         let value = words.next().ok_or(format!("{flag} needs a value"))?;
         match flag.as_str() {
-            "--listen" => arguments.listen = value,
-            "--workspace" => arguments.workspace = value,
+            "--listen" => listen = value,
+            "--workspace" => {
+                let global_id = Ulid::from_string(&value)
+                    .map_err(|_| format!("--workspace {value:?} is not a ULID"))?;
+                workspace = Some(WorkspaceGlobalId(global_id));
+            }
             "--epoch" => {
-                arguments.epoch = value
+                epoch = value
                     .parse()
                     .map_err(|_| format!("--epoch {value:?} is not a number"))?
             }
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
-    Ok(arguments)
+    Ok(Arguments {
+        listen,
+        workspace: workspace.ok_or("--workspace is required")?,
+        epoch,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace(words: &[&str]) -> Result<WorkspaceGlobalId, String> {
+        parse(words.iter().map(|word| (*word).to_owned())).map(|arguments| arguments.workspace)
+    }
+
+    #[test]
+    fn the_workspace_is_a_required_ulid() {
+        assert_eq!(
+            workspace(&["--listen", "127.0.0.1:0"]),
+            Err("--workspace is required".to_owned())
+        );
+        assert_eq!(
+            workspace(&["--workspace", "demo~"]),
+            Err("--workspace \"demo~\" is not a ULID".to_owned())
+        );
+    }
+
+    #[test]
+    fn lowercase_and_uppercase_name_the_same_workspace() {
+        let upper = workspace(&["--workspace", "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C"]).expect("a ULID");
+        let lower = workspace(&["--workspace", "01jcq7zk3m5v8w9x0y1z2a3b4c"]).expect("a ULID");
+        assert_eq!(upper, lower);
+        assert_eq!(upper.0.to_string(), "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C");
+    }
 }

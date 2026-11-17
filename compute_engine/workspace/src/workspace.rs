@@ -2,9 +2,13 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
+use ulid::Ulid;
 
 use crate::compile::{CompiledFormula, Formula, FormulaError};
 use crate::dependency_order::dependency_order;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkspaceGlobalId(pub Ulid);
 
 pub struct UncheckedWorkspace {
     pub dimensions: Vec<Dimension>,

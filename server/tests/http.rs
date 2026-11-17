@@ -45,7 +45,7 @@ fn app_on(settings: Settings, store: Arc<dyn ObjectStore>, epoch: u64) -> App {
         .find(|measure| measure.global_id() == QUANTITY)
         .and_then(|quantity| quantity.cells().next())
         .expect("the seed has a quantity");
-    let (handle, assignee) = support::start(engine, Start::default(), settings, store, "ws", epoch);
+    let (handle, assignee) = support::start(engine, Start::default(), settings, store, epoch);
     tokio::spawn(assignee);
     App {
         router: server::http::router(handle.clone()),

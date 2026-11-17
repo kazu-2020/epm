@@ -21,9 +21,11 @@ use oracle::Oracle;
 use server::snapshot::Manifest;
 use server::{Calculation, Edit, Engine, Exit, Rejection, Settings, SubmitError};
 use tokio::sync::oneshot;
-use workspace::Workspace;
+use ulid::Ulid;
+use workspace::{Workspace, WorkspaceGlobalId};
 
 const DEFAULT_SEEDS: u64 = 2000;
+const WORKSPACE: &str = "00000000000000000000000001";
 const CALCULATION: Duration = Duration::from_millis(250);
 
 struct Model {
@@ -114,10 +116,12 @@ impl common::Server for Assignees {
         // Not a watch: it wakes its waiters in a random order, and the requests would reach the assignee in another order on each run.
         let handle = handle.map(Result::ok).shared();
         let restored = Arc::clone(&self.restored);
+        let global_id =
+            WorkspaceGlobalId(Ulid::from_string(&workspace).expect("the workspace is a ULID"));
         let exit = async move {
             let definition = Workspace::try_new(representative::generate(&Size::TINY, 7))
                 .expect("a valid workspace");
-            let (engine, start) = server::restore(store.as_ref(), &workspace, definition)
+            let (engine, start) = server::restore(store.as_ref(), global_id, definition)
                 .await
                 .map_err(|error| format!("{error:?}"))?;
             restored
@@ -129,7 +133,7 @@ impl common::Server for Assignees {
                 start,
                 settings,
                 store,
-                workspace,
+                global_id,
                 AssigneeId {
                     epoch: Epoch(epoch),
                     process: ProcessId(u128::from(epoch)),
@@ -230,9 +234,9 @@ fn simulate(model: &Model, seed: u64) -> Run {
         .expect("a runtime")
         .block_on(async {
             let outcome =
-                common::simulate(Arc::new(assignees), Arc::clone(&inner), "ws", seed).await;
+                common::simulate(Arc::new(assignees), Arc::clone(&inner), WORKSPACE, seed).await;
             let listed: Vec<_> = inner
-                .list(Some(&Path::from("ws/snapshot")))
+                .list(Some(&Path::from(format!("{WORKSPACE}/snapshot"))))
                 .try_collect()
                 .await
                 .expect("list the snapshots");

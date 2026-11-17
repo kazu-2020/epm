@@ -5,7 +5,10 @@ cd "$(dirname "$0")"
 
 listen=${DEMO_LISTEN:-127.0.0.1:8080}
 base="http://$listen/epm.v1.Workspace"
-workspace="demo-$(date +%s)"
+# Not a fixed ID: a new workspace on each run starts from an empty change log. The first character is 0 because a ULID starts with 0 to 7.
+alphabet=0123456789ABCDEFGHJKMNPQRSTVWXYZ
+workspace=0
+for _ in $(seq 1 25); do workspace+=${alphabet:RANDOM%32:1}; done
 cell='[0,1,1,0,1]'
 server_pid=""
 trap '[ -z "$server_pid" ] || kill -9 "$server_pid" 2>/dev/null || true' EXIT
