@@ -2,7 +2,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberIndex};
 use duckdb::Connection;
-use formula::{CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign, Term};
+use formula::{
+    CheckedAxis, CheckedExpression, CheckedNode, FilteredAxis, ProductOperator, Sign, Term,
+};
 use measure::{Measure, MeasureGlobalId};
 
 pub struct Oracle {
@@ -138,12 +140,12 @@ fn query(node: &CheckedNode, packing_orders: &PackingOrders) -> Query {
             value,
             dimension,
             members,
-            keeps_axis,
+            filtered_axis,
         } => filter(
             &query(value, packing_orders),
             *dimension,
             members,
-            *keeps_axis,
+            *filtered_axis,
         ),
     };
     let mut items: Vec<String> = query.axes.iter().map(|&axis| column(axis)).collect();
@@ -279,10 +281,10 @@ fn filter(
     value: &Query,
     dimension: DimensionGlobalId,
     members: &[MemberIndex],
-    keeps_axis: bool,
+    filtered_axis: FilteredAxis,
 ) -> Query {
     let mut axes = value.axes.clone();
-    if !keeps_axis {
+    if filtered_axis == FilteredAxis::Drop {
         axes.remove(&dimension);
     }
     let mut items: Vec<String> = axes.iter().map(|&axis| column(axis)).collect();

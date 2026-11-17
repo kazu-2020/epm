@@ -24,9 +24,15 @@ pub enum ExpressionKind {
         value: Box<Expression>,
         dimension: QuotedName,
         members: Vec<QuotedName>,
-        keeps_axis: bool,
+        filtered_axis: FilteredAxis,
     },
     Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilteredAxis {
+    Keep,
+    Drop,
 }
 
 #[derive(Debug, Clone, PartialEq)]

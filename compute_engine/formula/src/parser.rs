@@ -2,7 +2,9 @@ use std::iter::Peekable;
 use std::ops::Range;
 use std::vec;
 
-use crate::expression::{Axis, BinaryOperator, Expression, ExpressionKind, QuotedName};
+use crate::expression::{
+    Axis, BinaryOperator, Expression, ExpressionKind, FilteredAxis, QuotedName,
+};
 use crate::lexer::{self, Token, TokenKind};
 use crate::syntax_error::{SyntaxError, SyntaxErrorKind};
 
@@ -263,7 +265,7 @@ impl Parser {
                 value: Box::new(value),
                 dimension,
                 members,
-                keeps_axis: false,
+                filtered_axis: FilteredAxis::Drop,
             },
             None => ExpressionKind::Error,
         };
@@ -307,7 +309,7 @@ impl Parser {
                 value: Box::new(value.expression),
                 dimension,
                 members,
-                keeps_axis: true,
+                filtered_axis: FilteredAxis::Keep,
             },
             None => ExpressionKind::Error,
         };

@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
 use dimension::{Dimension, MemberIndex, ReferenceAttribute};
-use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError, FilteredAxis};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
 use crate::columns::{ByAxis, Columns, find_dimension, packing_of};
@@ -194,14 +194,13 @@ fn changed_in(
             value,
             dimension,
             members,
-            keeps_axis,
+            filtered_axis,
         } => changed_in(value, changed, dimensions)?.and_then(|mut region| {
             region.constrain(*dimension, members.iter().map(|member| member.0).collect());
             let region = region.non_empty()?;
-            Some(if *keeps_axis {
-                region
-            } else {
-                region.without(*dimension)
+            Some(match filtered_axis {
+                FilteredAxis::Keep => region,
+                FilteredAxis::Drop => region.without(*dimension),
             })
         }),
         CheckedNode::Sum { value, by } => {
@@ -315,13 +314,12 @@ impl<'a, 'e> Evaluator<'a, 'e> {
             CheckedNode::Filter {
                 dimension,
                 members,
-                keeps_axis,
+                filtered_axis,
                 ..
             } => {
-                let mut region = if *keeps_axis {
-                    region.clone()
-                } else {
-                    region.clone().without(*dimension)
+                let mut region = match filtered_axis {
+                    FilteredAxis::Keep => region.clone(),
+                    FilteredAxis::Drop => region.clone().without(*dimension),
                 };
                 region.constrain(*dimension, members.iter().map(|member| member.0).collect());
                 Ok(region)
@@ -415,10 +413,10 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 value,
                 dimension,
                 members,
-                keeps_axis,
+                filtered_axis,
             } => self
                 .node(value, &self.operand_region(node, region)?)?
-                .filter(*dimension, members, *keeps_axis, self.dimensions),
+                .filter(*dimension, members, *filtered_axis, self.dimensions),
             CheckedNode::Sum { value, by } => {
                 let value = self.node(value, &self.operand_region(node, region)?)?;
                 let by = by

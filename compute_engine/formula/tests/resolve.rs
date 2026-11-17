@@ -3,8 +3,8 @@ mod common;
 use std::ops::Range;
 
 use formula::{
-    ResolveError, ResolveErrorKind, ResolvedAxis, ResolvedAxisKind, ResolvedExpression,
-    ResolvedExpressionKind,
+    FilteredAxis, ResolveError, ResolveErrorKind, ResolvedAxis, ResolvedAxisKind,
+    ResolvedExpression, ResolvedExpressionKind,
 };
 
 fn render(expression: &ResolvedExpression) -> String {
@@ -32,15 +32,14 @@ fn render(expression: &ResolvedExpression) -> String {
             value,
             dimension,
             members,
-            keeps_axis,
+            filtered_axis,
         } => {
             let members: Vec<_> = members.iter().map(|member| member.0.to_string()).collect();
             format!(
                 "({} {} '{}' [{}])",
-                if *keeps_axis {
-                    "FilterKeepingAxis"
-                } else {
-                    "Filter"
+                match filtered_axis {
+                    FilteredAxis::Keep => "FilterKeepingAxis",
+                    FilteredAxis::Drop => "Filter",
                 },
                 render(value),
                 common::dimension_name(*dimension),

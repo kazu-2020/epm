@@ -5,6 +5,7 @@ use dimension::DimensionGlobalId;
 
 use crate::axis_error::{AxisError, AxisErrorKind};
 use crate::checked_expression::CheckedExpression;
+use crate::expression::FilteredAxis;
 use crate::resolved_expression::{
     ResolvedAxis, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind,
 };
@@ -81,7 +82,7 @@ impl Checker {
             ResolvedExpressionKind::Filter {
                 value,
                 dimension,
-                keeps_axis,
+                filtered_axis,
                 ..
             } => {
                 let mut axes = self.axes(value, allowed)?;
@@ -89,7 +90,7 @@ impl Checker {
                     self.error(AxisErrorKind::ValueLacksAxis, *dimension, &expression.span);
                     return None;
                 }
-                if !keeps_axis {
+                if *filtered_axis == FilteredAxis::Drop {
                     axes.remove(dimension);
                 }
                 Some(axes)

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use dimension::{AttributeGlobalId, DimensionGlobalId, MemberIndex};
 use measure::MeasureGlobalId;
 
-use crate::expression::BinaryOperator;
+use crate::expression::{BinaryOperator, FilteredAxis};
 use crate::resolved_expression::{ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,7 +33,7 @@ pub enum CheckedNode {
         value: Box<CheckedNode>,
         dimension: DimensionGlobalId,
         members: Vec<MemberIndex>,
-        keeps_axis: bool,
+        filtered_axis: FilteredAxis,
     },
 }
 
@@ -57,11 +57,11 @@ impl CheckedNode {
             CheckedNode::Filter {
                 value,
                 dimension,
-                keeps_axis,
+                filtered_axis,
                 ..
             } => {
                 let mut axes = value.axes();
-                if !keeps_axis {
+                if *filtered_axis == FilteredAxis::Drop {
                     axes.remove(dimension);
                 }
                 axes
@@ -208,12 +208,12 @@ fn node(expression: &ResolvedExpression) -> Option<CheckedNode> {
             value,
             dimension,
             members,
-            keeps_axis,
+            filtered_axis,
         } => CheckedNode::Filter {
             value: Box::new(node(value)?),
             dimension: *dimension,
             members: members.clone(),
-            keeps_axis: *keeps_axis,
+            filtered_axis: *filtered_axis,
         },
         ResolvedExpressionKind::Error => return None,
     })

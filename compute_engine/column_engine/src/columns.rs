@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
 use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
-use formula::{EvaluateError, ProductOperator, Sign};
+use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
 use measure::{CoordinatePacking, Measure, MeasureDefinition, MeasureError, normalize};
 use rayon::prelude::*;
 
@@ -488,13 +488,13 @@ impl Columns {
         self,
         dimension: DimensionGlobalId,
         members: &[MemberIndex],
-        keeps_axis: bool,
+        filtered_axis: FilteredAxis,
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         let mut region = Region::default();
         region.constrain(dimension, members.iter().map(|member| member.0).collect());
         let columns = self.restrict(&region);
-        if keeps_axis {
+        if filtered_axis == FilteredAxis::Keep {
             return Ok(columns);
         }
         let position = columns.position(dimension);

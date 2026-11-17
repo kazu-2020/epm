@@ -16,7 +16,7 @@ pub use checked_expression::{
     CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign, Term,
 };
 pub use evaluate_error::EvaluateError;
-pub use expression::{Axis, BinaryOperator, Expression, ExpressionKind, QuotedName};
+pub use expression::{Axis, BinaryOperator, Expression, ExpressionKind, FilteredAxis, QuotedName};
 pub use parser::{MAXIMUM_DEPTH, Parsed, parse};
 pub use resolve::{Resolved, resolve};
 pub use resolve_error::{ResolveError, ResolveErrorKind};

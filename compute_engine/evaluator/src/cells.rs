@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
-use formula::{EvaluateError, ProductOperator, Sign};
+use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
 pub(crate) struct Cells {
@@ -165,7 +165,7 @@ impl Cells {
         mut self,
         dimension: DimensionGlobalId,
         members: &[MemberIndex],
-        keeps_axis: bool,
+        filtered_axis: FilteredAxis,
     ) -> Cells {
         let position = self
             .axes
@@ -174,7 +174,7 @@ impl Cells {
             .expect("a checked expression filters an axis of its value");
         self.values
             .retain(|coordinate, _| members.contains(&coordinate[position]));
-        if keeps_axis {
+        if filtered_axis == FilteredAxis::Keep {
             return self;
         }
         self.axes.remove(position);

@@ -3,7 +3,7 @@ use std::ops::Range;
 use dimension::{AttributeKind, Dimension, MemberIndex};
 use measure::MeasureDefinition;
 
-use crate::expression::{Axis, Expression, ExpressionKind, QuotedName};
+use crate::expression::{Axis, Expression, ExpressionKind, FilteredAxis, QuotedName};
 use crate::resolve_error::{ResolveError, ResolveErrorKind};
 use crate::resolved_expression::{
     ResolvedAxis, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind,
@@ -67,10 +67,10 @@ impl<'a> Resolver<'a> {
                 value,
                 dimension,
                 members,
-                keeps_axis,
+                filtered_axis,
             } => {
                 let value = self.expression(value);
-                self.filter(value, dimension, members, *keeps_axis)
+                self.filter(value, dimension, members, *filtered_axis)
                     .unwrap_or(ResolvedExpressionKind::Error)
             }
             ExpressionKind::Error => ResolvedExpressionKind::Error,
@@ -86,7 +86,7 @@ impl<'a> Resolver<'a> {
         value: ResolvedExpression,
         dimension: &QuotedName,
         members: &[QuotedName],
-        keeps_axis: bool,
+        filtered_axis: FilteredAxis,
     ) -> Option<ResolvedExpressionKind> {
         let found = match (
             self.find_dimension(&dimension.name),
@@ -119,7 +119,7 @@ impl<'a> Resolver<'a> {
             value: Box::new(value),
             dimension: found.global_id(),
             members: ids,
-            keeps_axis,
+            filtered_axis,
         })
     }
 

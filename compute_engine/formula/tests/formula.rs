@@ -1,6 +1,8 @@
 use std::ops::Range;
 
-use formula::{Axis, BinaryOperator, Expression, ExpressionKind, SyntaxError, SyntaxErrorKind};
+use formula::{
+    Axis, BinaryOperator, Expression, ExpressionKind, FilteredAxis, SyntaxError, SyntaxErrorKind,
+};
 
 fn render(expression: &Expression) -> String {
     match &expression.kind {
@@ -21,7 +23,7 @@ fn render(expression: &Expression) -> String {
             value,
             dimension,
             members,
-            keeps_axis,
+            filtered_axis,
         } => {
             let members: Vec<_> = members
                 .iter()
@@ -29,10 +31,9 @@ fn render(expression: &Expression) -> String {
                 .collect();
             format!(
                 "({} {} '{}': {})",
-                if *keeps_axis {
-                    "FilterKeepingAxis"
-                } else {
-                    "Filter"
+                match filtered_axis {
+                    FilteredAxis::Keep => "FilterKeepingAxis",
+                    FilteredAxis::Drop => "Filter",
                 },
                 render(value),
                 dimension.name,
