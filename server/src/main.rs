@@ -21,7 +21,7 @@ const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
 struct Arguments {
     listen: String,
     workspace: WorkspaceGlobalId,
-    epoch: u64,
+    epoch: Epoch,
 }
 
 #[tokio::main]
@@ -99,7 +99,7 @@ async fn main() -> ExitCode {
     };
     eprintln!(
         "workspace {} epoch {} listening on {}",
-        arguments.workspace, arguments.epoch, arguments.listen
+        arguments.workspace, arguments.epoch.0, arguments.listen
     );
     let (handle, assignee) = server::start(
         engine,
@@ -108,7 +108,7 @@ async fn main() -> ExitCode {
         store,
         arguments.workspace,
         AssigneeId {
-            epoch: Epoch(arguments.epoch),
+            epoch: arguments.epoch,
             process: ProcessId(Ulid::generate().0),
         },
     );
@@ -145,11 +145,11 @@ fn parse(mut words: impl Iterator<Item = String>) -> Result<Arguments, String> {
                 );
             }
             "--epoch" => {
-                epoch = Some(
+                epoch = Some(Epoch(
                     value
                         .parse()
-                        .map_err(|_| format!("--epoch {value:?} is not a number"))?,
-                );
+                        .map_err(|error| format!("--epoch {value:?}: {error}"))?,
+                ));
             }
             _ => return Err(format!("unknown flag {flag}")),
         }
@@ -169,7 +169,7 @@ mod tests {
         parse(words.iter().map(|word| (*word).to_owned())).map(|arguments| arguments.workspace)
     }
 
-    fn epoch(words: &[&str]) -> Result<u64, String> {
+    fn epoch(words: &[&str]) -> Result<Epoch, String> {
         parse(words.iter().map(|word| (*word).to_owned())).map(|arguments| arguments.epoch)
     }
 
@@ -195,8 +195,22 @@ mod tests {
         );
         assert_eq!(
             epoch(&["--workspace", WORKSPACE, "--epoch", "one"]),
-            Err("--epoch \"one\" is not a number".to_owned())
+            Err("--epoch \"one\": invalid digit found in string".to_owned())
         );
-        assert_eq!(epoch(&["--workspace", WORKSPACE, "--epoch", "3"]), Ok(3));
+        assert_eq!(
+            epoch(&["--workspace", WORKSPACE, "--epoch", "-1"]),
+            Err("--epoch \"-1\": invalid digit found in string".to_owned())
+        );
+        assert_eq!(
+            epoch(&["--workspace", WORKSPACE, "--epoch", "18446744073709551616"]),
+            Err(
+                "--epoch \"18446744073709551616\": number too large to fit in target type"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            epoch(&["--workspace", WORKSPACE, "--epoch", "3"]),
+            Ok(Epoch(3))
+        );
     }
 }
