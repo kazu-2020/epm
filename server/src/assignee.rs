@@ -94,8 +94,12 @@ struct Admission {
     committed_count: CommittedCount,
 }
 
-// Not the count of the commits read so far: while the assignee reads the log, the commits after them are committed too.
-type CommittedCount = watch::Sender<Option<u64>>;
+enum Committed {
+    LogNotRead,
+    Count(u64),
+}
+
+type CommittedCount = watch::Sender<Committed>;
 
 enum Calculator {
     Thread(rayon::ThreadPool),
@@ -121,7 +125,7 @@ pub fn start(
     let (submission_sender, submission_receiver) = mpsc::channel(WAITING_REQUESTS);
     let (commit_sender, commit_receiver) = mpsc::unbounded_channel();
     let engine_next = engine.next.0;
-    let committed_count = CommittedCount::new(None);
+    let committed_count = CommittedCount::new(Committed::LogNotRead);
     let edit_check = engine.edit_check().clone();
     let engine = Arc::new(engine);
     let (engine_sender, engine_receiver) = watch::channel(Arc::clone(&engine));
@@ -360,7 +364,6 @@ impl Handle {
                 ReadError::Loading
             }
         })?;
-        // Not after the committed check: a read that can never succeed would get NotCommitted, and the caller would try it again.
         values(&self.engine_receiver.borrow(), cells)?;
         if lag.committed < at_least {
             return Err(ReadError::NotCommitted(lag));
@@ -376,7 +379,6 @@ impl Handle {
     }
 
     pub fn lag(&self) -> Result<Lag, Loading> {
-        // Not the committed count first: a batch that finishes between the two reads would show more recalculated than committed.
         let recalculated = self.engine_receiver.borrow().recalculated();
         let committed_count = self.committed_count()?;
         Ok(Lag {
@@ -391,13 +393,16 @@ impl Handle {
     }
 
     fn committed_count(&self) -> Result<u64, Loading> {
-        (*self.committed_count.borrow()).ok_or(Loading)
+        match *self.committed_count.borrow() {
+            Committed::LogNotRead => Err(Loading),
+            Committed::Count(count) => Ok(count),
+        }
     }
 
     pub async fn wait_loaded(&self) -> Result<(), Stopped> {
         let mut committed_receiver = self.committed_count.subscribe();
         tokio::select! {
-            _ = committed_receiver.wait_for(Option::is_some) => Ok(()),
+            _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::Count(_))) => Ok(()),
             () = self.submission_sender.closed() => Err(Stopped),
         }
     }
@@ -447,13 +452,13 @@ impl Admit for Admission {
     }
 
     fn ready(&mut self, next: Sequence) {
-        self.committed_count.send_replace(Some(next.0));
+        self.committed_count.send_replace(Committed::Count(next.0));
     }
 }
 
 fn raise(committed_count: &CommittedCount, count: u64) {
     committed_count.send_if_modified(|committed_count| match committed_count {
-        Some(committed_count) if *committed_count < count => {
+        Committed::Count(committed_count) if *committed_count < count => {
             *committed_count = count;
             true
         }
