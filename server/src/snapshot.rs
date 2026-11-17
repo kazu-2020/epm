@@ -318,10 +318,10 @@ fn put_chunks(out: &mut BytesMut, chunks: &[Chunk]) {
 
 fn put_varint(out: &mut BytesMut, mut value: u64) {
     while value >= 0x80 {
-        out.put_u8(value as u8 | 0x80);
+        out.put_u8((value & 0x7f) as u8 | 0x80);
         value >>= 7;
     }
-    out.put_u8(value as u8);
+    out.put_u8(u8::try_from(value).expect("the loop leaves value below 0x80"));
 }
 
 fn count(length: usize) -> u32 {

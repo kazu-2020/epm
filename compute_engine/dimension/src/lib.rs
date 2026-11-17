@@ -173,11 +173,11 @@ struct UniqueIndex {
 }
 
 impl UniqueIndex {
-    fn new<K: Hash + Eq>(rows: usize, key: impl Fn(usize) -> K) -> Result<Self, K> {
+    fn new<K: Hash + Eq>(rows: u32, key: impl Fn(usize) -> K) -> Result<Self, K> {
         let hasher = RandomState::new();
-        let mut index = HashTable::with_capacity(rows);
+        let mut index = HashTable::with_capacity(rows as usize);
         for row in 0..rows {
-            let value = key(row);
+            let value = key(row as usize);
             match index.entry(
                 hasher.hash_one(&value),
                 |other: &MemberIndex| key(other.0 as usize) == value,
@@ -185,7 +185,7 @@ impl UniqueIndex {
             ) {
                 Entry::Occupied(_) => return Err(value),
                 Entry::Vacant(slot) => {
-                    slot.insert(MemberIndex(row as u32));
+                    slot.insert(MemberIndex(row));
                 }
             }
         }
@@ -241,8 +241,8 @@ impl Dimension {
         members: RecordBatch,
         targets: &[&Dimension],
     ) -> Result<Self, DimensionError> {
-        let rows = members.num_rows();
-        u32::try_from(rows).map_err(|_| DimensionError::TooManyMembers(rows))?;
+        let rows = u32::try_from(members.num_rows())
+            .map_err(|_| DimensionError::TooManyMembers(members.num_rows()))?;
         let expected = definition.schema();
         let found = members.schema();
         // Not `expected == *found`: nullability may differ, and the null checks below run row by row.
@@ -269,13 +269,13 @@ impl Dimension {
                     attribute: attribute.name().into(),
                     target: attribute.target,
                 })?;
-            for (row, value) in attribute.values.iter().enumerate() {
+            for (row, value) in (0u32..).zip(attribute.values.iter()) {
                 if let Some(value) = value
                     && value >= target_dimension.len()
                 {
                     return Err(DimensionError::DanglingTarget {
                         attribute: attribute.name().into(),
-                        member: MemberIndex(row as u32),
+                        member: MemberIndex(row),
                         target: MemberIndex(value),
                     });
                 }
@@ -285,7 +285,8 @@ impl Dimension {
         let global_ids = global_id_column(&members);
         let natural_keys = natural_key_column(&definition, &members);
         for row in 0..rows {
-            let member = MemberIndex(row as u32);
+            let member = MemberIndex(row);
+            let row = row as usize;
             if global_ids.is_null(row) {
                 return Err(DimensionError::NullGlobalId(member));
             }
@@ -326,7 +327,8 @@ impl Dimension {
     }
 
     pub fn len(&self) -> u32 {
-        self.members.num_rows() as u32
+        u32::try_from(self.members.num_rows())
+            .expect("Dimension::try_new keeps the member count within u32")
     }
 
     pub fn is_empty(&self) -> bool {
