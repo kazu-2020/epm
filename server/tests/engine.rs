@@ -1,12 +1,15 @@
+mod support;
+
 use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence, Slot};
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
+use dimension::Dimension;
 use dimension::MemberIndex;
-use measure::{CoordinateError, MeasureGlobalId};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use server::{DecodeError, Edit, Engine, EngineAlarm, Invalid};
 use ulid::Ulid;
-use workspace::Workspace;
+use workspace::{CellError, Workspace};
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const PRICE: MeasureGlobalId = MeasureGlobalId(Ulid(101));
@@ -21,7 +24,7 @@ fn engine() -> Engine {
 fn quantity(coordinate: [u32; 5], value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: coordinate.map(MemberIndex).to_vec(),
+        coordinate: support::named(&engine(), QUANTITY, &coordinate.map(MemberIndex)),
         value,
     }
 }
@@ -90,17 +93,19 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     short.coordinate.pop();
     assert_eq!(
         check(&server::edit::encode(&short)),
-        Err(Invalid::Coordinate(CoordinateError::Length {
+        Err(Invalid::Cell(CellError::Length {
             expected: 5,
             found: 4
         }))
     );
-    let versions = 3;
-    assert!(matches!(
-        check(&server::edit::encode(&quantity([0, versions, 1, 0, 1], Some(2.5)))),
-        Err(Invalid::Coordinate(CoordinateError::MemberOutOfRange { member, .. }))
-            if member == MemberIndex(versions)
-    ));
+    let mut foreign = quantity([0, 1, 1, 0, 1], Some(2.5));
+    let (axis, _) = foreign.coordinate[0];
+    let member = foreign.coordinate[1].1;
+    foreign.coordinate[0].1 = member;
+    assert_eq!(
+        check(&server::edit::encode(&foreign)),
+        Err(Invalid::Cell(CellError::NoMember { axis, member }))
+    );
 }
 
 #[test]
@@ -148,7 +153,7 @@ fn a_batch_gives_the_values_of_its_commits_one_by_one() {
     let second = [2, 1, 0, 1, 0];
     let price = Edit {
         measure: PRICE,
-        coordinate: [0, 1, 1].map(MemberIndex).to_vec(),
+        coordinate: support::named(&engine(), PRICE, &[0, 1, 1].map(MemberIndex)),
         value: Some(9.0),
     };
     let edits = [
@@ -216,4 +221,40 @@ fn a_commit_that_does_not_pass_the_check_is_an_alarm() {
             invalid: Invalid::NotAnInput(SALES)
         })
     );
+}
+
+#[test]
+fn a_logged_edit_replays_to_the_same_cell_under_a_definition_that_declares_the_axes_in_another_order()
+ {
+    let mut unchecked = representative::generate(&Size::TINY, 7);
+    let original = representative::generate(&Size::TINY, 7);
+    let dimensions: Vec<&Dimension> = original.dimensions.iter().collect();
+    let input = &unchecked.inputs[0];
+    assert_eq!(
+        input.global_id(),
+        QUANTITY,
+        "the first input is the quantity"
+    );
+    let axes = input.definition().axes().iter().rev().copied().collect();
+    let definition = MeasureDefinition::try_new(QUANTITY, input.definition().name().into(), axes)
+        .expect("the same axes");
+    let reversed_cells = input
+        .cells()
+        .map(|(mut coordinate, value)| {
+            coordinate.reverse();
+            (coordinate, value)
+        })
+        .collect();
+    unchecked.inputs[0] = Measure::from_cells(definition, reversed_cells, &dimensions)
+        .expect("the cells fit the axes");
+    let reversed = Engine::new(Workspace::try_new(unchecked).expect("a valid workspace"))
+        .expect("the representative formulas are valid");
+    let logged = commit(0, &quantity([0, 1, 1, 0, 1], Some(4.0)));
+
+    let declared = applied(&engine(), std::slice::from_ref(&logged));
+    let reversed = applied(&reversed, &[logged]);
+
+    assert_eq!(cell(&declared, QUANTITY, &[0, 1, 1, 0, 1]), Some(4.0));
+    assert_eq!(cell(&reversed, QUANTITY, &[1, 0, 1, 1, 0]), Some(4.0));
+    assert_eq!(cells(&reversed)[1..], cells(&declared)[1..]);
 }

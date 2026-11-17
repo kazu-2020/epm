@@ -23,7 +23,7 @@ const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
 struct App {
     handle: Handle,
     router: Router,
-    coordinate: Vec<u32>,
+    coordinate: Vec<Value>,
     quantity: f64,
 }
 
@@ -45,12 +45,18 @@ fn app_on(settings: Settings, store: Arc<dyn ObjectStore>, epoch: u64) -> App {
         .find(|measure| measure.global_id() == QUANTITY)
         .and_then(|quantity| quantity.cells().next())
         .expect("the seed has a quantity");
+    let coordinate: Vec<Value> = support::named(&engine, QUANTITY, &coordinate)
+        .into_iter()
+        .map(|(dimension, member)| {
+            json!({ "dimension": dimension.0.to_string(), "member": member.0.to_string() })
+        })
+        .collect();
     let (handle, assignee) = support::start(engine, Start::default(), settings, store, epoch);
     tokio::spawn(assignee);
     App {
         router: server::http::router(handle.clone()),
         handle,
-        coordinate: coordinate.iter().map(|member| member.0).collect(),
+        coordinate,
         quantity,
     }
 }
@@ -80,7 +86,7 @@ async fn call_as(app: &App, method: &str, content_type: &str, body: Value) -> (S
 fn edit(
     request_id: &str,
     measure: MeasureGlobalId,
-    coordinate: &[u32],
+    coordinate: &[Value],
     value: Option<f64>,
 ) -> Value {
     json!({
@@ -91,7 +97,7 @@ fn edit(
     })
 }
 
-fn cell(measure: MeasureGlobalId, coordinate: &[u32]) -> Value {
+fn cell(measure: MeasureGlobalId, coordinate: &[Value]) -> Value {
     json!({ "measure": measure.0.to_string(), "coordinate": coordinate })
 }
 
@@ -256,7 +262,7 @@ async fn each_refusal_has_its_connect_code() {
         (StatusCode::BAD_REQUEST, json!("invalid_argument"))
     );
     let mut outside = app.coordinate.clone();
-    outside[0] = u32::MAX;
+    outside[0]["member"] = json!(Ulid(u128::MAX).to_string());
     assert_eq!(
         refusal(&app, "ReadCells", read_of(5, cell(SALES, &outside))).await,
         (StatusCode::BAD_REQUEST, json!("invalid_argument")),
@@ -306,7 +312,7 @@ async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions()
         .iter()
         .find(|dimension| &dimension["ulid"] == first_axis)
         .expect("the axis is a listed dimension");
-    assert_eq!(dimension["members"][0]["id"], 0);
+    assert!(dimension["members"][0]["ulid"].is_string());
     assert!(dimension["members"][0]["natural_key"].is_string());
 }
 
@@ -375,4 +381,19 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
         json!(0),
         "the commit of the first assignee"
     );
+}
+
+#[tokio::test]
+async fn a_coordinate_names_its_axes_in_any_order() {
+    let app = app(Settings::default()).await;
+    let mut reversed = app.coordinate.clone();
+    reversed.reverse();
+    let (status, read) = call(
+        &app,
+        "ReadCells",
+        json!({ "cells": [cell(QUANTITY, &reversed)] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["values"][0], json!(app.quantity));
 }

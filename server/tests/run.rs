@@ -10,7 +10,7 @@ use change_log::{
 };
 use datagen::representative::{self, Size};
 use dimension::MemberIndex;
-use measure::{CoordinateError, MeasureGlobalId};
+use measure::MeasureGlobalId;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::throttle::{ThrottleConfig, ThrottledStore};
@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use ulid::Ulid;
-use workspace::Workspace;
+use workspace::{CellError, Coordinate, Workspace};
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
@@ -72,14 +72,20 @@ fn id(name: &str) -> RequestId {
 fn quantity(value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: CELL.map(MemberIndex).to_vec(),
+        coordinate: support::named(&support::engine(), QUANTITY, &CELL.map(MemberIndex)),
         value,
     }
 }
 
-fn cells() -> Vec<(MeasureGlobalId, Vec<MemberIndex>)> {
+fn cells() -> Vec<(MeasureGlobalId, Coordinate)> {
+    let engine = support::engine();
     [QUANTITY, SALES]
-        .map(|measure| (measure, CELL.map(MemberIndex).to_vec()))
+        .map(|measure| {
+            (
+                measure,
+                support::named(&engine, measure, &CELL.map(MemberIndex)),
+            )
+        })
         .to_vec()
 }
 
@@ -168,12 +174,12 @@ async fn a_rejected_edit_returns_its_reason() {
     short.coordinate.pop();
     assert_eq!(
         assignee.handle.submit(id("short"), &short).await,
-        Err(SubmitError::Rejected(Rejection::Invalid(
-            Invalid::Coordinate(CoordinateError::Length {
+        Err(SubmitError::Rejected(Rejection::Invalid(Invalid::Cell(
+            CellError::Length {
                 expected: 5,
                 found: 4
-            })
-        )))
+            }
+        ))))
     );
 }
 
@@ -406,9 +412,9 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     assert_eq!(
         assignee
             .handle
-            .read(Some(Sequence(0)), &[(SALES, vec![MemberIndex(0)])])
+            .read(Some(Sequence(0)), &[(SALES, cells()[1].1[..1].to_vec())])
             .await,
-        Err(ReadError::Coordinate(CoordinateError::Length {
+        Err(ReadError::Cell(CellError::Length {
             expected: 5,
             found: 1
         }))

@@ -11,7 +11,7 @@ use change_log::{AssigneeId, Commit, Epoch, ProcessId, Request, Sequence, Slot, 
 use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::{Dimension, MemberIndex};
+use dimension::{Dimension, DimensionGlobalId, MemberGlobalId, MemberIndex};
 use futures_util::{FutureExt, StreamExt, TryStreamExt, stream};
 use measure::{Measure, MeasureDefinition};
 use object_store::memory::InMemory;
@@ -60,9 +60,15 @@ impl Model {
             let input = inputs
                 .iter()
                 .position(|input| input.global_id() == edit.measure)?;
+            let coordinate = workspace::resolve(
+                inputs[input].definition().axes(),
+                self.workspace.dimensions(),
+                &edit.coordinate,
+            )
+            .ok()?;
             match edit.value {
-                Some(value) => cells[input].insert(edit.coordinate, value),
-                None => cells[input].remove(&edit.coordinate),
+                Some(value) => cells[input].insert(coordinate, value),
+                None => cells[input].remove(&coordinate),
             };
         }
         inputs
@@ -92,6 +98,8 @@ impl Model {
 struct Assignees {
     inputs: Vec<MeasureDefinition>,
     results: Vec<MeasureDefinition>,
+    // The first two members of each dimension, so that a seed picks a member without the dimension.
+    members: BTreeMap<DimensionGlobalId, [MemberGlobalId; 2]>,
     seed: u64,
     restored: Arc<Mutex<Vec<(u64, Start)>>>,
 }
@@ -203,16 +211,22 @@ impl common::Server for Assignees {
         let pick = |len: usize| usize::try_from(hash % len as u64).expect("below len");
         let input = &self.inputs[pick(self.inputs.len())];
         let result = &self.results[pick(self.results.len())];
-        let member = MemberIndex(u32::from(hash & 0x100 != 0));
+        let member = usize::from(hash & 0x100 != 0);
         let value = (hash & 0x600 != 0).then(|| ((hash >> 12) % 8) as f64 / 4.0);
-        let (measure, axes) = match (hash >> 20) % 8 {
-            0 => (result, result.axes().len()),
-            1 => (input, input.axes().len() + 1),
-            _ => (input, input.axes().len()),
+        let (measure, extra) = match (hash >> 20) % 8 {
+            0 => (result, None),
+            1 => (input, Some(result.axes()[0])),
+            _ => (input, None),
         };
         server::edit::encode(&Edit {
             measure: measure.global_id(),
-            coordinate: vec![member; axes],
+            coordinate: measure
+                .axes()
+                .iter()
+                .copied()
+                .chain(extra)
+                .map(|axis| (axis, self.members[&axis][member]))
+                .collect(),
             value,
         })
     }
@@ -232,6 +246,18 @@ fn simulate(model: &Model, seed: u64) -> Run {
             .formulas()
             .iter()
             .map(|formula| formula.result().clone())
+            .collect(),
+        members: model
+            .workspace
+            .dimensions()
+            .iter()
+            .map(|dimension| {
+                let member = |index| {
+                    let member = dimension.member(MemberIndex(index));
+                    member.expect("two members").global_id()
+                };
+                (dimension.global_id(), [member(0), member(1)])
+            })
             .collect(),
         seed,
         restored: Arc::clone(&restored),

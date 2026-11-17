@@ -62,13 +62,16 @@ All calls are `POST` with a JSON body. `SubmitEdit` and `ReadCells` need the hea
 api=http://127.0.0.1:8080/epm.v1.Workspace
 json='content-type: application/json'
 curl -X POST "$api/ListDefinitions" -d '{}'
+# One entry for each axis of the measure, with the ULIDs from ListDefinitions.
+cell='[{"dimension":"<dimension ULID>","member":"<member ULID>"}]'
 curl -X POST -H "$json" "$api/SubmitEdit" \
-  -d '{"request_id":"r1","measure":"00000000000000000000000034","coordinate":[0,1,1,0,1],"value":3}'
+  -d '{"request_id":"r1","measure":"00000000000000000000000034","coordinate":'"$cell"',"value":3}'
 curl -X POST -H "$json" "$api/ReadCells" \
-  -d '{"at_least":0,"cells":[{"measure":"00000000000000000000000068","coordinate":[0,1,1,0,1]}]}'
+  -d '{"at_least":0,"cells":[{"measure":"00000000000000000000000068","coordinate":'"$cell"'}]}'
 curl -X POST "$api/GetLag" -d '{}'
 ```
 
+- A coordinate names one member of each axis of the measure by the ULIDs of the dimension and the member, in any order. `ListDefinitions` gives the axes of each measure and the ULIDs of the members. A position in the declared order is not a coordinate, because the change log keeps the edit and the declared order can change (#184).
 - `SubmitEdit` returns `{"sequence": N}`. A `null` value clears the cell. If you send the same `request_id` again, you get the same sequence.
 - `ReadCells` returns `{"recalculated": N, "values": [...]}`. The values include all commits up to `at_least` or later. If you leave out `at_least`, you get the values that are published now.
 - A value is `null` if the cell is empty. A member that is not in its dimension is an error, the same as in an edit.
@@ -81,7 +84,7 @@ The errors in this table have the body `{"code": ..., "message": ...}` with a Co
 
 | Error | Code | HTTP status |
 | --- | --- | --- |
-| Malformed JSON, wrong content type, bad ULID, edit to a calculated measure, coordinate of the wrong length, member out of range | `invalid_argument` | 400 |
+| Malformed JSON, wrong content type, bad ULID, edit to a calculated measure, coordinate that does not name each axis once, member that is not in its dimension | `invalid_argument` | 400 |
 | Unknown measure in a read | `not_found` | 404 |
 | The engine is too far behind | `resource_exhausted` | 429 |
 | The server is loading the log, or the sequence is not committed yet | `unavailable` | 503 |

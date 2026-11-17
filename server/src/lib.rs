@@ -12,7 +12,7 @@ use change_log::{Commit, RequestId, Sequence, Slot, Start};
 use dimension::Dimension;
 use formula::EvaluateError;
 use measure::{CoordinateError, Measure, MeasureGlobalId};
-use workspace::{CalculateError, Calculated, EditCheck, Edits, Workspace};
+use workspace::{CalculateError, Calculated, CellError, EditCheck, Edits, Workspace};
 
 pub use crate::assignee::{
     Calculation, Handle, Lag, Loading, ReadError, Settings, Stopped, SubmitError, start,
@@ -39,6 +39,7 @@ pub enum Invalid {
     Undecodable(DecodeError),
     NotAnInput(MeasureGlobalId),
     Coordinate(CoordinateError),
+    Cell(CellError),
 }
 
 #[derive(Clone, Debug, PartialEq)]
