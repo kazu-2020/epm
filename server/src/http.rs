@@ -16,7 +16,6 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use ulid::Ulid;
 
 use crate::{Edit, Exit, Handle, Invalid, Loading, ReadError, Rejection, SubmitError};
 
@@ -162,9 +161,9 @@ async fn list_definitions(State(handle): State<Handle>) -> Result<Json<Value>, F
                 "calculated"
             };
             json!({
-                "ulid": definition.global_id().0.to_string(),
+                "ulid": definition.global_id().to_string(),
                 "name": definition.name(),
-                "axes": definition.axes().iter().map(|axis| axis.0.to_string()).collect::<Vec<_>>(),
+                "axes": definition.axes().iter().map(|axis| axis.to_string()).collect::<Vec<_>>(),
                 "kind": kind,
             })
         })
@@ -178,7 +177,7 @@ async fn list_definitions(State(handle): State<Handle>) -> Result<Json<Value>, F
                 .map(|member| json!({ "id": member.id().0, "natural_key": member.natural_key() }))
                 .collect();
             json!({
-                "ulid": dimension.global_id().0.to_string(),
+                "ulid": dimension.global_id().to_string(),
                 "name": dimension.name(),
                 "members": members,
             })
@@ -216,8 +215,7 @@ fn parse<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, Fai
 }
 
 fn measure(text: &str) -> Result<MeasureGlobalId, Failure> {
-    Ulid::from_string(text)
-        .map(MeasureGlobalId)
+    text.parse()
         .map_err(|error| Failure::new(Code::InvalidArgument, format!("measure {text:?}: {error}")))
 }
 
@@ -239,7 +237,7 @@ fn submit_failure(error: SubmitError) -> Failure {
         SubmitError::Rejected(Rejection::Invalid(invalid)) => {
             let message = match invalid {
                 Invalid::Undecodable(_) => "the edit cannot be decoded".to_owned(),
-                Invalid::NotAnInput(measure) => format!("measure {} is not an input", measure.0),
+                Invalid::NotAnInput(measure) => format!("measure {measure} is not an input"),
                 Invalid::Coordinate(error) => error.to_string(),
             };
             Failure::new(Code::InvalidArgument, message)
@@ -266,7 +264,7 @@ fn read_failure(error: ReadError) -> Failure {
             )
         }
         ReadError::NoMeasure(measure) => {
-            Failure::new(Code::NotFound, format!("no measure {}", measure.0))
+            Failure::new(Code::NotFound, format!("no measure {measure}"))
         }
         ReadError::Coordinate(error) => Failure::new(Code::InvalidArgument, error.to_string()),
         ReadError::Stopped => Failure::new(Code::Unavailable, "the assignee stopped".to_owned()),

@@ -138,7 +138,7 @@ async fn run(deadline: Duration) -> Running {
 async fn send_submit_edit(address: SocketAddr) -> TcpStream {
     let body = json!({
         "request_id": "r1",
-        "measure": QUANTITY.0.to_string(),
+        "measure": QUANTITY.to_string(),
         "coordinate": [0, 1, 1, 0, 1],
         "value": 3.0,
     })

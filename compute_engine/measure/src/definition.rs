@@ -1,14 +1,29 @@
 use std::collections::HashSet;
 use std::fmt;
+use std::str::FromStr;
 
 use arrow_schema::{DataType, Field, Schema};
-use dimension::DimensionGlobalId;
+use dimension::{DimensionGlobalId, InvalidGlobalId, parse_global_id};
 use ulid::Ulid;
 
 const VALUE_COLUMN: &str = "value";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MeasureGlobalId(pub Ulid);
+
+impl FromStr for MeasureGlobalId {
+    type Err = InvalidGlobalId;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        parse_global_id(text).map(MeasureGlobalId)
+    }
+}
+
+impl fmt::Display for MeasureGlobalId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeasureDefinition {
@@ -67,7 +82,7 @@ impl MeasureDefinition {
         let mut fields: Vec<Field> = self
             .axes
             .iter()
-            .map(|axis| Field::new(axis.0.to_string(), DataType::UInt32, false))
+            .map(|axis| Field::new(axis.to_string(), DataType::UInt32, false))
             .collect();
         fields.push(Field::new(VALUE_COLUMN, DataType::Float64, false));
         Schema::new(fields)

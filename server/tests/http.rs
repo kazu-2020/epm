@@ -85,14 +85,14 @@ fn edit(
 ) -> Value {
     json!({
         "request_id": request_id,
-        "measure": measure.0.to_string(),
+        "measure": measure.to_string(),
         "coordinate": coordinate,
         "value": value,
     })
 }
 
 fn cell(measure: MeasureGlobalId, coordinate: &[u32]) -> Value {
-    json!({ "measure": measure.0.to_string(), "coordinate": coordinate })
+    json!({ "measure": measure.to_string(), "coordinate": coordinate })
 }
 
 async fn read(app: &App, at_least: Option<u64>) -> (StatusCode, Value) {
@@ -187,7 +187,7 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
         rejected,
         json!({
             "code": "invalid_argument",
-            "message": format!("measure {} is not an input", SALES.0),
+            "message": format!("measure {SALES} is not an input"),
         })
     );
 
@@ -195,12 +195,15 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
     no_value.as_object_mut().expect("an object").remove("value");
     let mut bad_global_id = edit("r3", QUANTITY, &app.coordinate, Some(1.0));
     bad_global_id["measure"] = json!("not a ULID");
+    let mut global_id_above_128_bits = edit("r3", QUANTITY, &app.coordinate, Some(1.0));
+    global_id_above_128_bits["measure"] = json!(format!("8{}", &QUANTITY.to_string()[1..]));
     let mut unknown_field = edit("r4", QUANTITY, &app.coordinate, Some(1.0));
     unknown_field["note"] = json!("x");
     let long_request_id = "r".repeat(129);
     for body in [
         no_value,
         bad_global_id,
+        global_id_above_128_bits,
         unknown_field,
         edit("", QUANTITY, &app.coordinate, Some(1.0)),
         edit(&long_request_id, QUANTITY, &app.coordinate, Some(1.0)),
@@ -294,7 +297,7 @@ async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions()
     let kind = |global_id: MeasureGlobalId| {
         measures
             .iter()
-            .find(|measure| measure["ulid"] == global_id.0.to_string())
+            .find(|measure| measure["ulid"] == global_id.to_string())
             .map(|measure| measure["kind"].clone())
     };
     assert_eq!(kind(QUANTITY), Some(json!("input")));

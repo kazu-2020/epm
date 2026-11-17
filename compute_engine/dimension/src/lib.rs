@@ -16,11 +16,42 @@ const ULID_COLUMN: &str = "ulid";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DimensionGlobalId(pub Ulid);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidGlobalId;
+
+pub fn parse_global_id(text: &str) -> Result<Ulid, InvalidGlobalId> {
+    // Not Ulid::from_string alone: it drops the bits above 128, so "8..." would name the same thing as "0...".
+    Ulid::from_string(text)
+        .ok()
+        .filter(|ulid| ulid.to_string().eq_ignore_ascii_case(text))
+        .ok_or(InvalidGlobalId)
+}
+
+impl fmt::Display for InvalidGlobalId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("not a ULID")
+    }
+}
+
+impl std::error::Error for InvalidGlobalId {}
+
+impl fmt::Display for DimensionGlobalId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MemberGlobalId(pub Ulid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AttributeGlobalId(pub Ulid);
+
+impl fmt::Display for AttributeGlobalId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MemberIndex(pub u32);
@@ -148,7 +179,7 @@ impl DimensionDefinition {
                 AttributeKind::Reference(_) => DataType::UInt32,
             };
             fields.push(Field::new(
-                attribute.global_id.0.to_string(),
+                attribute.global_id.to_string(),
                 data_type,
                 position != self.natural_key_position,
             ));

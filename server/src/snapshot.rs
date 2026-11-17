@@ -280,7 +280,7 @@ fn request_path(index: usize) -> String {
 }
 
 fn measure_path(measure: MeasureGlobalId, index: usize) -> String {
-    format!("{}/{index:06}", measure.0)
+    format!("{measure}/{index:06}")
 }
 
 fn compress(cells: usize, uncompressed: &[u8]) -> (Chunk, Bytes) {
@@ -646,7 +646,7 @@ mod tests {
         let manifest = Manifest::decode(manifest).expect("valid");
         let mut expected = vec!["requests/000000".to_owned()];
         for input in &workspace.inputs {
-            expected.push(format!("{}/000000", input.global_id().0));
+            expected.push(format!("{}/000000", input.global_id()));
         }
         assert_eq!(manifest.paths(), expected);
         assert_eq!(objects.len(), expected.len());

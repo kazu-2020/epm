@@ -17,10 +17,10 @@ const NAME_KEY: &str = "name";
 pub fn write_measure(directory: &Path, measure: &Measure) -> std::io::Result<()> {
     let definition = measure.definition();
     let schema = Arc::new(definition.schema().with_metadata(HashMap::from([
-        (ULID_KEY.to_string(), definition.global_id().0.to_string()),
+        (ULID_KEY.to_string(), definition.global_id().to_string()),
         (NAME_KEY.to_string(), definition.name().to_string()),
     ])));
-    let file = File::create(directory.join(format!("{}.arrow", definition.global_id().0)))?;
+    let file = File::create(directory.join(format!("{}.arrow", definition.global_id())))?;
     let mut writer = FileWriter::try_new(file, &schema).map_err(std::io::Error::other)?;
     let batch = measure
         .to_record_batch()

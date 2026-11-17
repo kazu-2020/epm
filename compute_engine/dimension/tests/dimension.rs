@@ -485,7 +485,7 @@ fn column_with_the_right_name_but_wrong_type_is_rejected() {
     let definition = definition(vec![]);
     let fields = vec![
         Field::new("ulid", DataType::FixedSizeBinary(16), false),
-        Field::new(NATURAL_KEY.0.to_string(), DataType::LargeUtf8, false),
+        Field::new(NATURAL_KEY.to_string(), DataType::LargeUtf8, false),
     ];
     let columns: Vec<ArrayRef> = vec![
         global_ids(&[Some(1)]),
