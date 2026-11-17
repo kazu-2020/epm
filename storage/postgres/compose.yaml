@@ -13,7 +13,7 @@ services:
       retries: 30
   # The transaction mode and no prepared statements: the app server must work with the strictest pooling.
   pgbouncer:
-    image: edoburu/pgbouncer:v1.25.2-p0
+    image: edoburu/pgbouncer:v1.26.1-p0
     depends_on:
       postgres:
         condition: service_healthy
