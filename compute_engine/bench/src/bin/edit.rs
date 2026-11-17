@@ -1,3 +1,9 @@
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "the bench reports its measurements on the terminal"
+)]
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -79,6 +85,13 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a quantile position is a small whole number after ceil, and f64 has no TryFrom to usize"
+)]
 fn report(name: &str, times: &mut [Duration]) {
     times.sort();
     let at = |quantile: f64| {
