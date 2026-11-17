@@ -73,7 +73,7 @@ impl Generator<'_> {
     fn skewed(&mut self, end: u32) -> u32 {
         let zipf = Zipf::new(f64::from(end), self.configuration.zipf_exponent)
             .expect("a non-empty range and a non-negative exponent make a Zipf distribution");
-        self.random.sample(zipf) as u32 - 1
+        zipf_member(self.random.sample(zipf))
     }
 
     fn axes(&mut self, dimensions: &[Dimension]) -> Vec<DimensionGlobalId> {
@@ -189,6 +189,16 @@ pub(crate) fn natural_key_attribute(dimension: DimensionGlobalId) -> AttributeDe
     }
 }
 
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a Zipf sample is a whole number from 1 to its u32 end, and f64 has no TryFrom to u32"
+)]
+pub(crate) fn zipf_member(sample: f64) -> u32 {
+    sample as u32 - 1
+}
+
 pub fn numbered_dimension(
     id: u128,
     members: u32,
@@ -222,12 +232,15 @@ pub fn numbered_dimension(
     )
     .expect("every member ULID is 16 bytes");
     let natural_keys = StringArray::from_iter_values((0..members).map(|member| member.to_string()));
-    let columns: Vec<ArrayRef> = [Arc::new(global_ids) as ArrayRef, Arc::new(natural_keys)]
+    let named: [ArrayRef; 2] = [Arc::new(global_ids), Arc::new(natural_keys)];
+    let columns: Vec<ArrayRef> = named
         .into_iter()
-        .chain(targets.iter().map(|target| {
-            Arc::new(UInt32Array::from_iter(
-                (0..members).map(|member| member.checked_rem(target.len())),
-            )) as ArrayRef
+        .chain(targets.iter().map(|target| -> ArrayRef {
+            Arc::new(
+                (0..members)
+                    .map(|member| member.checked_rem(target.len()))
+                    .collect::<UInt32Array>(),
+            )
         }))
         .collect();
     let members = RecordBatch::try_new(Arc::new(definition.schema()), columns)

@@ -5,7 +5,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::UInt32Type;
 use datagen::Configuration;
 use dimension::Dimension;
-use measure::MeasureDefinition;
+use measure::{Measure, MeasureDefinition};
 use workspace::UncheckedWorkspace;
 
 fn configuration(seed: u64) -> Configuration {
@@ -26,7 +26,7 @@ fn batches(workspace: &UncheckedWorkspace) -> Vec<RecordBatch> {
         .dimensions
         .iter()
         .map(|dimension| dimension.batch().clone());
-    let inputs = workspace.inputs.iter().map(|input| input.to_record_batch());
+    let inputs = workspace.inputs.iter().map(Measure::to_record_batch);
     dimensions.chain(inputs).collect()
 }
 
@@ -97,7 +97,8 @@ fn a_few_members_hold_most_cells() {
         .iter()
         .find(|dimension| dimension.global_id() == input.definition().axes()[0])
         .expect("the axis is a generated dimension")
-        .len() as usize;
+        .len();
+    let members = usize::try_from(members).expect("usize holds every u32 on supported targets");
     let mut cells_per_member: HashMap<u32, usize> = HashMap::new();
     for member in input
         .to_record_batch()
@@ -138,7 +139,7 @@ fn the_representative_model_declares_its_axes_in_packing_order() {
     let declared = workspace
         .inputs
         .iter()
-        .map(|input| input.definition())
+        .map(Measure::definition)
         .chain(workspace.formulas.iter().map(|formula| &formula.result));
 
     for definition in declared {

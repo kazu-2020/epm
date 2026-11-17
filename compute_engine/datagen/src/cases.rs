@@ -16,6 +16,7 @@ const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(3));
 
 type Cells = [(&'static [u32], f64)];
 
+#[derive(Debug)]
 pub struct Case {
     pub name: &'static str,
     pub steps: &'static [(&'static str, &'static str)],
@@ -228,6 +229,7 @@ pub const CASES: &[Case] = &[
     },
 ];
 
+#[derive(Debug)]
 pub struct Fixture {
     pub dimensions: Vec<Dimension>,
     pub inputs: Vec<Measure>,
@@ -309,10 +311,18 @@ impl Default for Fixture {
             .find(|input| input.definition().name() == "改定")
             .expect("the fixture defines '改定'");
         let mut delta = revised.delta();
-        delta.set(&[MemberIndex(0), MemberIndex(0)], 5.0).unwrap();
-        delta.delete(&[MemberIndex(1), MemberIndex(0)]).unwrap();
-        delta.set(&[MemberIndex(2), MemberIndex(1)], 3.0).unwrap();
-        *revised = revised.apply(delta.finish()).unwrap();
+        delta
+            .set(&[MemberIndex(0), MemberIndex(0)], 5.0)
+            .expect("the fixture coordinate is within '改定'");
+        delta
+            .delete(&[MemberIndex(1), MemberIndex(0)])
+            .expect("the fixture coordinate is within '改定'");
+        delta
+            .set(&[MemberIndex(2), MemberIndex(1)], 3.0)
+            .expect("the fixture coordinate is within '改定'");
+        *revised = revised
+            .apply(delta.finish())
+            .expect("the delta belongs to '改定'");
         Fixture {
             dimensions,
             inputs,
@@ -392,11 +402,12 @@ fn dimension(
         natural_key_attribute(global_id).global_id,
         [vec![natural_key_attribute(global_id)], attributes].concat(),
     )
-    .unwrap();
-    let global_ids = FixedSizeBinaryArray::try_from_iter(
-        (0..natural_keys.len()).map(|row| Ulid(global_id.0.0 * 100 + row as u128).to_bytes()),
-    )
-    .unwrap();
+    .expect("the fixture dimension definitions are valid");
+    let global_ids = FixedSizeBinaryArray::try_from_iter((0..natural_keys.len()).map(|row| {
+        Ulid(global_id.0.0 * 100 + u128::try_from(row).expect("a fixture row fits in u128"))
+            .to_bytes()
+    }))
+    .expect("every member ULID is 16 bytes");
     let mut columns: Vec<ArrayRef> = vec![
         Arc::new(global_ids),
         Arc::new(StringArray::from(natural_keys.to_vec())),
@@ -404,8 +415,9 @@ fn dimension(
     if definition.attributes().len() > 1 {
         columns.push(Arc::new(UInt32Array::from(attribute_values.to_vec())));
     }
-    let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
-    Dimension::try_new(definition, batch, targets).unwrap()
+    let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns)
+        .expect("the columns follow the dimension schema");
+    Dimension::try_new(definition, batch, targets).expect("the fixture dimensions are valid")
 }
 
 fn measure_definition(
@@ -426,5 +438,5 @@ fn measure(
         .iter()
         .map(|&(coordinate, value)| (coordinate.iter().copied().map(MemberIndex).collect(), value))
         .collect();
-    Measure::from_cells(definition, cells, dimensions).unwrap()
+    Measure::from_cells(definition, cells, dimensions).expect("the fixture cells are valid")
 }
