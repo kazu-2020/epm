@@ -73,6 +73,6 @@ pub fn compile(
         return Err(FormulaError::Axes(check.errors));
     };
     // Not left to the first edit: a result in the middle of a formula that is wider than 64 bits (ADR 0004) would stop the assignee there.
-    column_engine::plan(&expression, result, measures, dimensions).map_err(FormulaError::Plan)?;
+    column_engine::plan(&expression, result, dimensions).map_err(FormulaError::Plan)?;
     Ok(expression)
 }

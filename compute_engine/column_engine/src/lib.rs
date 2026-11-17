@@ -6,16 +6,12 @@ mod tests;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
-use dimension::{Dimension, MemberIndex, ReferenceAttribute};
+use dimension::{Dimension, MemberIndex, ReferenceAttribute, usize_from};
 use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError, FilteredAxis};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
 use crate::columns::{ByAxis, Columns, find_dimension, packing_of};
 use crate::region::Region;
-
-fn usize_from(value: u32) -> usize {
-    usize::try_from(value).expect("usize holds every u32 on supported targets")
-}
 
 pub fn evaluate(
     expression: &CheckedExpression,
@@ -32,16 +28,8 @@ pub fn evaluate(
 pub fn plan(
     expression: &CheckedExpression,
     result: &MeasureDefinition,
-    measures: &[MeasureDefinition],
     dimensions: &[&Dimension],
 ) -> Result<(), EvaluateError> {
-    let sources = expression.sources();
-    for definition in measures
-        .iter()
-        .filter(|definition| sources.contains(&definition.global_id()))
-    {
-        packing_of(dimensions, definition.axes())?;
-    }
     plan_node(expression.root(), dimensions)?;
     packing_of(dimensions, result.axes())?;
     Ok(())

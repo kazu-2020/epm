@@ -381,6 +381,7 @@ impl Handle {
     }
 
     pub fn lag(&self) -> Result<Lag, Loading> {
+        // Not the committed count first: a batch that finishes between the two reads would show more recalculated than committed.
         let recalculated = self.engine_receiver.borrow().recalculated();
         let next = self.next_sequence()?;
         Ok(Lag {

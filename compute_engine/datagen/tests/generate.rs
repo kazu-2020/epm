@@ -4,7 +4,7 @@ use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt32Type;
 use datagen::Configuration;
-use dimension::Dimension;
+use dimension::{Dimension, usize_from};
 use measure::{Measure, MeasureDefinition};
 use workspace::UncheckedWorkspace;
 
@@ -98,7 +98,7 @@ fn a_few_members_hold_most_cells() {
         .find(|dimension| dimension.global_id() == input.definition().axes()[0])
         .expect("the axis is a generated dimension")
         .len();
-    let members = usize::try_from(members).expect("usize holds every u32 on supported targets");
+    let members = usize_from(members);
     let mut cells_per_member: HashMap<u32, usize> = HashMap::new();
     for member in input
         .to_record_batch()
