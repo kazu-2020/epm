@@ -188,3 +188,49 @@ pub(crate) fn natural_key_attribute(dimension: DimensionGlobalId) -> AttributeDe
         kind: AttributeKind::Text,
     }
 }
+
+pub fn numbered_dimension(
+    id: u128,
+    members: u32,
+    kind: DimensionKind,
+    targets: &[&Dimension],
+) -> Dimension {
+    let global_id = DimensionGlobalId(Ulid(id));
+    let natural_key = natural_key_attribute(global_id);
+    let natural_key_global_id = natural_key.global_id;
+    let attributes = std::iter::once(natural_key)
+        .chain(
+            (0u128..)
+                .zip(targets)
+                .map(|(position, target)| AttributeDefinition {
+                    global_id: AttributeGlobalId(Ulid(id << 64 | (position + 1))),
+                    name: target.name().into(),
+                    kind: AttributeKind::Reference(target.global_id()),
+                }),
+        )
+        .collect();
+    let definition = DimensionDefinition::try_new(
+        global_id,
+        format!("D{id}"),
+        kind,
+        natural_key_global_id,
+        attributes,
+    )
+    .expect("the attributes are named after distinct targets");
+    let global_ids = FixedSizeBinaryArray::try_from_iter(
+        (0..members).map(|member| Ulid(id << 64 | u128::from(member)).to_bytes()),
+    )
+    .expect("every member ULID is 16 bytes");
+    let natural_keys = StringArray::from_iter_values((0..members).map(|member| member.to_string()));
+    let columns: Vec<ArrayRef> = [Arc::new(global_ids) as ArrayRef, Arc::new(natural_keys)]
+        .into_iter()
+        .chain(targets.iter().map(|target| {
+            Arc::new(UInt32Array::from_iter(
+                (0..members).map(|member| member.checked_rem(target.len())),
+            )) as ArrayRef
+        }))
+        .collect();
+    let members = RecordBatch::try_new(Arc::new(definition.schema()), columns)
+        .expect("the columns follow the dimension schema");
+    Dimension::try_new(definition, members, targets).expect("every target member exists")
+}

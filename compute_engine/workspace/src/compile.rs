@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
-use dimension::{Dimension, DimensionGlobalId};
-use formula::{AxisError, CheckedAxis, CheckedExpression, CheckedNode, ResolveError, SyntaxError};
-use measure::{CoordinatePacking, MeasureDefinition, MeasureGlobalId};
+use dimension::Dimension;
+use formula::{AxisError, CheckedExpression, EvaluateError, ResolveError, SyntaxError};
+use measure::{MeasureDefinition, MeasureGlobalId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Formula {
@@ -21,8 +21,7 @@ pub enum FormulaError {
     Syntax(Vec<SyntaxError>),
     Resolve(Vec<ResolveError>),
     Axes(Vec<AxisError>),
-    MissingDimension(DimensionGlobalId),
-    PackingTooWide(Vec<DimensionGlobalId>),
+    Plan(EvaluateError),
 }
 
 impl CompiledFormula {
@@ -51,9 +50,7 @@ impl CompiledFormula {
     }
 
     pub(crate) fn sources(&self) -> BTreeSet<MeasureGlobalId> {
-        let mut sources = BTreeSet::new();
-        collect_sources(self.expression.root(), &mut sources);
-        sources
+        self.expression.sources()
     }
 }
 
@@ -75,93 +72,7 @@ pub fn compile(
     let Some(expression) = check.checked else {
         return Err(FormulaError::Axes(check.errors));
     };
-    fits(result.axes().iter().copied().collect(), dimensions)?;
-    node_axes(expression.root(), dimensions)?;
+    // Not left to the first edit: a result in the middle of a formula that is wider than 64 bits (ADR 0004) would stop the assignee there.
+    column_engine::plan(&expression, result, measures, dimensions).map_err(FormulaError::Plan)?;
     Ok(expression)
-}
-
-fn collect_sources(node: &CheckedNode, sources: &mut BTreeSet<MeasureGlobalId>) {
-    match node {
-        CheckedNode::Number(_) => {}
-        CheckedNode::Measure { global_id, .. } => {
-            sources.insert(*global_id);
-        }
-        CheckedNode::Terms(terms) => {
-            for term in terms {
-                collect_sources(&term.node, sources);
-            }
-        }
-        CheckedNode::Product { left, right, .. } => {
-            collect_sources(left, sources);
-            collect_sources(right, sources);
-        }
-        CheckedNode::Sum { value, .. } | CheckedNode::Filter { value, .. } => {
-            collect_sources(value, sources);
-        }
-    }
-}
-
-// Not left to the evaluation: a result in the middle of a formula that is wider than 64 bits (ADR 0004) would stop the assignee at the first edit.
-fn node_axes(
-    node: &CheckedNode,
-    dimensions: &[&Dimension],
-) -> Result<BTreeSet<DimensionGlobalId>, FormulaError> {
-    let axes = match node {
-        CheckedNode::Number(_) => BTreeSet::new(),
-        CheckedNode::Measure { axes, .. } => axes.iter().copied().collect(),
-        CheckedNode::Terms(terms) => {
-            let mut axes = BTreeSet::new();
-            for term in terms {
-                axes.extend(node_axes(&term.node, dimensions)?);
-            }
-            axes
-        }
-        CheckedNode::Product { left, right, .. } => {
-            let mut axes = node_axes(left, dimensions)?;
-            axes.extend(node_axes(right, dimensions)?);
-            axes
-        }
-        CheckedNode::Sum { value, by } => {
-            node_axes(value, dimensions)?;
-            by.iter()
-                .map(|axis| match *axis {
-                    CheckedAxis::Dimension(dimension) => dimension,
-                    CheckedAxis::Attribute { target, .. } => target,
-                })
-                .collect()
-        }
-        CheckedNode::Filter {
-            value,
-            dimension,
-            keeps_axis,
-            ..
-        } => {
-            let mut axes = node_axes(value, dimensions)?;
-            if !keeps_axis {
-                axes.remove(dimension);
-            }
-            axes
-        }
-    };
-    fits(axes, dimensions)
-}
-
-fn fits(
-    axes: BTreeSet<DimensionGlobalId>,
-    dimensions: &[&Dimension],
-) -> Result<BTreeSet<DimensionGlobalId>, FormulaError> {
-    let member_counts = axes
-        .iter()
-        .map(|&axis| {
-            dimensions
-                .iter()
-                .find(|dimension| dimension.global_id() == axis)
-                .map(|dimension| dimension.len())
-                .ok_or(FormulaError::MissingDimension(axis))
-        })
-        .collect::<Result<Vec<u32>, FormulaError>>()?;
-    if CoordinatePacking::new(&member_counts).is_none() {
-        return Err(FormulaError::PackingTooWide(axes.into_iter().collect()));
-    }
-    Ok(axes)
 }

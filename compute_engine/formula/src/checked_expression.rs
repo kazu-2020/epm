@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use dimension::{AttributeGlobalId, DimensionGlobalId, MemberIndex};
 use measure::MeasureGlobalId;
 
@@ -33,6 +35,39 @@ pub enum CheckedNode {
         members: Vec<MemberIndex>,
         keeps_axis: bool,
     },
+}
+
+impl CheckedNode {
+    #[must_use]
+    pub fn axes(&self) -> BTreeSet<DimensionGlobalId> {
+        match self {
+            CheckedNode::Number(_) => BTreeSet::new(),
+            CheckedNode::Measure { axes, .. } => axes.iter().copied().collect(),
+            CheckedNode::Terms(terms) => terms.iter().flat_map(|term| term.node.axes()).collect(),
+            CheckedNode::Product { left, right, .. } => {
+                left.axes().into_iter().chain(right.axes()).collect()
+            }
+            CheckedNode::Sum { by, .. } => by
+                .iter()
+                .map(|axis| match *axis {
+                    CheckedAxis::Dimension(dimension) => dimension,
+                    CheckedAxis::Attribute { target, .. } => target,
+                })
+                .collect(),
+            CheckedNode::Filter {
+                value,
+                dimension,
+                keeps_axis,
+                ..
+            } => {
+                let mut axes = value.axes();
+                if !keeps_axis {
+                    axes.remove(dimension);
+                }
+                axes
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +126,34 @@ impl CheckedExpression {
     #[must_use]
     pub fn result_axes(&self) -> &[DimensionGlobalId] {
         &self.result_axes
+    }
+
+    #[must_use]
+    pub fn sources(&self) -> BTreeSet<MeasureGlobalId> {
+        let mut sources = BTreeSet::new();
+        collect_sources(&self.root, &mut sources);
+        sources
+    }
+}
+
+fn collect_sources(node: &CheckedNode, sources: &mut BTreeSet<MeasureGlobalId>) {
+    match node {
+        CheckedNode::Number(_) => {}
+        CheckedNode::Measure { global_id, .. } => {
+            sources.insert(*global_id);
+        }
+        CheckedNode::Terms(terms) => {
+            for term in terms {
+                collect_sources(&term.node, sources);
+            }
+        }
+        CheckedNode::Product { left, right, .. } => {
+            collect_sources(left, sources);
+            collect_sources(right, sources);
+        }
+        CheckedNode::Sum { value, .. } | CheckedNode::Filter { value, .. } => {
+            collect_sources(value, sources);
+        }
     }
 }
 

@@ -24,6 +24,33 @@ pub fn evaluate(
         .map_err(EvaluateError::InvalidResult)
 }
 
+// Not an evaluation of no cells: a constant spread to a wide result would copy its cell at compile time.
+pub fn plan(
+    expression: &CheckedExpression,
+    result: &MeasureDefinition,
+    measures: &[MeasureDefinition],
+    dimensions: &[&Dimension],
+) -> Result<(), EvaluateError> {
+    let sources = expression.sources();
+    for definition in measures
+        .iter()
+        .filter(|definition| sources.contains(&definition.global_id()))
+    {
+        packing_of(dimensions, definition.axes())?;
+    }
+    plan_node(expression.root(), dimensions)?;
+    packing_of(dimensions, result.axes())?;
+    Ok(())
+}
+
+fn plan_node(node: &CheckedNode, dimensions: &[&Dimension]) -> Result<(), EvaluateError> {
+    for operand in operands(node) {
+        plan_node(operand, dimensions)?;
+    }
+    packing_of(dimensions, &node.axes().into_iter().collect::<Vec<_>>())?;
+    Ok(())
+}
+
 pub fn edit(
     measures: &[Measure],
     deltas: impl IntoIterator<Item = (MeasureGlobalId, Delta)>,
@@ -335,6 +362,20 @@ impl<'a, 'e> Evaluator<'a, 'e> {
     }
 
     fn compute(&self, node: &'e CheckedNode, region: &Region) -> Result<Columns, EvaluateError> {
+        let columns = self.compute_unchecked(node, region)?;
+        debug_assert_eq!(
+            columns.axes().iter().copied().collect::<BTreeSet<_>>(),
+            node.axes(),
+            "plan checks the packing of the axes a node declares"
+        );
+        Ok(columns)
+    }
+
+    fn compute_unchecked(
+        &self,
+        node: &'e CheckedNode,
+        region: &Region,
+    ) -> Result<Columns, EvaluateError> {
         match node {
             CheckedNode::Number(value) => Ok(Columns::number(*value)),
             CheckedNode::Measure { global_id, axes } => {

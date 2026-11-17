@@ -433,3 +433,56 @@ fn a_filter_needs_its_dimension_on_the_value() {
         unknown(&[(ValueLacksAxis, "部門", 0..source.len())])
     );
 }
+
+#[test]
+fn the_sources_are_every_measure_the_expression_reads_once() {
+    let result = result("売上計画");
+    let checked = formula::check_axes(
+        &resolved("SUM('売上', BY '部門', '期間') + '全社売上' * 2 - '全社売上'").expression,
+        result.axes(),
+    )
+    .checked
+    .expect("the expression passes the check");
+    let sources: Vec<MeasureDefinition> = common::measures()
+        .into_iter()
+        .filter(|measure| checked.sources().contains(&measure.global_id()))
+        .collect();
+    let mut names: Vec<String> = sources
+        .iter()
+        .map(|measure| measure.name().to_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["全社売上", "売上"]);
+}
+
+#[test]
+fn a_node_has_the_axes_its_columns_take() {
+    let axes = |result: &str, source: &str| {
+        let result = self::result(result);
+        let checked = formula::check_axes(&resolved(source).expression, result.axes())
+            .checked
+            .expect("the expression passes the check");
+        let mut names: Vec<String> = checked
+            .root()
+            .axes()
+            .into_iter()
+            .map(common::dimension_name)
+            .collect();
+        names.sort();
+        names
+    };
+
+    assert_eq!(axes("売上計画", "1.1"), Vec::<String>::new());
+    assert_eq!(axes("売上計画", "'売上' * '全社売上'"), ["期間", "部門"]);
+    assert_eq!(axes("売上計画", "'売上' + 1"), ["期間", "部門"]);
+    assert_eq!(axes("全社売上", "SUM('売上', BY '期間')"), ["期間"]);
+    assert_eq!(
+        axes("事業部売上", "SUM('売上', BY '部門'.'事業部', '期間')"),
+        ["事業部", "期間"]
+    );
+    assert_eq!(axes("全社売上", "'売上'['部門': '営業']"), ["期間"]);
+    assert_eq!(
+        axes("売上計画", "FILTER('売上', '部門' IN ('営業', '開発'))"),
+        ["期間", "部門"]
+    );
+}

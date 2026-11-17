@@ -79,7 +79,8 @@ pub(crate) fn packing_of(
     dimensions: &[&Dimension],
     axes: &[DimensionGlobalId],
 ) -> Result<CoordinatePacking, EvaluateError> {
-    CoordinatePacking::new(&member_counts(dimensions, axes)?).ok_or(EvaluateError::PackingTooWide)
+    CoordinatePacking::new(&member_counts(dimensions, axes)?)
+        .ok_or_else(|| EvaluateError::PackingTooWide(axes.to_vec()))
 }
 
 fn dense_strides(member_counts: &[u32]) -> Option<(usize, Vec<usize>)> {
@@ -258,6 +259,10 @@ impl Columns {
             packed_coordinates: packed_coordinates.into(),
             values: values.into(),
         }
+    }
+
+    pub(crate) fn axes(&self) -> &[DimensionGlobalId] {
+        &self.axes
     }
 
     fn len(&self) -> usize {
