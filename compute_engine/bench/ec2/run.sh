@@ -33,7 +33,6 @@ for scale in "$@"; do
     if [ "$scale" = 1 ]; then
         hyperfine --runs 5 --export-json out/recalculate.json --export-markdown out/recalculate.md 'bin/new/recalculate data-1 column'
         timed out/recalculate-time.txt new 1
-        # Not one run: the p99 of 500 edits rests on its 5 slowest edits, so one run swings it.
         for round in 1 2 3 4 5; do
             bin/new/edit data-1 100 > "out/edit-$round.txt" 2> "out/edit-log-$round.txt"
         done
