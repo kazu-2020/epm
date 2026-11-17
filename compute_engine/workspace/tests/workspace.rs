@@ -8,8 +8,8 @@ use formula::{AxisErrorKind, EvaluateError, ResolveErrorKind};
 use measure::{CoordinateError, Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 use workspace::{
-    Calculated, Edit, EditError, Edits, Formula, FormulaError, UncheckedWorkspace, Workspace,
-    WorkspaceError,
+    Calculated, Edit, EditError, Edits, Formula, FormulaError, InvalidWorkspaceGlobalId,
+    UncheckedWorkspace, Workspace, WorkspaceError, WorkspaceGlobalId,
 };
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
@@ -451,4 +451,28 @@ fn a_reference_attribute_outside_the_dimension_it_points_at_is_an_error() {
         unchecked.dimensions.remove(position);
     });
     assert_eq!(missing, expected);
+}
+
+#[test]
+fn a_workspace_global_id_is_one_ulid_in_any_case() {
+    let upper: WorkspaceGlobalId = "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C".parse().expect("a ULID");
+    let lower: WorkspaceGlobalId = "01jcq7zk3m5v8w9x0y1z2a3b4c".parse().expect("a ULID");
+    assert_eq!(upper, lower);
+    assert_eq!(upper.to_string(), "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C");
+}
+
+#[test]
+fn a_workspace_global_id_above_128_bits_is_not_another_workspace() {
+    for text in [
+        "81JCQ7ZK3M5V8W9X0Y1Z2A3B4C",
+        "ZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+        "demo~",
+        "",
+    ] {
+        assert_eq!(
+            text.parse::<WorkspaceGlobalId>(),
+            Err(InvalidWorkspaceGlobalId),
+            "{text:?}"
+        );
+    }
 }

@@ -99,7 +99,7 @@ async fn main() -> ExitCode {
     };
     eprintln!(
         "workspace {} epoch {} listening on {}",
-        arguments.workspace.0, arguments.epoch, arguments.listen
+        arguments.workspace, arguments.epoch, arguments.listen
     );
     let (handle, assignee) = server::start(
         engine,
@@ -143,9 +143,11 @@ fn parse(mut words: impl Iterator<Item = String>) -> Result<Arguments, String> {
         match flag.as_str() {
             "--listen" => listen = value,
             "--workspace" => {
-                let global_id = Ulid::from_string(&value)
-                    .map_err(|_| format!("--workspace {value:?} is not a ULID"))?;
-                workspace = Some(WorkspaceGlobalId(global_id));
+                workspace = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--workspace {value:?} is not a ULID"))?,
+                );
             }
             "--epoch" => {
                 epoch = value
@@ -180,13 +182,5 @@ mod tests {
             workspace(&["--workspace", "demo~"]),
             Err("--workspace \"demo~\" is not a ULID".to_owned())
         );
-    }
-
-    #[test]
-    fn lowercase_and_uppercase_name_the_same_workspace() {
-        let upper = workspace(&["--workspace", "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C"]).expect("a ULID");
-        let lower = workspace(&["--workspace", "01jcq7zk3m5v8w9x0y1z2a3b4c"]).expect("a ULID");
-        assert_eq!(upper, lower);
-        assert_eq!(upper.0.to_string(), "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C");
     }
 }

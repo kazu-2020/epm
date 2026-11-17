@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt;
+use std::str::FromStr;
 
 use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
@@ -9,6 +11,28 @@ use crate::dependency_order::dependency_order;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WorkspaceGlobalId(pub Ulid);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidWorkspaceGlobalId;
+
+impl FromStr for WorkspaceGlobalId {
+    type Err = InvalidWorkspaceGlobalId;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        // Not Ulid::from_string alone: it drops the bits above 128, so "8..." would name the workspace "0...".
+        Ulid::from_string(text)
+            .ok()
+            .filter(|ulid| ulid.to_string().eq_ignore_ascii_case(text))
+            .map(WorkspaceGlobalId)
+            .ok_or(InvalidWorkspaceGlobalId)
+    }
+}
+
+impl fmt::Display for WorkspaceGlobalId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
 
 pub struct UncheckedWorkspace {
     pub dimensions: Vec<Dimension>,

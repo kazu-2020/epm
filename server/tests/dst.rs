@@ -25,7 +25,7 @@ use ulid::Ulid;
 use workspace::{Workspace, WorkspaceGlobalId};
 
 const DEFAULT_SEEDS: u64 = 2000;
-const WORKSPACE: &str = "00000000000000000000000001";
+const WORKSPACE: WorkspaceGlobalId = WorkspaceGlobalId(Ulid(1));
 const CALCULATION: Duration = Duration::from_millis(250);
 
 struct Model {
@@ -103,7 +103,7 @@ struct Run {
 }
 
 impl common::Server for Assignees {
-    fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
+    fn start(&self, store: Arc<dyn ObjectStore>, _: String, epoch: u64) -> common::Started {
         let mut settings = Settings {
             calculation: Calculation::Simulated(CALCULATION),
             snapshot_every: 1 + self.seed % 3,
@@ -116,12 +116,10 @@ impl common::Server for Assignees {
         // Not a watch: it wakes its waiters in a random order, and the requests would reach the assignee in another order on each run.
         let handle = handle.map(Result::ok).shared();
         let restored = Arc::clone(&self.restored);
-        let global_id =
-            WorkspaceGlobalId(Ulid::from_string(&workspace).expect("the workspace is a ULID"));
         let exit = async move {
             let definition = Workspace::try_new(representative::generate(&Size::TINY, 7))
                 .expect("a valid workspace");
-            let (engine, start) = server::restore(store.as_ref(), global_id, definition)
+            let (engine, start) = server::restore(store.as_ref(), WORKSPACE, definition)
                 .await
                 .map_err(|error| format!("{error:?}"))?;
             restored
@@ -133,7 +131,7 @@ impl common::Server for Assignees {
                 start,
                 settings,
                 store,
-                global_id,
+                WORKSPACE,
                 AssigneeId {
                     epoch: Epoch(epoch),
                     process: ProcessId(u128::from(epoch)),
@@ -233,8 +231,13 @@ fn simulate(model: &Model, seed: u64) -> Run {
         .build()
         .expect("a runtime")
         .block_on(async {
-            let outcome =
-                common::simulate(Arc::new(assignees), Arc::clone(&inner), WORKSPACE, seed).await;
+            let outcome = common::simulate(
+                Arc::new(assignees),
+                Arc::clone(&inner),
+                &WORKSPACE.to_string(),
+                seed,
+            )
+            .await;
             let listed: Vec<_> = inner
                 .list(Some(&Path::from(format!("{WORKSPACE}/snapshot"))))
                 .try_collect()

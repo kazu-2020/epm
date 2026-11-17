@@ -138,7 +138,7 @@ pub fn start(
         commit_sender: commit_sender.clone(),
     };
     let request_ids = start.request_ids.clone();
-    let workspace = workspace.0.to_string();
+    let workspace = workspace.to_string();
     let run = async move {
         let calculator = match settings.calculation {
             Calculation::Threads(threads) => Calculator::Thread(pool(threads)),

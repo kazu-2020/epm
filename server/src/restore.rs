@@ -14,7 +14,7 @@ pub async fn restore(
     global_id: WorkspaceGlobalId,
     mut workspace: Workspace,
 ) -> Result<(Engine, Start), CalculateError> {
-    let folder = Path::from(global_id.0.to_string()).join("snapshot");
+    let folder = Path::from(global_id.to_string()).join("snapshot");
     // Not an error: without a list, the assignee reads the whole log, which gives the same state.
     let mut found = store
         .list_with_delimiter(Some(&folder))

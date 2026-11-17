@@ -392,7 +392,7 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_assignee() {
     let unchecked = tokio::spawn(async move {
         serve(
             writer,
-            &support::WORKSPACE.0.to_string(),
+            &support::WORKSPACE.to_string(),
             AssigneeId {
                 epoch: Epoch(1),
                 process: ProcessId(1),
@@ -452,7 +452,7 @@ async fn restored(store: &Arc<dyn ObjectStore>) -> (Engine, Start) {
 fn snapshot_object(count: usize, name: &str) -> Path {
     Path::from(format!(
         "{}/snapshot/{count:020}/{name}",
-        support::WORKSPACE.0
+        support::WORKSPACE
     ))
 }
 
