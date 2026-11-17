@@ -228,6 +228,9 @@ pub const CASES: &[Case] = &[
     },
 ];
 
+const REVISED_COORDINATES: &str =
+    "the '改定' coordinates are within the 3 departments and 2 periods";
+
 pub struct Fixture {
     pub dimensions: Vec<Dimension>,
     pub inputs: Vec<Measure>,
@@ -309,10 +312,18 @@ impl Default for Fixture {
             .find(|input| input.definition().name() == "改定")
             .expect("the fixture defines '改定'");
         let mut delta = revised.delta();
-        delta.set(&[MemberIndex(0), MemberIndex(0)], 5.0).unwrap();
-        delta.delete(&[MemberIndex(1), MemberIndex(0)]).unwrap();
-        delta.set(&[MemberIndex(2), MemberIndex(1)], 3.0).unwrap();
-        *revised = revised.apply(delta.finish()).unwrap();
+        delta
+            .set(&[MemberIndex(0), MemberIndex(0)], 5.0)
+            .expect(REVISED_COORDINATES);
+        delta
+            .delete(&[MemberIndex(1), MemberIndex(0)])
+            .expect(REVISED_COORDINATES);
+        delta
+            .set(&[MemberIndex(2), MemberIndex(1)], 3.0)
+            .expect(REVISED_COORDINATES);
+        *revised = revised
+            .apply(delta.finish())
+            .expect("a delta taken from '改定' applies to '改定'");
         Fixture {
             dimensions,
             inputs,
@@ -392,11 +403,11 @@ fn dimension(
         natural_key_attribute(global_id).global_id,
         [vec![natural_key_attribute(global_id)], attributes].concat(),
     )
-    .unwrap();
+    .expect("each fixture dimension has a text natural key and distinct attributes");
     let global_ids = FixedSizeBinaryArray::try_from_iter(
         (0..natural_keys.len()).map(|row| Ulid(global_id.0.0 * 100 + row as u128).to_bytes()),
     )
-    .unwrap();
+    .expect("every ULID is 16 bytes");
     let mut columns: Vec<ArrayRef> = vec![
         Arc::new(global_ids),
         Arc::new(StringArray::from(natural_keys.to_vec())),
@@ -404,8 +415,10 @@ fn dimension(
     if definition.attributes().len() > 1 {
         columns.push(Arc::new(UInt32Array::from(attribute_values.to_vec())));
     }
-    let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
-    Dimension::try_new(definition, batch, targets).unwrap()
+    let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns)
+        .expect("each fixture dimension has at most one attribute besides its natural key, with one value per member");
+    Dimension::try_new(definition, batch, targets)
+        .expect("each fixture dimension has distinct natural keys and is built after the dimensions it references")
 }
 
 fn measure_definition(
@@ -426,5 +439,6 @@ fn measure(
         .iter()
         .map(|&(coordinate, value)| (coordinate.iter().copied().map(MemberIndex).collect(), value))
         .collect();
-    Measure::from_cells(definition, cells, dimensions).unwrap()
+    Measure::from_cells(definition, cells, dimensions)
+        .expect("the fixture lists each cell once, within the members of its axes")
 }
