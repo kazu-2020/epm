@@ -20,6 +20,7 @@ pub struct Edit {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditError {
     NotAnInput(MeasureGlobalId),
+    // Not unreachable after a resolve: a measure keeps a copy of the member counts, which grows stale when a dimension gains members (#165).
     Coordinate(CoordinateError),
     Cell(CellError),
 }
@@ -71,12 +72,8 @@ impl EditCheck {
             .inputs
             .get(&edit.measure)
             .ok_or(EditError::NotAnInput(edit.measure))?;
-        let axes: Vec<&Dimension> = input
-            .axes
-            .iter()
-            .map(|&axis| &self.dimensions[axis])
-            .collect();
-        let coordinate = resolve(&axes, &edit.coordinate).map_err(EditError::Cell)?;
+        let axes = input.axes.iter().map(|&axis| &self.dimensions[axis]);
+        let coordinate = resolve(axes, &edit.coordinate).map_err(EditError::Cell)?;
         let delta = edits
             .deltas
             .entry(edit.measure)

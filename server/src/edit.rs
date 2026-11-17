@@ -44,9 +44,9 @@ pub fn encode(edit: &Edit) -> Bytes {
     let mut out = BytesMut::new();
     out.put_u8(VERSION);
     out.put_slice(&edit.measure.0.to_bytes());
-    let count = u32::try_from(edit.coordinate.len()).expect("a coordinate has < 2^32 members");
+    let count = u32::try_from(edit.coordinate.iter().len()).expect("a coordinate has < 2^32 axes");
     out.put_u32_le(count);
-    for (axis, member) in &edit.coordinate {
+    for (axis, member) in edit.coordinate.iter() {
         out.put_slice(&axis.0.to_bytes());
         out.put_slice(&member.0.to_bytes());
     }
@@ -87,7 +87,7 @@ pub fn decode(mut bytes: Bytes) -> Result<Edit, DecodeError> {
     }
     Ok(Edit {
         measure,
-        coordinate,
+        coordinate: coordinate.into_iter().collect(),
         value,
     })
 }
@@ -106,10 +106,12 @@ mod tests {
     fn edit(value: Option<f64>) -> Edit {
         Edit {
             measure: MeasureGlobalId(Ulid(0x0102)),
-            coordinate: vec![
+            coordinate: [
                 (DimensionGlobalId(Ulid(0x0a)), MemberGlobalId(Ulid(3))),
                 (DimensionGlobalId(Ulid(0x0b)), MemberGlobalId(Ulid(0x0405))),
-            ],
+            ]
+            .into_iter()
+            .collect(),
             value,
         }
     }

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{BuildHasher, Hash, RandomState};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -35,6 +36,14 @@ impl fmt::Display for InvalidGlobalId {
 
 impl std::error::Error for InvalidGlobalId {}
 
+impl FromStr for DimensionGlobalId {
+    type Err = InvalidGlobalId;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        parse_global_id(text).map(DimensionGlobalId)
+    }
+}
+
 impl fmt::Display for DimensionGlobalId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
@@ -43,6 +52,14 @@ impl fmt::Display for DimensionGlobalId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MemberGlobalId(pub Ulid);
+
+impl FromStr for MemberGlobalId {
+    type Err = InvalidGlobalId;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        parse_global_id(text).map(MemberGlobalId)
+    }
+}
 
 impl fmt::Display for MemberGlobalId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

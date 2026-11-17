@@ -8,7 +8,6 @@ use bytes::Bytes;
 use change_log::{
     Admit, AssigneeId, Commit, Request, RequestId, Sequence, Slot, Start, Submission,
 };
-use dimension::Dimension;
 use measure::{CoordinateError, MeasureGlobalId};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
@@ -428,19 +427,14 @@ fn values(
                 .iter()
                 .find(|candidate| candidate.global_id() == *measure)
                 .ok_or(ReadError::NoMeasure(*measure))?;
-            let axes: Vec<&Dimension> = measure
-                .definition()
-                .axes()
-                .iter()
-                .map(|&axis| {
-                    engine
-                        .dimensions()
-                        .iter()
-                        .find(|dimension| dimension.global_id() == axis)
-                        .expect("every measure of the engine is made from its dimensions")
-                })
-                .collect();
-            let coordinate = resolve(&axes, coordinate).map_err(ReadError::Cell)?;
+            let axes = measure.definition().axes().iter().map(|&axis| {
+                engine
+                    .dimensions()
+                    .iter()
+                    .find(|dimension| dimension.global_id() == axis)
+                    .expect("every measure of the engine is made from its dimensions")
+            });
+            let coordinate = resolve(axes, coordinate).map_err(ReadError::Cell)?;
             measure.get(&coordinate).map_err(ReadError::Coordinate)
         })
         .collect()

@@ -4,7 +4,8 @@ use datagen::cases::exact;
 use datagen::numbered_dimension;
 use datagen::representative::{self, Size};
 use dimension::{
-    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, InvalidGlobalId, MemberIndex,
+    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, InvalidGlobalId,
+    MemberGlobalId, MemberIndex,
 };
 use formula::{AxisErrorKind, EvaluateError, ResolveErrorKind};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
@@ -299,8 +300,14 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     let mut result = quantity(Some(2.5));
     result.measure = SALES;
     assert_eq!(checks.check(&result), Err(EditError::NotAnInput(SALES)));
-    let mut short = quantity(Some(2.5));
-    short.coordinate.pop();
+    let pairs: Vec<_> = quantity(None).coordinate.iter().collect();
+    let (first, _) = pairs[0];
+    let member = pairs[1].1;
+    let with = |coordinate: Vec<(DimensionGlobalId, MemberGlobalId)>| Edit {
+        coordinate: coordinate.into_iter().collect(),
+        ..quantity(Some(2.5))
+    };
+    let short = with(pairs[1..].to_vec());
     assert_eq!(
         checks.check(&short),
         Err(EditError::Cell(CellError::Length {
@@ -308,22 +315,21 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
             found: 4,
         }))
     );
-    let mut swapped = quantity(Some(2.5));
-    let first = swapped.coordinate[0].0;
-    swapped.coordinate[0].0 = PERIOD_OTHER;
+    let mut swapped = pairs.clone();
+    swapped[0].0 = PERIOD_OTHER;
     assert_eq!(
-        checks.check(&swapped),
+        checks.check(&with(swapped)),
         Err(EditError::Cell(CellError::MissingAxis(first)))
     );
-    let mut repeated = quantity(Some(2.5));
-    repeated.coordinate[0] = repeated.coordinate[1];
+    let mut repeated = pairs.clone();
+    repeated[0] = repeated[1];
     assert_eq!(
-        checks.check(&repeated),
+        checks.check(&with(repeated)),
         Err(EditError::Cell(CellError::MissingAxis(first)))
     );
-    let mut foreign = quantity(Some(2.5));
-    let member = foreign.coordinate[1].1;
-    foreign.coordinate[0].1 = member;
+    let mut foreign = pairs;
+    foreign[0].1 = member;
+    let foreign = with(foreign);
     assert_eq!(
         checks.check(&foreign),
         Err(EditError::Cell(CellError::NoMember {
@@ -598,19 +604,22 @@ fn a_coordinate_names_a_member_by_its_global_id_in_whatever_row_the_member_is() 
         &[],
     )
     .expect("a valid dimension");
-    let coordinate = [(dimension.global_id(), member)];
+    let coordinate: Coordinate = [(dimension.global_id(), member)].into_iter().collect();
 
     assert_eq!(
-        resolve(&[&dimension], &coordinate),
+        resolve([&dimension].into_iter(), &coordinate),
         Ok(vec![MemberIndex(1)])
     );
-    assert_eq!(resolve(&[&moved], &coordinate), Ok(vec![MemberIndex(0)]));
+    assert_eq!(
+        resolve([&moved].into_iter(), &coordinate),
+        Ok(vec![MemberIndex(0)])
+    );
 }
 
 #[test]
 fn a_cell_error_names_what_the_coordinate_lacks() {
     let axis = DimensionGlobalId(Ulid(1));
-    let member = dimension::MemberGlobalId(Ulid(2));
+    let member = MemberGlobalId(Ulid(2));
     assert_eq!(
         CellError::Length {
             expected: 5,

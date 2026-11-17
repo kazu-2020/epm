@@ -172,7 +172,7 @@ async fn a_rejected_edit_returns_its_reason() {
         )))
     );
     let mut short = quantity(Some(1.0));
-    short.coordinate.pop();
+    short.coordinate = short.coordinate.iter().skip(1).collect();
     assert_eq!(
         assignee.handle.submit(id("short"), &short).await,
         Err(SubmitError::Rejected(Rejection::Invalid(Invalid::Cell(
@@ -413,7 +413,10 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     assert_eq!(
         assignee
             .handle
-            .read(Some(Sequence(0)), &[(SALES, cells()[1].1[..1].to_vec())])
+            .read(
+                Some(Sequence(0)),
+                &[(SALES, cells()[1].1.iter().take(1).collect())]
+            )
             .await,
         Err(ReadError::Cell(CellError::Length {
             expected: 5,
@@ -424,7 +427,10 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     assert_eq!(
         assignee
             .handle
-            .read(Some(Sequence(9)), &[(unknown, vec![])])
+            .read(
+                Some(Sequence(9)),
+                &[(unknown, std::iter::empty().collect())]
+            )
             .await,
         Err(ReadError::NoMeasure(unknown)),
         "not NotCommitted: no retry can read this measure"

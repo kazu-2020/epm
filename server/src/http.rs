@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::str::FromStr;
 use std::time::Duration;
 
 use axum::extract::State;
@@ -9,14 +10,13 @@ use axum::routing::post;
 use axum::{Json, Router};
 use bytes::Bytes;
 use change_log::{RequestId, Sequence};
-use dimension::{DimensionGlobalId, MemberGlobalId, MemberIndex, parse_global_id};
+use dimension::{InvalidGlobalId, MemberIndex};
 use measure::MeasureGlobalId;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use ulid::Ulid;
 use workspace::Coordinate;
 
 use crate::{Edit, Exit, Handle, Invalid, Loading, ReadError, Rejection, SubmitError};
@@ -227,8 +227,7 @@ fn parse<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, Fai
 }
 
 fn measure(text: &str) -> Result<MeasureGlobalId, Failure> {
-    text.parse()
-        .map_err(|error| Failure::new(Code::InvalidArgument, format!("measure {text:?}: {error}")))
+    global_id("measure", text)
 }
 
 fn coordinate(members: Vec<AxisMember>) -> Result<Coordinate, Failure> {
@@ -236,15 +235,15 @@ fn coordinate(members: Vec<AxisMember>) -> Result<Coordinate, Failure> {
         .into_iter()
         .map(|AxisMember { dimension, member }| {
             Ok((
-                DimensionGlobalId(ulid("dimension", &dimension)?),
-                MemberGlobalId(ulid("member", &member)?),
+                global_id("dimension", &dimension)?,
+                global_id("member", &member)?,
             ))
         })
         .collect()
 }
 
-fn ulid(name: &str, text: &str) -> Result<Ulid, Failure> {
-    parse_global_id(text)
+fn global_id<T: FromStr<Err = InvalidGlobalId>>(name: &str, text: &str) -> Result<T, Failure> {
+    text.parse()
         .map_err(|error| Failure::new(Code::InvalidArgument, format!("{name} {text:?}: {error}")))
 }
 

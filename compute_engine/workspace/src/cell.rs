@@ -2,7 +2,20 @@ use std::fmt;
 
 use dimension::{Dimension, DimensionGlobalId, Member, MemberGlobalId, MemberIndex};
 
-pub type Coordinate = Vec<(DimensionGlobalId, MemberGlobalId)>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Coordinate(Vec<(DimensionGlobalId, MemberGlobalId)>);
+
+impl Coordinate {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (DimensionGlobalId, MemberGlobalId)> + '_ {
+        self.0.iter().copied()
+    }
+}
+
+impl FromIterator<(DimensionGlobalId, MemberGlobalId)> for Coordinate {
+    fn from_iter<I: IntoIterator<Item = (DimensionGlobalId, MemberGlobalId)>>(pairs: I) -> Self {
+        Coordinate(pairs.into_iter().collect())
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CellError {
@@ -17,23 +30,23 @@ pub enum CellError {
     },
 }
 
-pub fn resolve(
-    declared: &[&Dimension],
-    coordinate: &[(DimensionGlobalId, MemberGlobalId)],
+pub fn resolve<'d>(
+    declared: impl ExactSizeIterator<Item = &'d Dimension>,
+    coordinate: &Coordinate,
 ) -> Result<Vec<MemberIndex>, CellError> {
-    if coordinate.len() != declared.len() {
+    if coordinate.0.len() != declared.len() {
         return Err(CellError::Length {
             expected: declared.len(),
-            found: coordinate.len(),
+            found: coordinate.0.len(),
         });
     }
+    // Not a check for a repeated axis: with equal lengths, a repeated axis leaves a declared axis missing.
     declared
-        .iter()
         .map(|dimension| {
             let axis = dimension.global_id();
-            let &(_, member) = coordinate
+            let (_, member) = coordinate
                 .iter()
-                .find(|&&(named, _)| named == axis)
+                .find(|&(named, _)| named == axis)
                 .ok_or(CellError::MissingAxis(axis))?;
             dimension
                 .member_by_global_id(member)

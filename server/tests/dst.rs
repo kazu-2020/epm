@@ -64,16 +64,13 @@ impl Model {
             let input = inputs
                 .iter()
                 .position(|input| input.global_id() == edit.measure)?;
-            let axes: Vec<&Dimension> = inputs[input]
-                .definition()
-                .axes()
-                .iter()
-                .filter_map(|&axis| {
-                    let mut dimensions = self.workspace.dimensions().iter();
-                    dimensions.find(|dimension| dimension.global_id() == axis)
-                })
-                .collect();
-            let coordinate = workspace::resolve(&axes, &edit.coordinate).ok()?;
+            let axes = inputs[input].definition().axes().iter().map(|&axis| {
+                let mut dimensions = self.workspace.dimensions().iter();
+                dimensions
+                    .find(|dimension| dimension.global_id() == axis)
+                    .expect("an input is made from the dimensions of its workspace")
+            });
+            let coordinate = workspace::resolve(axes, &edit.coordinate).ok()?;
             match edit.value {
                 Some(value) => cells[input].insert(coordinate, value),
                 None => cells[input].remove(&coordinate),
