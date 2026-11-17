@@ -3,7 +3,7 @@ use std::ops::Range;
 use dimension::{AttributeGlobalId, DimensionGlobalId, MemberIndex};
 use measure::MeasureGlobalId;
 
-use crate::expression::BinaryOperator;
+use crate::expression::{BinaryOperator, FilteredAxis};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedExpression {
@@ -32,7 +32,7 @@ pub enum ResolvedExpressionKind {
         value: Box<ResolvedExpression>,
         dimension: DimensionGlobalId,
         members: Vec<MemberIndex>,
-        keeps_axis: bool,
+        filtered_axis: FilteredAxis,
     },
     Error,
 }

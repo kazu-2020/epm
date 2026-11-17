@@ -23,7 +23,8 @@ struct Model {
 fn reversed(definition: &MeasureDefinition) -> MeasureDefinition {
     let mut axes = definition.axes().to_vec();
     axes.reverse();
-    MeasureDefinition::try_new(definition.global_id(), definition.name().into(), axes).unwrap()
+    MeasureDefinition::try_new(definition.global_id(), definition.name().into(), axes)
+        .expect("a reversed definition keeps its valid axes")
 }
 
 impl Model {
@@ -103,7 +104,7 @@ impl Model {
         self.workspace
             .inputs
             .iter()
-            .map(|input| input.definition())
+            .map(Measure::definition)
             .chain(
                 self.workspace
                     .formulas

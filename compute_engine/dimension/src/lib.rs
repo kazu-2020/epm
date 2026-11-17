@@ -175,13 +175,13 @@ struct UniqueIndex {
 impl UniqueIndex {
     fn new<K: Hash + Eq>(rows: u32, key: impl Fn(usize) -> K) -> Result<Self, K> {
         let hasher = RandomState::new();
-        let mut index = HashTable::with_capacity(rows as usize);
+        let mut index = HashTable::with_capacity(usize_from(rows));
         for row in 0..rows {
-            let value = key(row as usize);
+            let value = key(usize_from(row));
             match index.entry(
                 hasher.hash_one(&value),
-                |other: &MemberIndex| key(other.0 as usize) == value,
-                |other: &MemberIndex| hasher.hash_one(key(other.0 as usize)),
+                |other: &MemberIndex| key(usize_from(other.0)) == value,
+                |other: &MemberIndex| hasher.hash_one(key(usize_from(other.0))),
             ) {
                 Entry::Occupied(_) => return Err(value),
                 Entry::Vacant(slot) => {
@@ -195,10 +195,10 @@ impl UniqueIndex {
         })
     }
 
-    fn find<K: Hash + Eq>(&self, wanted: K, key: impl Fn(usize) -> K) -> Option<MemberIndex> {
+    fn find<K: Hash + Eq>(&self, wanted: &K, key: impl Fn(usize) -> K) -> Option<MemberIndex> {
         self.rows
-            .find(self.hasher.hash_one(&wanted), |row| {
-                key(row.0 as usize) == wanted
+            .find(self.hasher.hash_one(wanted), |row| {
+                key(usize_from(row.0)) == *wanted
             })
             .copied()
     }
@@ -286,7 +286,7 @@ impl Dimension {
         let natural_keys = natural_key_column(&definition, &members);
         for row in 0..rows {
             let member = MemberIndex(row);
-            let row = row as usize;
+            let row = usize_from(row);
             if global_ids.is_null(row) {
                 return Err(DimensionError::NullGlobalId(member));
             }
@@ -350,7 +350,7 @@ impl Dimension {
         let global_ids = global_id_column(&self.members);
         let id = self
             .by_global_id
-            .find(global_id.0, |row| ulid_at(global_ids, row))?;
+            .find(&global_id.0, |row| ulid_at(global_ids, row))?;
         self.member(id)
     }
 
@@ -358,7 +358,7 @@ impl Dimension {
         let natural_keys = natural_key_column(&self.definition, &self.members);
         let id = self
             .by_natural_key
-            .find(natural_key, |row| natural_keys.value(row))?;
+            .find(&natural_key, |row| natural_keys.value(row))?;
         self.member(id)
     }
 
@@ -446,13 +446,13 @@ impl<'d> Member<'d> {
     pub fn global_id(self) -> MemberGlobalId {
         MemberGlobalId(ulid_at(
             global_id_column(&self.dimension.members),
-            self.id.0 as usize,
+            usize_from(self.id.0),
         ))
     }
 
     pub fn natural_key(self) -> &'d str {
         natural_key_column(&self.dimension.definition, &self.dimension.members)
-            .value(self.id.0 as usize)
+            .value(usize_from(self.id.0))
     }
 }
 
@@ -472,7 +472,7 @@ impl<'d> TextAttribute<'d> {
     }
 
     pub fn value(self, member: MemberIndex) -> Option<&'d str> {
-        let row = member.0 as usize;
+        let row = usize_from(member.0);
         (row < self.values.len() && self.values.is_valid(row)).then(|| self.values.value(row))
     }
 }
@@ -498,7 +498,7 @@ impl<'d> ReferenceAttribute<'d> {
     }
 
     pub fn value(self, member: MemberIndex) -> Option<MemberIndex> {
-        let row = member.0 as usize;
+        let row = usize_from(member.0);
         (row < self.values.len() && self.values.is_valid(row))
             .then(|| MemberIndex(self.values.value(row)))
     }
@@ -523,6 +523,10 @@ impl fmt::Debug for ReferenceAttribute<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self.definition, f)
     }
+}
+
+fn usize_from(value: u32) -> usize {
+    usize::try_from(value).expect("usize holds every u32 on supported targets")
 }
 
 fn ulid_at(global_ids: &FixedSizeBinaryArray, row: usize) -> Ulid {

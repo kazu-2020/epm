@@ -2,8 +2,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use datagen::representative::{self, Size};
 use dimension::{Dimension, DimensionGlobalId, MemberIndex};
+use measure::Measure;
 use ulid::Ulid;
-use workspace::Workspace;
+use workspace::{CompiledFormula, Workspace};
 
 use crate::region::Region;
 
@@ -60,16 +61,12 @@ impl Model {
     ) -> Option<Region> {
         let (axes, members): (Vec<DimensionGlobalId>, Vec<u32>) = changed.iter().copied().unzip();
         let region = Region::of_changes(&axes, [members.as_slice()]).expect("one cell changed");
-        let definitions = self
-            .workspace
-            .inputs()
-            .iter()
-            .map(|input| input.definition());
+        let definitions = self.workspace.inputs().iter().map(Measure::definition);
         let results = self
             .workspace
             .formulas()
             .iter()
-            .map(|formula| formula.result());
+            .map(CompiledFormula::result);
         let measure = definitions
             .chain(results)
             .find(|definition| definition.name() == measure)
@@ -88,6 +85,10 @@ impl Model {
     }
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "an expected region entry is an Option, where None means every member"
+)]
 fn only(members: &[u32]) -> Option<BTreeSet<u32>> {
     Some(members.iter().copied().collect())
 }
@@ -99,10 +100,9 @@ fn assert_region(region: &Region, expected: &[(DimensionGlobalId, Option<BTreeSe
 }
 
 #[test]
-fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
+fn a_changed_quantity_marks_only_the_sales_and_shares_that_depend_on_it() {
     let model = Model::new();
     let budget = model.member(VERSION, "予算");
-    let actual = model.member(VERSION, "実績");
     let quantity = [
         (DEPARTMENT, 1),
         (PRODUCT, 2),
@@ -136,7 +136,12 @@ fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
             (VERSION, only(&[budget])),
         ],
     );
+}
 
+#[test]
+fn a_changed_actual_profit_marks_its_variance_but_not_an_unrelated_version() {
+    let model = Model::new();
+    let actual = model.member(VERSION, "実績");
     let profit = [
         (DEPARTMENT, 1),
         (PRODUCT, 2),
@@ -159,7 +164,12 @@ fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
     let mut unrelated = profit;
     unrelated[4] = (VERSION, forecast);
     assert_eq!(model.changed("粗利", &unrelated, "粗利予実差"), None);
+}
 
+#[test]
+fn a_changed_category_amount_marks_only_the_operating_profit_that_depends_on_it() {
+    let model = Model::new();
+    let budget = model.member(VERSION, "予算");
     let selling = model.member(CATEGORY, "販売費及び一般管理費");
     let category = [
         (CATEGORY, selling),
@@ -178,7 +188,12 @@ fn a_changed_cell_marks_only_the_cells_that_depend_on_it() {
             (PERIOD, only(&[4])),
         ],
     );
+}
 
+#[test]
+fn a_changed_account_amount_marks_only_the_group_amount_of_its_group() {
+    let model = Model::new();
+    let budget = model.member(VERSION, "予算");
     let accounts = model.dimension(ACCOUNT);
     let account = (0..accounts.len())
         .find(|&account| {

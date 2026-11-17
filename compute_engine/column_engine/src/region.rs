@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use dimension::DimensionGlobalId;
 use measure::CoordinatePacking;
 
+use crate::usize_from;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Region {
     members: BTreeMap<DimensionGlobalId, BTreeSet<u32>>,
@@ -38,7 +40,7 @@ impl Region {
         let mut seen: Vec<Vec<bool>> = vec![Vec::new(); axes.len()];
         for &packed in packed_coordinates {
             for (axis, members) in seen.iter_mut().enumerate() {
-                let member = packing.member(packed, axis) as usize;
+                let member = usize_from(packing.member(packed, axis));
                 if member >= members.len() {
                     members.resize(member + 1, false);
                 }

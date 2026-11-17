@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::natural_key_attribute;
+use crate::{natural_key_attribute, zipf_member};
 use arrow_array::{
     ArrayRef, FixedSizeBinaryArray, Float64Array, RecordBatch, StringArray, UInt32Array,
 };
@@ -215,7 +215,9 @@ pub fn formulas() -> Vec<Formula> {
         .enumerate()
         .map(|(index, &(name, axes, text))| Formula {
             result: MeasureDefinition::try_new(
-                MeasureGlobalId(Ulid(200 + index as u128)),
+                MeasureGlobalId(Ulid(
+                    200 + u128::try_from(index).expect("a formula index fits in u128"),
+                )),
                 name.into(),
                 axes.to_vec(),
             )
@@ -265,9 +267,9 @@ fn dimension(
     )
     .expect("the representative dimension definitions are valid");
     let first_member = global_id.0.0 << 32;
-    let global_ids = FixedSizeBinaryArray::try_from_iter(
-        (0..natural_keys.len()).map(|row| Ulid(first_member + row as u128).to_bytes()),
-    )
+    let global_ids = FixedSizeBinaryArray::try_from_iter((0..natural_keys.len()).map(|row| {
+        Ulid(first_member + u128::try_from(row).expect("a member row fits in u128")).to_bytes()
+    }))
     .expect("every member ULID is 16 bytes");
     let mut columns: Vec<ArrayRef> = vec![
         Arc::new(global_ids),
@@ -282,6 +284,53 @@ fn dimension(
         .expect("the representative dimensions are valid")
 }
 
+fn account_dimensions() -> Vec<Dimension> {
+    let mut dimensions: Vec<Dimension> = Vec::new();
+    let category_names = CATEGORIES
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+    dimensions.push(dimension(
+        CATEGORY,
+        "勘定科目カテゴリ",
+        category_names,
+        None,
+        &dimensions,
+    ));
+    let mut group_names = Vec::new();
+    let mut group_categories = Vec::new();
+    let mut account_names = Vec::new();
+    let mut account_groups = Vec::new();
+    for (category, (_, groups)) in CATEGORIES.iter().enumerate() {
+        for &(group, accounts) in *groups {
+            for number in 1..=accounts {
+                account_names.push(format!("{group}{number}"));
+                account_groups.push(
+                    u32::try_from(group_names.len()).expect("there are a few account groups"),
+                );
+            }
+            group_names.push(group.to_string());
+            group_categories
+                .push(u32::try_from(category).expect("there are a few account categories"));
+        }
+    }
+    dimensions.push(dimension(
+        GROUP,
+        "勘定科目グループ",
+        group_names,
+        Some((attribute(101, "カテゴリ", CATEGORY), group_categories)),
+        &dimensions,
+    ));
+    dimensions.push(dimension(
+        ACCOUNT,
+        "勘定科目",
+        account_names,
+        Some((attribute(102, "グループ", GROUP), account_groups)),
+        &dimensions,
+    ));
+    dimensions
+}
+
 fn numbered(prefix: &str, member_count: u32) -> Vec<String> {
     (1..=member_count)
         .map(|number| format!("{prefix}{number}"))
@@ -294,54 +343,17 @@ fn cents(cents: u32) -> f64 {
 
 impl Representative {
     fn department_kind(&self, department: u32) -> DepartmentKind {
-        DEPARTMENT_KINDS[(department / self.size.departments_per_kind) as usize]
+        let kind = department / self.size.departments_per_kind;
+        DEPARTMENT_KINDS[usize::try_from(kind).expect("usize holds every u32 on supported targets")]
     }
 
     fn departments(&self) -> u32 {
-        self.size.departments_per_kind * DEPARTMENT_KINDS.len() as u32
+        self.size.departments_per_kind
+            * u32::try_from(DEPARTMENT_KINDS.len()).expect("there are a few department kinds")
     }
 
     fn dimensions(&mut self) -> Vec<Dimension> {
-        let mut dimensions: Vec<Dimension> = Vec::new();
-        let category_names = CATEGORIES
-            .iter()
-            .map(|(name, _)| name.to_string())
-            .collect();
-        dimensions.push(dimension(
-            CATEGORY,
-            "勘定科目カテゴリ",
-            category_names,
-            None,
-            &dimensions,
-        ));
-        let mut group_names = Vec::new();
-        let mut group_categories = Vec::new();
-        let mut account_names = Vec::new();
-        let mut account_groups = Vec::new();
-        for (category, (_, groups)) in CATEGORIES.iter().enumerate() {
-            for &(group, accounts) in *groups {
-                for number in 1..=accounts {
-                    account_names.push(format!("{group}{number}"));
-                    account_groups.push(group_names.len() as u32);
-                }
-                group_names.push(group.to_string());
-                group_categories.push(category as u32);
-            }
-        }
-        dimensions.push(dimension(
-            GROUP,
-            "勘定科目グループ",
-            group_names,
-            Some((attribute(101, "カテゴリ", CATEGORY), group_categories)),
-            &dimensions,
-        ));
-        dimensions.push(dimension(
-            ACCOUNT,
-            "勘定科目",
-            account_names,
-            Some((attribute(102, "グループ", GROUP), account_groups)),
-            &dimensions,
-        ));
+        let mut dimensions = account_dimensions();
         dimensions.push(dimension(
             DIVISION,
             "事業部",
@@ -402,7 +414,7 @@ impl Representative {
         dimensions.push(dimension(
             VERSION,
             "バージョン",
-            VERSIONS.iter().map(|name| name.to_string()).collect(),
+            VERSIONS.iter().map(ToString::to_string).collect(),
             None,
             &dimensions,
         ));
@@ -416,7 +428,9 @@ impl Representative {
         });
         let unit_material_costs = prices
             .iter()
-            .map(|&price| (price * self.random.random_range(30..=60) as f64).round() / 100.0)
+            .map(|&price| {
+                (price * f64::from(self.random.random_range(30..=60_i32))).round() / 100.0
+            })
             .collect();
         let yields = self.dense(&product_axes, |random| cents(random.random_range(85..=100)));
         let product_columns = self.dense_columns(&product_axes);
@@ -461,7 +475,7 @@ impl Representative {
                 CUSTOMER => self.size.customers,
                 DEPARTMENT => self.departments(),
                 PERIOD => PERIODS,
-                VERSION => VERSIONS.len() as u32,
+                VERSION => u32::try_from(VERSIONS.len()).expect("there are a few versions"),
                 _ => unreachable!("only these axes are filled densely"),
             })
             .collect()
@@ -470,7 +484,12 @@ impl Representative {
     fn dense_columns(&self, axes: &[DimensionGlobalId]) -> Vec<Vec<u32>> {
         let member_counts = self.member_counts(axes);
         let cells: u32 = member_counts.iter().product();
-        let mut columns = vec![Vec::with_capacity(cells as usize); axes.len()];
+        let mut columns = vec![
+            Vec::with_capacity(
+                usize::try_from(cells).expect("usize holds every u32 on supported targets")
+            );
+            axes.len()
+        ];
         for cell in 0..cells {
             let mut rest = cell;
             for (column, &member_count) in columns.iter_mut().zip(&member_counts).rev() {
@@ -502,7 +521,8 @@ impl Representative {
             .map(|&member_count| u64::from(member_count))
             .product::<u64>();
         assert!(
-            (self.size.quantity_cells as u64) < possible / 2,
+            u64::try_from(self.size.quantity_cells).expect("a cell count fits in u64")
+                < possible / 2,
             "the quantity cells fit sparsely into the sales departments"
         );
         let pairs = periods * versions;
@@ -515,15 +535,20 @@ impl Representative {
             .enumerate()
             .map(|(pair, seed)| {
                 let mut random = StdRng::seed_from_u64(seed);
-                let pair = pair as u32;
+                let pair = u32::try_from(pair).expect("pairs is a u32 count");
                 let (period, version) = (pair / versions, pair % versions);
-                let cells = self.size.quantity_cells / pairs as usize
-                    + usize::from((pair as usize) < self.size.quantity_cells % pairs as usize);
+                let pairs =
+                    usize::try_from(pairs).expect("usize holds every u32 on supported targets");
+                let pair =
+                    usize::try_from(pair).expect("usize holds every u32 on supported targets");
+                let cells = self.size.quantity_cells / pairs
+                    + usize::from(pair < self.size.quantity_cells % pairs);
                 let mut seen: HashSet<u64> = HashSet::with_capacity(cells);
                 while seen.len() < cells {
-                    let department = sales_departments + random.sample(department_zipf) as u32 - 1;
-                    let product = random.sample(product_zipf) as u32 - 1;
-                    let customer = random.sample(customer_zipf) as u32 - 1;
+                    let department =
+                        sales_departments + zipf_member(random.sample(department_zipf));
+                    let product = zipf_member(random.sample(product_zipf));
+                    let customer = zipf_member(random.sample(customer_zipf));
                     seen.insert(cell_index(
                         &[period, version, department, product, customer],
                         &member_counts,
@@ -539,7 +564,10 @@ impl Representative {
             .unzip();
         let cell_indexes: Vec<u64> = cell_indexes.into_iter().flatten().collect();
         let values: Vec<f64> = values.into_iter().flatten().collect();
-        debug_assert!(cell_indexes.is_sorted());
+        debug_assert!(
+            cell_indexes.is_sorted(),
+            "each pair covers a later range of cell indexes"
+        );
         let mut columns = vec![Vec::with_capacity(cell_indexes.len()); axes.len()];
         for &cell_index in &cell_indexes {
             for (column, member) in columns
@@ -555,7 +583,8 @@ impl Representative {
         debug_assert!(
             departments
                 .iter()
-                .all(|&department| { self.department_kind(department) == DepartmentKind::Sales })
+                .all(|&department| { self.department_kind(department) == DepartmentKind::Sales }),
+            "only sales departments have quantities"
         );
         measure(0, "数量", &axes, columns, values, references)
     }
@@ -617,7 +646,7 @@ impl Representative {
         let mut columns = vec![Vec::new(); axes.len()];
         let mut values = Vec::new();
         for period in 0..PERIODS {
-            for version in 0..VERSIONS.len() as u32 {
+            for version in 0..u32::try_from(VERSIONS.len()).expect("there are a few versions") {
                 for &(account, department) in &pairs {
                     for (column, member) in columns
                         .iter_mut()
@@ -645,7 +674,8 @@ fn cell_index(coordinate: &[u32], member_counts: &[u32]) -> u64 {
 fn coordinate_of(mut index: u64, member_counts: &[u32]) -> Vec<u32> {
     let mut coordinate = vec![0; member_counts.len()];
     for (member, &member_count) in coordinate.iter_mut().zip(member_counts).rev() {
-        *member = (index % u64::from(member_count)) as u32;
+        *member = u32::try_from(index % u64::from(member_count))
+            .expect("the remainder is below a u32 member count");
         index /= u64::from(member_count);
     }
     coordinate
@@ -667,10 +697,10 @@ fn measure(
     .expect("the generator declares each axis once");
     let mut arrays: Vec<ArrayRef> = columns
         .into_iter()
-        .map(|column| Arc::new(UInt32Array::from(column)) as ArrayRef)
+        .map(|column| -> ArrayRef { Arc::new(UInt32Array::from(column)) })
         .collect();
     arrays.push(Arc::new(Float64Array::from(values)));
     let base = RecordBatch::try_new(Arc::new(definition.schema()), arrays)
         .expect("the columns follow the measure schema");
-    Measure::try_new(definition, base, references).expect("the representative cells are valid")
+    Measure::try_new(definition, &base, references).expect("the representative cells are valid")
 }

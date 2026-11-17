@@ -1,3 +1,9 @@
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "the bench reports its measurements on the terminal"
+)]
+
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

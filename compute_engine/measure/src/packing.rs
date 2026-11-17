@@ -36,14 +36,17 @@ impl CoordinatePacking {
         self.shifts.iter().zip(&self.masks).zip(members).fold(
             0,
             |packed, ((&shift, &mask), member)| {
-                debug_assert!(member <= mask);
+                debug_assert!(member <= mask, "a member fits in the mask of its axis");
                 packed | (u64::from(member) << shift)
             },
         )
     }
 
     pub fn place(&self, axis: usize, member: u32) -> u64 {
-        debug_assert!(self.fits(axis, member));
+        debug_assert!(
+            self.fits(axis, member),
+            "a member fits in the mask of its axis"
+        );
         u64::from(member) << self.shifts[axis]
     }
 

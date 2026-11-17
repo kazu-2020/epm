@@ -1,3 +1,9 @@
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "the bench reports its measurements on the terminal"
+)]
+
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -5,6 +11,10 @@ use datagen::representative::{self, Size};
 use dimension::Dimension;
 use measure::MeasureDefinition;
 
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "a wrong argument stops the bench with its usage, like a missing one"
+)]
 fn main() -> std::io::Result<()> {
     let mut arguments = std::env::args().skip(1);
     let usage = "usage: recalculate <directory> <column|evaluator>";
@@ -73,7 +83,7 @@ fn main() -> std::io::Result<()> {
     for measure in &measures {
         let mut fresh = |buffer: &arrow_buffer::Buffer| {
             if seen
-                .insert(buffer.data_ptr().as_ptr() as usize, buffer.capacity())
+                .insert(buffer.data_ptr().as_ptr().addr(), buffer.capacity())
                 .is_none()
             {
                 buffer.capacity()
@@ -86,7 +96,7 @@ fn main() -> std::io::Result<()> {
         let hash = if hash {
             let mut hasher = std::hash::DefaultHasher::new();
             std::hash::Hash::hash_slice(measure.base_packed_coordinates(), &mut hasher);
-            for value in measure.base_values().iter() {
+            for value in measure.base_values() {
                 std::hash::Hash::hash(&value.to_bits(), &mut hasher);
             }
             format!("\thash {:016x}", std::hash::Hasher::finish(&hasher))

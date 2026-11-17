@@ -164,6 +164,10 @@ pub(super) fn all_normalized(values: &[f64]) -> bool {
 mod tests {
     use super::*;
 
+    fn parallel_rows() -> u64 {
+        u64::try_from(PARALLEL_ROWS).expect("PARALLEL_ROWS fits in u64")
+    }
+
     #[test]
     fn packed_coordinates_are_ascending_only_without_a_repeat_or_a_step_back() {
         assert!(ascending(&[]));
@@ -175,7 +179,7 @@ mod tests {
 
     #[test]
     fn a_step_back_across_the_border_of_two_pieces_is_not_ascending() {
-        let pieces = 2 * PARALLEL_ROWS as u64;
+        let pieces = 2 * parallel_rows();
         let sorted: Vec<u64> = (0..pieces).collect();
         assert!(ascending(&sorted));
 
@@ -190,10 +194,8 @@ mod tests {
 
     #[test]
     fn union_across_many_ranges_equals_the_set_union() {
-        let left: Vec<u64> = (5..5 + 6 * PARALLEL_ROWS as u64).step_by(2).collect();
-        let right: Vec<u64> = (0..5)
-            .chain((5..8 * PARALLEL_ROWS as u64).step_by(4))
-            .collect();
+        let left: Vec<u64> = (5..5 + 6 * parallel_rows()).step_by(2).collect();
+        let right: Vec<u64> = (0..5).chain((5..8 * parallel_rows()).step_by(4)).collect();
         let expected: std::collections::BTreeSet<u64> =
             left.iter().chain(&right).copied().collect();
 

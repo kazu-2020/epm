@@ -24,7 +24,10 @@ impl Delta {
         packed_coordinates: Vec<u64>,
         changes: Vec<Option<f64>>,
     ) -> Delta {
-        debug_assert!(first_unsorted(&packed_coordinates).is_none());
+        debug_assert!(
+            first_unsorted(&packed_coordinates).is_none(),
+            "the packed coordinates of a delta are sorted"
+        );
         Delta {
             measure,
             axes,

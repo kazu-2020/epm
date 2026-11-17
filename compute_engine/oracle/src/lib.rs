@@ -1,10 +1,14 @@
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write;
 
 use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberIndex};
 use duckdb::Connection;
-use formula::{CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign, Term};
+use formula::{
+    CheckedAxis, CheckedExpression, CheckedNode, FilteredAxis, ProductOperator, Sign, Term,
+};
 use measure::{Measure, MeasureGlobalId};
 
+#[derive(Debug)]
 pub struct Oracle {
     connection: Connection,
     packing_orders: PackingOrders,
@@ -138,12 +142,12 @@ fn query(node: &CheckedNode, packing_orders: &PackingOrders) -> Query {
             value,
             dimension,
             members,
-            keeps_axis,
+            filtered_axis,
         } => filter(
             &query(value, packing_orders),
             *dimension,
             members,
-            *keeps_axis,
+            *filtered_axis,
         ),
     };
     let mut items: Vec<String> = query.axes.iter().map(|&axis| column(axis)).collect();
@@ -166,7 +170,7 @@ fn expanded(query: &Query, axes: &[DimensionGlobalId]) -> String {
             items.push(format!("node.{}", column(axis)));
         } else {
             let table = member_table(axis);
-            joins.push_str(&format!(" CROSS JOIN {table}"));
+            let _ = write!(joins, " CROSS JOIN {table}");
             items.push(format!("{table}.member AS {}", column(axis)));
         }
     }
@@ -213,13 +217,14 @@ fn sum_of_terms(terms: &[Term], packing_orders: &PackingOrders) -> Query {
             Sign::Plus => "+",
             Sign::Minus => "-",
         };
-        total.push_str(&format!(" {operator} COALESCE({alias}.value, 0)"));
+        let _ = write!(total, " {operator} COALESCE({alias}.value, 0)");
         let on: Vec<String> = term
             .axes
             .iter()
             .map(|&axis| format!("{alias}.{0} = coordinate.{0}", column(axis)))
             .collect();
-        joins.push_str(&format!(
+        let _ = write!(
+            joins,
             " LEFT JOIN ({}) AS {alias} ON {}",
             term.sql,
             if on.is_empty() {
@@ -227,7 +232,7 @@ fn sum_of_terms(terms: &[Term], packing_orders: &PackingOrders) -> Query {
             } else {
                 on.join(" AND ")
             }
-        ));
+        );
     }
     let mut items: Vec<String> = axes_list
         .iter()
@@ -279,10 +284,10 @@ fn filter(
     value: &Query,
     dimension: DimensionGlobalId,
     members: &[MemberIndex],
-    keeps_axis: bool,
+    filtered_axis: FilteredAxis,
 ) -> Query {
     let mut axes = value.axes.clone();
-    if !keeps_axis {
+    if filtered_axis == FilteredAxis::Drop {
         axes.remove(&dimension);
     }
     let mut items: Vec<String> = axes.iter().map(|&axis| column(axis)).collect();
@@ -319,11 +324,12 @@ fn sum(value: &Query, by: &[CheckedAxis], packing_orders: &PackingOrders) -> Que
             } => {
                 let alias = format!("by_{index}");
                 axes.insert(target);
-                joins.push_str(&format!(
+                let _ = write!(
+                    joins,
                     " JOIN {} AS {alias} ON {alias}.member = node.{} AND {alias}.target IS NOT NULL",
                     attribute_table(attribute),
                     column(dimension)
-                ));
+                );
                 groups.push(format!("{alias}.target"));
                 items.push(format!("{alias}.target AS {}", column(target)));
             }

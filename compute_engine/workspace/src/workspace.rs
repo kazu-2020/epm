@@ -42,6 +42,7 @@ impl fmt::Display for WorkspaceGlobalId {
     }
 }
 
+#[derive(Debug)]
 pub struct UncheckedWorkspace {
     pub dimensions: Vec<Dimension>,
     pub inputs: Vec<Measure>,
@@ -102,7 +103,7 @@ impl Workspace {
         // Not one set of names for each kind: a formula names a dimension and a measure in the same way, so the same name for both would pick one by its place in the formula.
         let mut names = HashSet::new();
         let dimension_names = dimensions.iter().map(Dimension::name);
-        let measure_names = definitions.iter().map(|definition| definition.name());
+        let measure_names = definitions.iter().map(MeasureDefinition::name);
         if let Some(duplicate) = dimension_names
             .chain(measure_names)
             .find(|name| !names.insert(*name))

@@ -7,11 +7,15 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
 use dimension::{Dimension, MemberIndex, ReferenceAttribute};
-use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError, FilteredAxis};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
 use crate::columns::{ByAxis, Columns, find_dimension, packing_of};
 use crate::region::Region;
+
+fn usize_from(value: u32) -> usize {
+    usize::try_from(value).expect("usize holds every u32 on supported targets")
+}
 
 pub fn evaluate(
     expression: &CheckedExpression,
@@ -88,7 +92,7 @@ fn apply(
     {
         for &axis in axes {
             if region.members(axis).map(BTreeSet::len)
-                == Some(find_dimension(dimensions, axis)?.len() as usize)
+                == Some(usize_from(find_dimension(dimensions, axis)?.len()))
             {
                 region = region.without(axis);
             }
@@ -165,7 +169,8 @@ fn evaluate_in(
             .shared
             .borrow()
             .iter()
-            .all(|entry| entry.uses_left == 0 && entry.result.is_none())
+            .all(|entry| entry.uses_left == 0 && entry.result.is_none()),
+        "every shared result is used up and released"
     );
     Ok(columns
         .broadcast(result.axes(), dimensions)?
@@ -194,14 +199,13 @@ fn changed_in(
             value,
             dimension,
             members,
-            keeps_axis,
+            filtered_axis,
         } => changed_in(value, changed, dimensions)?.and_then(|mut region| {
             region.constrain(*dimension, members.iter().map(|member| member.0).collect());
             let region = region.non_empty()?;
-            Some(if *keeps_axis {
-                region
-            } else {
-                region.without(*dimension)
+            Some(match filtered_axis {
+                FilteredAxis::Keep => region,
+                FilteredAxis::Drop => region.without(*dimension),
             })
         }),
         CheckedNode::Sum { value, by } => {
@@ -315,13 +319,12 @@ impl<'a, 'e> Evaluator<'a, 'e> {
             CheckedNode::Filter {
                 dimension,
                 members,
-                keeps_axis,
+                filtered_axis,
                 ..
             } => {
-                let mut region = if *keeps_axis {
-                    region.clone()
-                } else {
-                    region.clone().without(*dimension)
+                let mut region = match filtered_axis {
+                    FilteredAxis::Keep => region.clone(),
+                    FilteredAxis::Drop => region.clone().without(*dimension),
                 };
                 region.constrain(*dimension, members.iter().map(|member| member.0).collect());
                 Ok(region)
@@ -395,7 +398,7 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 }
             }
             CheckedNode::Terms(terms) => Columns::add(
-                terms
+                &terms
                     .iter()
                     .map(|term| Ok((term.sign, self.node(&term.node, region)?)))
                     .collect::<Result<Vec<_>, EvaluateError>>()?,
@@ -415,10 +418,10 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 value,
                 dimension,
                 members,
-                keeps_axis,
+                filtered_axis,
             } => self
                 .node(value, &self.operand_region(node, region)?)?
-                .filter(*dimension, members, *keeps_axis, self.dimensions),
+                .filter(*dimension, members, *filtered_axis, self.dimensions),
             CheckedNode::Sum { value, by } => {
                 let value = self.node(value, &self.operand_region(node, region)?)?;
                 let by = by

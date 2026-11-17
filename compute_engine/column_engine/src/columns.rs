@@ -4,11 +4,12 @@ use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
 use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
-use formula::{EvaluateError, ProductOperator, Sign};
+use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
 use measure::{CoordinatePacking, Measure, MeasureDefinition, MeasureError, normalize};
 use rayon::prelude::*;
 
 use crate::region::Region;
+use crate::usize_from;
 
 mod rows;
 
@@ -88,7 +89,7 @@ fn dense_strides(member_counts: &[u32]) -> Option<(usize, Vec<usize>)> {
     let mut space: usize = 1;
     for (stride, &member_count) in strides.iter_mut().zip(member_counts).rev() {
         *stride = space;
-        space = space.checked_mul(member_count as usize)?;
+        space = space.checked_mul(usize_from(member_count))?;
     }
     (space <= DENSE_LIMIT).then_some((space, strides))
 }
@@ -125,7 +126,7 @@ impl<'c> Index<'c> {
                     let slot: usize = strides
                         .iter()
                         .zip(columns.packing.unpack(packed))
-                        .map(|(stride, member)| stride * member as usize)
+                        .map(|(stride, member)| stride * usize_from(member))
                         .sum();
                     debug_assert_eq!(rows[slot], u32::MAX, "packed coordinates repeat");
                     rows[slot] = u32::try_from(row).expect(
@@ -143,10 +144,10 @@ impl<'c> Index<'c> {
                 let slot: usize = strides
                     .iter()
                     .zip(members)
-                    .map(|(stride, &member)| stride * member as usize)
+                    .map(|(stride, &member)| stride * usize_from(member))
                     .sum();
                 let row = rows[slot];
-                (row != u32::MAX).then_some(row as usize)
+                (row != u32::MAX).then_some(usize_from(row))
             }
             None => self
                 .columns
@@ -392,9 +393,9 @@ impl Columns {
                 pattern |= self.packing.place(axis, member);
                 continue;
             }
-            let mut inside = vec![false; members.last().map_or(0, |&last| last as usize + 1)];
+            let mut inside = vec![false; members.last().map_or(0, |&last| usize_from(last) + 1)];
             for &member in members {
-                inside[member as usize] = true;
+                inside[usize_from(member)] = true;
             }
             checks.push((axis, inside));
         }
@@ -418,7 +419,7 @@ impl Columns {
                         packed & mask == pattern
                             && checks.iter().all(|(axis, inside)| {
                                 inside
-                                    .get(self.packing.member(packed, *axis) as usize)
+                                    .get(usize_from(self.packing.member(packed, *axis)))
                                     .copied()
                                     .unwrap_or(false)
                             })
@@ -488,13 +489,13 @@ impl Columns {
         self,
         dimension: DimensionGlobalId,
         members: &[MemberIndex],
-        keeps_axis: bool,
+        filtered_axis: FilteredAxis,
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         let mut region = Region::default();
         region.constrain(dimension, members.iter().map(|member| member.0).collect());
         let columns = self.restrict(&region);
-        if keeps_axis {
+        if filtered_axis == FilteredAxis::Keep {
             return Ok(columns);
         }
         let position = columns.position(dimension);
@@ -671,7 +672,7 @@ impl Columns {
     }
 
     pub(crate) fn add(
-        terms: Vec<(Sign, Columns)>,
+        terms: &[(Sign, Columns)],
         dimensions: &[&Dimension],
     ) -> Result<Columns, EvaluateError> {
         let mut axes: Vec<DimensionGlobalId> = terms
@@ -790,53 +791,10 @@ impl Columns {
                 outputs
                     .iter()
                     .zip(&strides)
-                    .map(|(axis, stride)| Some(stride * axis.member(self, row)? as usize))
+                    .map(|(axis, stride)| Some(stride * usize_from(axis.member(self, row)?)))
                     .sum()
             };
-            let share = space.div_ceil(rayon::current_num_threads()).max(1);
-            let owners = space.div_ceil(share);
-            let mut totals = vec![0.0; space];
-            let mut seen = vec![false; space];
-            // Not the owner pass with one owner: it would store a slot for every row only to read them all back.
-            if owners == 1 {
-                for row in 0..self.len() {
-                    if let Some(slot) = slot_of(row) {
-                        totals[slot] += self.values[row];
-                        seen[slot] = true;
-                    }
-                }
-            } else {
-                // Not partial totals per piece of rows: one thread adds each slot in row order (ADR 0001).
-                // shortcut: each owner reads all rows (12 B a row), so this pass does not shrink with more threads; hand rows to owners again if the 32-core run shows it.
-                let slots: Vec<u32> = (0..self.len())
-                    .into_par_iter()
-                    .with_min_len(PARALLEL_ROWS)
-                    .map(|row| {
-                        slot_of(row).map_or(u32::MAX, |slot| {
-                            u32::try_from(slot)
-                                .expect("dense_strides keeps space at or below DENSE_LIMIT")
-                        })
-                    })
-                    .collect();
-                totals
-                    .par_chunks_mut(share)
-                    .zip(seen.par_chunks_mut(share))
-                    .enumerate()
-                    .for_each(|(owner, (totals, seen))| {
-                        // Not a write per row to the shared `totals` and `seen`: with few slots, owners share cache lines and wait for each other.
-                        let mut own_totals = vec![0.0; totals.len()];
-                        let mut own_seen = vec![false; seen.len()];
-                        for (&slot, &value) in slots.iter().zip(&self.values[..]) {
-                            let at = (slot as usize).wrapping_sub(owner * share);
-                            if at < own_totals.len() {
-                                own_totals[at] += value;
-                                own_seen[at] = true;
-                            }
-                        }
-                        totals.copy_from_slice(&own_totals);
-                        seen.copy_from_slice(&own_seen);
-                    });
-            }
+            let (totals, seen) = self.dense_totals(space, slot_of);
             let slots: Vec<usize> = (0..space)
                 .into_par_iter()
                 .with_min_len(PARALLEL_ROWS)
@@ -891,6 +849,58 @@ impl Columns {
         ))
     }
 
+    fn dense_totals(
+        &self,
+        space: usize,
+        slot_of: impl Fn(usize) -> Option<usize> + Sync,
+    ) -> (Vec<f64>, Vec<bool>) {
+        let share = space.div_ceil(rayon::current_num_threads()).max(1);
+        let owners = space.div_ceil(share);
+        let mut totals = vec![0.0; space];
+        let mut seen = vec![false; space];
+        // Not the owner pass with one owner: it would store a slot for every row only to read them all back.
+        if owners == 1 {
+            for row in 0..self.len() {
+                if let Some(slot) = slot_of(row) {
+                    totals[slot] += self.values[row];
+                    seen[slot] = true;
+                }
+            }
+        } else {
+            // Not partial totals per piece of rows: one thread adds each slot in row order (ADR 0001).
+            // shortcut: each owner reads all rows (12 B a row), so this pass does not shrink with more threads; hand rows to owners again if the 32-core run shows it.
+            let slots: Vec<u32> = (0..self.len())
+                .into_par_iter()
+                .with_min_len(PARALLEL_ROWS)
+                .map(|row| {
+                    slot_of(row).map_or(u32::MAX, |slot| {
+                        u32::try_from(slot)
+                            .expect("dense_strides keeps space at or below DENSE_LIMIT")
+                    })
+                })
+                .collect();
+            totals
+                .par_chunks_mut(share)
+                .zip(seen.par_chunks_mut(share))
+                .enumerate()
+                .for_each(|(owner, (totals, seen))| {
+                    // Not a write per row to the shared `totals` and `seen`: with few slots, owners share cache lines and wait for each other.
+                    let mut own_totals = vec![0.0; totals.len()];
+                    let mut own_seen = vec![false; seen.len()];
+                    for (&slot, &value) in slots.iter().zip(&self.values[..]) {
+                        let at = usize_from(slot).wrapping_sub(owner * share);
+                        if at < own_totals.len() {
+                            own_totals[at] += value;
+                            own_seen[at] = true;
+                        }
+                    }
+                    totals.copy_from_slice(&own_totals);
+                    seen.copy_from_slice(&own_seen);
+                });
+        }
+        (totals, seen)
+    }
+
     pub(crate) fn broadcast(
         &self,
         axes: &[DimensionGlobalId],
@@ -919,7 +929,7 @@ impl Columns {
                 continue;
             }
             let member_count = find_dimension(dimensions, axis)?.len();
-            let copies = member_count as usize;
+            let copies = usize_from(member_count);
             for column in &mut members {
                 *column = column
                     .iter()
@@ -977,12 +987,7 @@ mod tests {
         let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
         let axis = dimensions[1].global_id();
         let packing = CoordinatePacking::new(&[3]).expect("2 bits fit in a packed coordinate");
-        let sales = Columns::from_packed(
-            vec![axis],
-            packing.clone(),
-            vec![0, 1, 2],
-            vec![3.0, 4.0, 5.0],
-        );
+        let sales = Columns::from_packed(vec![axis], packing, vec![0, 1, 2], vec![3.0, 4.0, 5.0]);
         let cost = Columns {
             axes: sales.axes.clone(),
             packing: sales.packing.clone(),
@@ -991,7 +996,7 @@ mod tests {
         };
         let packed_coordinates = sales.packed_coordinates.clone();
 
-        let profit = Columns::add(vec![(Sign::Plus, sales), (Sign::Minus, cost)], &dimensions)
+        let profit = Columns::add(&[(Sign::Plus, sales), (Sign::Minus, cost)], &dimensions)
             .expect("both terms have every axis");
 
         assert!(profit.packed_coordinates.ptr_eq(&packed_coordinates));

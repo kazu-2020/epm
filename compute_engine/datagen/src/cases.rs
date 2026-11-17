@@ -16,6 +16,7 @@ const DIVISION: DimensionGlobalId = DimensionGlobalId(Ulid(3));
 
 type Cells = [(&'static [u32], f64)];
 
+#[derive(Debug)]
 pub struct Case {
     pub name: &'static str,
     pub steps: &'static [(&'static str, &'static str)],
@@ -231,6 +232,7 @@ pub const CASES: &[Case] = &[
 const REVISED_COORDINATES: &str =
     "the '改定' coordinates are within the 3 departments and 2 periods";
 
+#[derive(Debug)]
 pub struct Fixture {
     pub dimensions: Vec<Dimension>,
     pub inputs: Vec<Measure>,
@@ -404,9 +406,10 @@ fn dimension(
         [vec![natural_key_attribute(global_id)], attributes].concat(),
     )
     .expect("each fixture dimension has a text natural key and distinct attributes that do not reference their own dimension");
-    let global_ids = FixedSizeBinaryArray::try_from_iter(
-        (0..natural_keys.len()).map(|row| Ulid(global_id.0.0 * 100 + row as u128).to_bytes()),
-    )
+    let global_ids = FixedSizeBinaryArray::try_from_iter((0..natural_keys.len()).map(|row| {
+        Ulid(global_id.0.0 * 100 + u128::try_from(row).expect("a fixture row fits in u128"))
+            .to_bytes()
+    }))
     .expect("every ULID is 16 bytes");
     let mut columns: Vec<ArrayRef> = vec![
         Arc::new(global_ids),

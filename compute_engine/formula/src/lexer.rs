@@ -70,15 +70,15 @@ impl Lexer<'_> {
                     }
                 }
                 '.' if self.attribute_follows() => TokenKind::Point,
-                character => match punctuation(character) {
-                    Some(kind) => kind,
-                    None => {
+                character => {
+                    let Some(kind) = punctuation(character) else {
                         self.skip_while(|next| !starts_token(next));
                         let end = self.offset();
                         self.error(SyntaxErrorKind::UnexpectedCharacter, start..end);
                         continue;
-                    }
-                },
+                    };
+                    kind
+                }
             };
             tokens.push(Token {
                 kind,

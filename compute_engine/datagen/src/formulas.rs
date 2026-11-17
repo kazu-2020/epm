@@ -131,7 +131,7 @@ impl Formulas<'_, '_, '_> {
             Node::Sum => {
                 let value_axes = self.generator.axes(self.dimensions);
                 let value = self.expression(&value_axes, depth - 1);
-                self.sum(value, allowed)
+                self.sum(&value, allowed)
             }
         }
     }
@@ -158,7 +158,7 @@ impl Formulas<'_, '_, '_> {
         if fits(&generated.axes, allowed) && self.generator.random.random_bool(0.8) {
             generated
         } else {
-            self.sum(generated, allowed)
+            self.sum(&generated, allowed)
         }
     }
 
@@ -171,13 +171,15 @@ impl Formulas<'_, '_, '_> {
             .random_range(1..=filtered.len().min(2));
         let members: Vec<String> = index::sample(
             &mut self.generator.random,
-            filtered.len() as usize,
-            count as usize,
+            usize::try_from(filtered.len()).expect("usize holds every u32 on supported targets"),
+            usize::try_from(count).expect("usize holds every u32 on supported targets"),
         )
         .into_iter()
         .map(|member| {
             let member = filtered
-                .member(MemberIndex(member as u32))
+                .member(MemberIndex(
+                    u32::try_from(member).expect("the sample is below a u32 dimension length"),
+                ))
                 .expect("the sample is within the dimension");
             quote(member.natural_key())
         })
@@ -199,7 +201,7 @@ impl Formulas<'_, '_, '_> {
         Generated { text, axes }
     }
 
-    fn sum(&mut self, value: Generated, allowed: &[DimensionGlobalId]) -> Generated {
+    fn sum(&mut self, value: &Generated, allowed: &[DimensionGlobalId]) -> Generated {
         let mut outputs: Vec<DimensionGlobalId> = Vec::new();
         let mut by: Vec<String> = Vec::new();
         for &axis in &value.axes {

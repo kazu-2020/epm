@@ -48,7 +48,7 @@ fn try_definition(
 }
 
 fn definition(attributes: Vec<AttributeDefinition>) -> DimensionDefinition {
-    try_definition(attributes).unwrap()
+    try_definition(attributes).expect("the test definition is valid")
 }
 
 fn division_attribute(target: DimensionGlobalId) -> AttributeDefinition {
@@ -75,7 +75,7 @@ fn global_ids(values: &[Option<u128>]) -> ArrayRef {
                 .map(|value| value.map(|number| Ulid(number).to_bytes())),
             16,
         )
-        .unwrap(),
+        .expect("every test global id is 16 bytes"),
     )
 }
 
@@ -84,7 +84,8 @@ fn strings(values: &[Option<&str>]) -> ArrayRef {
 }
 
 fn batch(definition: &DimensionDefinition, columns: Vec<ArrayRef>) -> RecordBatch {
-    RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap()
+    RecordBatch::try_new(Arc::new(definition.schema()), columns)
+        .expect("the test batch matches its schema")
 }
 
 fn nullable_batch(definition: &DimensionDefinition, columns: Vec<ArrayRef>) -> RecordBatch {
@@ -94,7 +95,8 @@ fn nullable_batch(definition: &DimensionDefinition, columns: Vec<ArrayRef>) -> R
         .iter()
         .map(|field| field.as_ref().clone().with_nullable(true))
         .collect();
-    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+        .expect("the test batch matches its nullable schema")
 }
 
 fn departments() -> Dimension {
@@ -109,7 +111,7 @@ fn departments() -> Dimension {
         batch(&definition, columns),
         &[&divisions()],
     )
-    .unwrap()
+    .expect("the test departments are valid")
 }
 
 fn definition_without_attributes(
@@ -123,7 +125,7 @@ fn definition_without_attributes(
         NATURAL_KEY,
         vec![natural_key_attribute()],
     )
-    .unwrap()
+    .expect("the test definition is valid")
 }
 
 fn divisions() -> Dimension {
@@ -132,7 +134,8 @@ fn divisions() -> Dimension {
         global_ids(&[Some(11), Some(12)]),
         strings(&[Some("第一事業部"), Some("第二事業部")]),
     ];
-    Dimension::try_new(definition.clone(), batch(&definition, columns), &[]).unwrap()
+    Dimension::try_new(definition.clone(), batch(&definition, columns), &[])
+        .expect("the test divisions are valid")
 }
 
 #[test]
@@ -253,7 +256,7 @@ fn attribute_without_its_target_dimension_is_rejected() {
     let columns = vec![
         global_ids(&[Some(1)]),
         strings(&[Some("営業部")]),
-        Arc::new(UInt32Array::from(vec![Some(0)])) as ArrayRef,
+        Arc::new(UInt32Array::from(vec![Some(0)])),
     ];
     let regions =
         definition_without_attributes(DimensionGlobalId(Ulid(999)), DimensionKind::Ordinary);
@@ -277,7 +280,7 @@ fn attribute_value_outside_the_target_dimension_is_rejected() {
     let columns = vec![
         global_ids(&[Some(1)]),
         strings(&[Some("営業部")]),
-        Arc::new(UInt32Array::from(vec![Some(2)])) as ArrayRef,
+        Arc::new(UInt32Array::from(vec![Some(2)])),
     ];
     let err = Dimension::try_new(
         definition.clone(),

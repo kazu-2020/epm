@@ -62,7 +62,7 @@ pub fn read_measures(directory: &Path, dimensions: &[&Dimension]) -> std::io::Re
             let [batch] = &batches[..] else {
                 return Err(std::io::Error::other("a measure file holds one batch"));
             };
-            Measure::try_new(definition, batch.clone(), dimensions).map_err(std::io::Error::other)
+            Measure::try_new(definition, batch, dimensions).map_err(std::io::Error::other)
         })
         .collect()
 }

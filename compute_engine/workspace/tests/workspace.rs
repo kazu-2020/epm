@@ -201,7 +201,7 @@ fn a_formula_error_names_the_result_and_the_step_that_failed() {
 
 fn renamed(result: &mut MeasureDefinition, name: &str) {
     *result = MeasureDefinition::try_new(result.global_id(), name.into(), result.axes().to_vec())
-        .unwrap();
+        .expect("a renamed definition keeps its valid axes");
 }
 
 fn dimension(id: u128, members: u32) -> Dimension {

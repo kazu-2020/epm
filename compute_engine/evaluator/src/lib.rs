@@ -51,7 +51,7 @@ impl<'a> Evaluator<'a> {
                 Ok(Cells::from_measure(measure))
             }
             CheckedNode::Terms(terms) => Cells::add(
-                terms
+                &terms
                     .iter()
                     .map(|term| Ok((term.sign, self.node(&term.node)?)))
                     .collect::<Result<Vec<_>, EvaluateError>>()?,
@@ -63,15 +63,17 @@ impl<'a> Evaluator<'a> {
                 right,
             } => Ok(Cells::product(
                 *operator,
-                self.node(left)?,
-                self.node(right)?,
+                &self.node(left)?,
+                &self.node(right)?,
             )),
             CheckedNode::Filter {
                 value,
                 dimension,
                 members,
-                keeps_axis,
-            } => Ok(self.node(value)?.filter(*dimension, members, *keeps_axis)),
+                filtered_axis,
+            } => Ok(self
+                .node(value)?
+                .filter(*dimension, members, *filtered_axis)),
             CheckedNode::Sum { value, by } => {
                 let value = self.node(value)?;
                 let by = by
