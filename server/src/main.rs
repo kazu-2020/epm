@@ -30,18 +30,11 @@ struct Arguments {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    initialize_log();
     let arguments = match parse(std::env::args().skip(1)) {
         Ok(arguments) => arguments,
         Err(message) => {
-            eprintln!("{message}\n{USAGE}");
+            print_usage(&message);
             return ExitCode::from(2);
         }
     };
@@ -52,30 +45,12 @@ async fn main() -> ExitCode {
     let store = match AmazonS3Builder::from_env().with_bucket_name(bucket).build() {
         Ok(store) => Arc::new(store),
         Err(error) => {
-            error!(%error, "S3");
+            error!(%error, "could not configure the S3 client");
             return ExitCode::FAILURE;
         }
     };
     // Not after the restore: as PID 1 in a container, the process ignores SIGTERM until it has a handler.
-    let mut interrupt = signal(SignalKind::interrupt()).expect("a handler for SIGINT");
-    let mut terminate = signal(SignalKind::terminate()).expect("a handler for SIGTERM");
-    let (first_signal, signalled) = oneshot::channel();
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = interrupt.recv() => {}
-            _ = terminate.recv() => {}
-        }
-        let _ = first_signal.send(());
-        tokio::select! {
-            _ = interrupt.recv() => {}
-            _ = terminate.recv() => {}
-        }
-        warn!("stopped by a second signal before the requests finished");
-        std::process::exit(1);
-    });
-    let mut shutdown = Box::pin(async move {
-        let _ = signalled.await;
-    });
+    let mut shutdown = Box::pin(first_signal());
     let starting = async {
         let started = Instant::now();
         let (engine, start) = server::restore(
@@ -86,7 +61,7 @@ async fn main() -> ExitCode {
         .await
         .expect("valid formulas");
         info!(
-            elapsed = ?started.elapsed(),
+            elapsed_ms = started.elapsed().as_millis(),
             commit_sequence = start.request_ids.len(),
             "engine ready"
         );
@@ -98,7 +73,7 @@ async fn main() -> ExitCode {
         started = starting => match started {
             Ok(started) => started,
             Err(error) => {
-                error!(listen = %arguments.listen, %error, "listen");
+                error!(listen = %arguments.listen, %error, "could not listen");
                 return ExitCode::FAILURE;
             }
         },
@@ -138,6 +113,47 @@ async fn main() -> ExitCode {
             error!(?exit, "the assignee stopped");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "the usage text is for the person at the terminal, not a log event"
+)]
+fn print_usage(message: &str) {
+    eprintln!("{message}\n{USAGE}");
+}
+
+fn initialize_log() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+}
+
+fn first_signal() -> impl Future<Output = ()> {
+    let mut interrupt = signal(SignalKind::interrupt()).expect("a handler for SIGINT");
+    let mut terminate = signal(SignalKind::terminate()).expect("a handler for SIGTERM");
+    let (first_signal, signalled) = oneshot::channel();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+        let _ = first_signal.send(());
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+        warn!("stopped by a second signal before the requests finished");
+        std::process::exit(1);
+    });
+    async move {
+        let _ = signalled.await;
     }
 }
 
