@@ -39,7 +39,7 @@ ready() {
 start() {
   # Not only the wait below: another server on the same address also answers GetLag, and the demo would write to that server.
   ! call GetLag '{}' >/dev/null 2>&1 || fail "another server listens on $listen"
-  cargo run --locked --quiet -- --listen "$listen" --workspace "$workspace" &
+  cargo run --locked --quiet -- --listen "$listen" --workspace "$workspace" --epoch "$1" &
   server_pid=$!
   for _ in $(seq 1 150); do
     kill -0 "$server_pid" 2>/dev/null || fail "the server exited at start"
@@ -83,7 +83,7 @@ sequence_of() {
 
 echo "== Build and start the server (workspace $workspace)"
 cargo build --locked --quiet
-start
+start 1
 definitions=$(body_of "$(call ListDefinitions '{}')")
 quantity=$(jq -r '.measures[] | select(.name == "数量") | .ulid' <<<"$definitions")
 sales=$(jq -r '.measures[] | select(.name == "売上") | .ulid' <<<"$definitions")
@@ -115,7 +115,7 @@ echo "== 4. After kill -9, a new process with a new epoch restores the values fr
 kill -9 "$server_pid"
 wait "$server_pid" 2>/dev/null || true
 echo "  killed process $server_pid"
-start
+start 2
 for _ in $(seq 1 150); do
   restored=$(read_cells "$second" 2>/dev/null) || fail "the restarted server does not answer ReadCells"
   [ "$(status_of "$restored")" = 503 ] || break
