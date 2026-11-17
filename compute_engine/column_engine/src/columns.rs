@@ -127,7 +127,10 @@ impl<'c> Index<'c> {
                         .zip(columns.packing.unpack(packed))
                         .map(|(stride, member)| stride * member as usize)
                         .sum();
-                    rows[slot] = row as u32;
+                    debug_assert_eq!(rows[slot], u32::MAX, "packed coordinates repeat");
+                    rows[slot] = u32::try_from(row).expect(
+                        "packed coordinates do not repeat, so the rows fit in space, which dense_strides keeps at or below DENSE_LIMIT",
+                    );
                 }
                 (strides, rows)
             });
@@ -843,12 +846,13 @@ impl Columns {
                 .par_iter()
                 .with_min_len(PARALLEL_ROWS)
                 .map(|&slot| {
-                    packing.pack(
-                        strides
-                            .iter()
-                            .zip(&member_counts)
-                            .map(|(stride, &member_count)| (slot / stride) as u32 % member_count),
-                    )
+                    packing.pack(strides.iter().zip(&member_counts).map(
+                        |(stride, &member_count)| {
+                            u32::try_from(slot / stride)
+                                .expect("dense_strides keeps space at or below DENSE_LIMIT")
+                                % member_count
+                        },
+                    ))
                 })
                 .collect();
             let values = rows::gather(&slots, &totals);

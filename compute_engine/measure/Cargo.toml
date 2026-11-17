@@ -10,3 +10,6 @@ arrow-schema = "60.1.0"
 dimension = { path = "../dimension" }
 rayon = "1.12.0"
 ulid = "3.0.0"
+
+[lints]
+workspace = true

@@ -192,8 +192,8 @@ fn edit_and_compare(model: &Model) {
                 .collect(),
             _ => cells[random.random_range(0..cells.len())].0.clone(),
         };
-        let value =
-            (random.random_range(0..4) != 0).then(|| random.random_range(1..1_000) as f64 / 7.0);
+        let value = (random.random_range(0..4) != 0)
+            .then(|| f64::from(random.random_range(1..1_000_i32)) / 7.0);
         let delta = |measure: &Measure| {
             let mut delta = measure.delta();
             match value {

@@ -15,6 +15,12 @@ snapshot_start_after = []
 snapshot_without_request_ids = []
 snapshot_ahead = []
 
+[lints.clippy]
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 bytes = "1.12.1"

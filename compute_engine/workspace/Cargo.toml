@@ -12,3 +12,6 @@ ulid = "3.0.0"
 
 [dev-dependencies]
 datagen = { path = "../datagen" }
+
+[lints]
+workspace = true
