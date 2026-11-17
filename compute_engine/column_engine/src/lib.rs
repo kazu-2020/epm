@@ -13,6 +13,10 @@ use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 use crate::columns::{ByAxis, Columns, find_dimension, packing_of};
 use crate::region::Region;
 
+fn usize_from(value: u32) -> usize {
+    usize::try_from(value).expect("usize holds every u32 on supported targets")
+}
+
 pub fn evaluate(
     expression: &CheckedExpression,
     result: &MeasureDefinition,
@@ -88,7 +92,7 @@ fn apply(
     {
         for &axis in axes {
             if region.members(axis).map(BTreeSet::len)
-                == Some(find_dimension(dimensions, axis)?.len() as usize)
+                == Some(usize_from(find_dimension(dimensions, axis)?.len()))
             {
                 region = region.without(axis);
             }
@@ -165,7 +169,8 @@ fn evaluate_in(
             .shared
             .borrow()
             .iter()
-            .all(|entry| entry.uses_left == 0 && entry.result.is_none())
+            .all(|entry| entry.uses_left == 0 && entry.result.is_none()),
+        "every shared result is used up and released"
     );
     Ok(columns
         .broadcast(result.axes(), dimensions)?
@@ -393,7 +398,7 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 }
             }
             CheckedNode::Terms(terms) => Columns::add(
-                terms
+                &terms
                     .iter()
                     .map(|term| Ok((term.sign, self.node(&term.node, region)?)))
                     .collect::<Result<Vec<_>, EvaluateError>>()?,

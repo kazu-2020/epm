@@ -82,11 +82,13 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
     for (index, text) in extra_formulas.iter().enumerate() {
         workspace.formulas.push(Formula {
             result: MeasureDefinition::try_new(
-                MeasureGlobalId(Ulid(300 + index as u128)),
+                MeasureGlobalId(Ulid(
+                    300 + u128::try_from(index).expect("a formula index fits in u128"),
+                )),
                 text.to_string(),
                 sales_axes.clone(),
             )
-            .unwrap(),
+            .expect("an extra formula result has valid axes"),
             text: text.to_string(),
         });
     }
