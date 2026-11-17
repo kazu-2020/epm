@@ -107,11 +107,12 @@ struct Running {
 
 async fn run(deadline: Duration) -> Running {
     let store = Arc::new(Gate::default());
+    let object_store: Arc<dyn ObjectStore> = Arc::<Gate>::clone(&store);
     let (handle, assignee) = support::start(
         support::engine(),
         Start::default(),
         Settings::default(),
-        Arc::clone(&store) as Arc<dyn ObjectStore>,
+        object_store,
         1,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
@@ -157,7 +158,7 @@ async fn send_submit_edit(address: SocketAddr) -> TcpStream {
 
 #[tokio::test]
 async fn a_shutdown_waits_for_the_edit_in_flight_and_then_stops_with_success() {
-    let running = run(Duration::from_secs(60)).await;
+    let running = run(Duration::from_mins(1)).await;
     let mut stream = send_submit_edit(running.address).await;
     running.store.started.notified().await;
     running

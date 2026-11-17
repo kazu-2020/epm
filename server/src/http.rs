@@ -163,7 +163,7 @@ async fn list_definitions(State(handle): State<Handle>) -> Result<Json<Value>, F
             json!({
                 "ulid": definition.global_id().to_string(),
                 "name": definition.name(),
-                "axes": definition.axes().iter().map(|axis| axis.to_string()).collect::<Vec<_>>(),
+                "axes": definition.axes().iter().map(ToString::to_string).collect::<Vec<_>>(),
                 "kind": kind,
             })
         })

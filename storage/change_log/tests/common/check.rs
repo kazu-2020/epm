@@ -24,7 +24,7 @@ pub(super) fn decode(body: &Bytes) -> Segment {
     Segment::decode(body.clone()).expect("the assignee writes segments it can read")
 }
 
-pub fn replay(store: &BTreeMap<String, Bytes>) -> (BTreeMap<Slot, Segment>, Vec<Commit>) {
+pub(crate) fn replay(store: &BTreeMap<String, Bytes>) -> (BTreeMap<Slot, Segment>, Vec<Commit>) {
     let segments: BTreeMap<Slot, Segment> = store
         .iter()
         .map(|(key, body)| (slot_of(key), decode(body)))
@@ -38,9 +38,13 @@ pub fn replay(store: &BTreeMap<String, Bytes>) -> (BTreeMap<Slot, Segment>, Vec<
     (segments, log)
 }
 
-pub type Violations = BTreeMap<&'static str, String>;
+pub(crate) type Violations = BTreeMap<&'static str, String>;
 
-pub fn check(outcome: &Outcome) -> Violations {
+#[allow(
+    clippy::too_many_lines,
+    reason = "each property of the outcome is one block, read top to bottom"
+)]
+pub(crate) fn check(outcome: &Outcome) -> Violations {
     let mut violations = Violations::new();
     let mut violate = |invariant: &'static str, detail: String| {
         violations.entry(invariant).or_insert(detail);
@@ -280,6 +284,6 @@ pub fn check(outcome: &Outcome) -> Violations {
     violations
 }
 
-pub fn counts(outcome: &Outcome) -> (usize, usize) {
+pub(crate) fn counts(outcome: &Outcome) -> (usize, usize) {
     (acknowledged(&outcome.history).len(), outcome.store.len())
 }

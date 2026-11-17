@@ -182,7 +182,10 @@ fn edits_to_one_cell_keep_one_delta_entry_however_many_batches_arrive() {
     let coordinate = [0, 1, 1, 0, 1];
     let mut engine = engine();
     for sequence in 0..20 {
-        let edit = quantity(coordinate, Some(sequence as f64));
+        let edit = quantity(
+            coordinate,
+            Some(f64::from(u8::try_from(sequence).expect("below 20"))),
+        );
         engine = applied(&engine, &[commit(sequence, &edit)]);
     }
     let input = engine
