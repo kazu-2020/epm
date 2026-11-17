@@ -976,3 +976,14 @@ fn two_axes_that_fill_64_bits_pack_and_unpack_every_member() {
     );
     assert!(packing.pack([0, 1]) < packing.pack([1, 0]));
 }
+
+#[test]
+fn a_measure_global_id_reads_back_what_it_prints() {
+    assert_eq!(SALES.to_string(), "0000000000000000000000009C");
+    assert_eq!(SALES.to_string().parse(), Ok(SALES));
+    assert!(
+        "8000000000000000000000009C"
+            .parse::<MeasureGlobalId>()
+            .is_err()
+    );
+}

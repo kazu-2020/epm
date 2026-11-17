@@ -3,13 +3,15 @@ use std::collections::BTreeMap;
 use datagen::cases::exact;
 use datagen::numbered_dimension;
 use datagen::representative::{self, Size};
-use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberIndex};
+use dimension::{
+    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, InvalidGlobalId, MemberIndex,
+};
 use formula::{AxisErrorKind, EvaluateError, ResolveErrorKind};
 use measure::{CoordinateError, Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 use workspace::{
-    Calculated, Edit, EditError, Edits, Formula, FormulaError, InvalidWorkspaceGlobalId,
-    UncheckedWorkspace, Workspace, WorkspaceError, WorkspaceGlobalId,
+    Calculated, Edit, EditError, Edits, Formula, FormulaError, UncheckedWorkspace, Workspace,
+    WorkspaceError, WorkspaceGlobalId,
 };
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
@@ -471,9 +473,9 @@ fn a_workspace_global_id_above_128_bits_is_not_another_workspace() {
     ] {
         assert_eq!(
             text.parse::<WorkspaceGlobalId>(),
-            Err(InvalidWorkspaceGlobalId),
+            Err(InvalidGlobalId),
             "{text:?}"
         );
     }
-    assert_eq!(InvalidWorkspaceGlobalId.to_string(), "not a ULID");
+    assert_eq!(InvalidGlobalId.to_string(), "not a ULID");
 }
