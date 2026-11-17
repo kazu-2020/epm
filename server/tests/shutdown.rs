@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use change_log::Start;
+use dimension::MemberIndex;
 use futures_util::stream::BoxStream;
 use measure::MeasureGlobalId;
 use object_store::memory::InMemory;
@@ -139,7 +140,12 @@ async fn send_submit_edit(address: SocketAddr) -> TcpStream {
     let body = json!({
         "request_id": "r1",
         "measure": QUANTITY.0.to_string(),
-        "coordinate": [0, 1, 1, 0, 1],
+        "coordinate": support::named(&support::engine(), QUANTITY, &[0, 1, 1, 0, 1].map(MemberIndex))
+            .into_iter()
+            .map(|(dimension, member)| {
+                json!({ "dimension": dimension.0.to_string(), "member": member.0.to_string() })
+            })
+            .collect::<Vec<_>>(),
         "value": 3.0,
     })
     .to_string();

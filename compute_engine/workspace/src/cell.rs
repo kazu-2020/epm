@@ -18,26 +18,25 @@ pub enum CellError {
 }
 
 pub fn resolve(
-    axes: &[DimensionGlobalId],
-    dimensions: &[Dimension],
+    declared: &[&Dimension],
     coordinate: &[(DimensionGlobalId, MemberGlobalId)],
 ) -> Result<Vec<MemberIndex>, CellError> {
-    if coordinate.len() != axes.len() {
+    if coordinate.len() != declared.len() {
         return Err(CellError::Length {
-            expected: axes.len(),
+            expected: declared.len(),
             found: coordinate.len(),
         });
     }
-    axes.iter()
-        .map(|&axis| {
+    declared
+        .iter()
+        .map(|dimension| {
+            let axis = dimension.global_id();
             let &(_, member) = coordinate
                 .iter()
                 .find(|&&(named, _)| named == axis)
                 .ok_or(CellError::MissingAxis(axis))?;
-            dimensions
-                .iter()
-                .find(|dimension| dimension.global_id() == axis)
-                .and_then(|dimension| dimension.member_by_global_id(member))
+            dimension
+                .member_by_global_id(member)
                 .map(Member::id)
                 .ok_or(CellError::NoMember { axis, member })
         })

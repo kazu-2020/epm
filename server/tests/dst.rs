@@ -60,12 +60,16 @@ impl Model {
             let input = inputs
                 .iter()
                 .position(|input| input.global_id() == edit.measure)?;
-            let coordinate = workspace::resolve(
-                inputs[input].definition().axes(),
-                self.workspace.dimensions(),
-                &edit.coordinate,
-            )
-            .ok()?;
+            let axes: Vec<&Dimension> = inputs[input]
+                .definition()
+                .axes()
+                .iter()
+                .filter_map(|&axis| {
+                    let mut dimensions = self.workspace.dimensions().iter();
+                    dimensions.find(|dimension| dimension.global_id() == axis)
+                })
+                .collect();
+            let coordinate = workspace::resolve(&axes, &edit.coordinate).ok()?;
             match edit.value {
                 Some(value) => cells[input].insert(coordinate, value),
                 None => cells[input].remove(&coordinate),

@@ -597,17 +597,13 @@ fn a_coordinate_names_a_member_by_its_global_id_in_whatever_row_the_member_is() 
         &[],
     )
     .expect("a valid dimension");
-    let axes = [dimension.global_id()];
-    let coordinate = [(axes[0], member)];
+    let coordinate = [(dimension.global_id(), member)];
 
     assert_eq!(
-        resolve(&axes, &[dimension], &coordinate),
+        resolve(&[&dimension], &coordinate),
         Ok(vec![MemberIndex(1)])
     );
-    assert_eq!(
-        resolve(&axes, &[moved], &coordinate),
-        Ok(vec![MemberIndex(0)])
-    );
+    assert_eq!(resolve(&[&moved], &coordinate), Ok(vec![MemberIndex(0)]));
 }
 
 #[test]

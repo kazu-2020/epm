@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use dimension::{Dimension, DimensionGlobalId};
+use dimension::Dimension;
 use formula::{CheckedExpression, EvaluateError};
 use measure::{CoordinateError, DeltaBuilder, Measure, MeasureGlobalId};
 
@@ -32,9 +32,15 @@ pub struct CalculateError {
 
 #[derive(Clone, Debug)]
 pub struct EditCheck {
-    empty: Arc<BTreeMap<MeasureGlobalId, DeltaBuilder>>,
-    declared_axes: Arc<BTreeMap<MeasureGlobalId, Vec<DimensionGlobalId>>>,
+    inputs: Arc<BTreeMap<MeasureGlobalId, Input>>,
     dimensions: Arc<[Dimension]>,
+}
+
+#[derive(Debug)]
+struct Input {
+    empty: DeltaBuilder,
+    // Not the dimension global ids: replaying the change log resolves every edit, and a search of all dimensions for each axis repeats the same work.
+    axes: Vec<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -53,7 +59,7 @@ pub struct Calculated {
 
 impl EditCheck {
     pub fn is_input(&self, measure: MeasureGlobalId) -> bool {
-        self.empty.contains_key(&measure)
+        self.inputs.contains_key(&measure)
     }
 
     pub fn check(&self, edit: &Edit) -> Result<(), EditError> {
@@ -61,20 +67,20 @@ impl EditCheck {
     }
 
     pub fn add(&self, edit: &Edit, edits: &mut Edits) -> Result<(), EditError> {
-        let empty = self
-            .empty
+        let input = self
+            .inputs
             .get(&edit.measure)
             .ok_or(EditError::NotAnInput(edit.measure))?;
-        let coordinate = resolve(
-            &self.declared_axes[&edit.measure],
-            &self.dimensions,
-            &edit.coordinate,
-        )
-        .map_err(EditError::Cell)?;
+        let axes: Vec<&Dimension> = input
+            .axes
+            .iter()
+            .map(|&axis| &self.dimensions[axis])
+            .collect();
+        let coordinate = resolve(&axes, &edit.coordinate).map_err(EditError::Cell)?;
         let delta = edits
             .deltas
             .entry(edit.measure)
-            .or_insert_with(|| empty.clone());
+            .or_insert_with(|| input.empty.clone());
         match edit.value {
             Some(value) => delta.set(&coordinate, value),
             None => delta.delete(&coordinate),
@@ -89,16 +95,24 @@ impl Calculated {
         let dimensions: Arc<[Dimension]> = dimensions.into();
         let references: Vec<&Dimension> = dimensions.iter().collect();
         let edit_check = EditCheck {
-            empty: Arc::new(
+            inputs: Arc::new(
                 inputs
                     .iter()
-                    .map(|input| (input.global_id(), input.delta()))
-                    .collect(),
-            ),
-            declared_axes: Arc::new(
-                inputs
-                    .iter()
-                    .map(|input| (input.global_id(), input.definition().axes().to_vec()))
+                    .map(|input| {
+                        let axes = input
+                            .definition()
+                            .axes()
+                            .iter()
+                            .map(|&axis| {
+                                dimensions
+                                    .iter()
+                                    .position(|dimension| dimension.global_id() == axis)
+                                    .expect("Workspace::try_new checks that every input is made from its dimensions")
+                            })
+                            .collect();
+                        let empty = input.delta();
+                        (input.global_id(), Input { empty, axes })
+                    })
                     .collect(),
             ),
             dimensions: Arc::clone(&dimensions),
