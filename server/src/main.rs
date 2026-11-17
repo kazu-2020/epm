@@ -20,6 +20,7 @@ const SIZE: Size = Size::TINY;
 const SEED: u64 = 7;
 // Not the 10 seconds of docker stop: SIGKILL comes then, and the process cannot report the missed deadline.
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
+const USAGE: &str = "usage: server --workspace ULID [--listen ADDRESS] [--epoch NUMBER]";
 
 struct Arguments {
     listen: String,
@@ -40,10 +41,7 @@ async fn main() -> ExitCode {
     let arguments = match parse(std::env::args().skip(1)) {
         Ok(arguments) => arguments,
         Err(message) => {
-            // Not a log event: the usage text is for the person at the terminal.
-            eprintln!(
-                "{message}\nusage: server --workspace ULID [--listen ADDRESS] [--epoch NUMBER]"
-            );
+            eprintln!("{message}\n{USAGE}");
             return ExitCode::from(2);
         }
     };
