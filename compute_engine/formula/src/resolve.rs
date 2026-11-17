@@ -105,12 +105,11 @@ impl<'a> Resolver<'a> {
         let mut ids: Vec<MemberIndex> = Vec::with_capacity(members.len());
         let mut known = true;
         for member in members {
-            match found.member_by_natural_key(&member.name) {
-                Some(found_member) => ids.push(found_member.id()),
-                None => {
-                    self.error(ResolveErrorKind::UnknownMember, &member.span);
-                    known = false;
-                }
+            if let Some(found_member) = found.member_by_natural_key(&member.name) {
+                ids.push(found_member.id());
+            } else {
+                self.error(ResolveErrorKind::UnknownMember, &member.span);
+                known = false;
             }
         }
         ids.sort_unstable();

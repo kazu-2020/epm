@@ -34,12 +34,11 @@ pub fn check_axes(expression: &ResolvedExpression, result_axes: &[DimensionGloba
             &expression.span,
         );
     }
-    let checked = checker
-        .errors
-        .is_empty()
-        .then(|| CheckedExpression::new(expression, result_axes));
     AxisCheck {
-        checked,
+        checked: checker
+            .errors
+            .is_empty()
+            .then(|| CheckedExpression::new(expression, result_axes)),
         broadcast: Some(
             result_axes
                 .iter()

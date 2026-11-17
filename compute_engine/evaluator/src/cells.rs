@@ -96,7 +96,7 @@ impl Cells {
         }
     }
 
-    pub(crate) fn product(operator: ProductOperator, left: Cells, right: Cells) -> Cells {
+    pub(crate) fn product(operator: ProductOperator, left: &Cells, right: &Cells) -> Cells {
         let mut axes = left.axes.clone();
         axes.extend(right.axes.iter().filter(|axis| !left.axes.contains(axis)));
         let apply: fn(f64, f64) -> f64 = match operator {
@@ -106,16 +106,16 @@ impl Cells {
         // Not broadcast: only cells present on both sides survive, so spreading a sparse side over every member would build cells the join discards.
         Cells {
             axes,
-            values: normalized(join(&left, &right, apply)),
+            values: normalized(join(left, right, apply)),
         }
     }
 
     pub(crate) fn add(
-        terms: Vec<(Sign, Cells)>,
+        terms: &[(Sign, Cells)],
         dimensions: &[&Dimension],
     ) -> Result<Cells, EvaluateError> {
         let mut axes: Vec<DimensionGlobalId> = Vec::new();
-        for (_, term) in &terms {
+        for (_, term) in terms {
             for &axis in &term.axes {
                 if !axes.contains(&axis) {
                     axes.push(axis);
@@ -125,7 +125,7 @@ impl Cells {
         let any_full = terms.iter().any(|(_, term)| term.axes.len() == axes.len());
         let creates_cells = |term: &Cells| !any_full || term.axes.len() == axes.len();
         let mut coordinates: HashSet<Vec<MemberIndex>> = HashSet::new();
-        for (_, term) in &terms {
+        for (_, term) in terms {
             if creates_cells(term) {
                 coordinates.extend(term.broadcast(&axes, dimensions)?.values.into_keys());
             }

@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write;
 
 use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberIndex};
 use duckdb::Connection;
@@ -7,6 +8,7 @@ use formula::{
 };
 use measure::{Measure, MeasureGlobalId};
 
+#[derive(Debug)]
 pub struct Oracle {
     connection: Connection,
     packing_orders: PackingOrders,
@@ -168,7 +170,7 @@ fn expanded(query: &Query, axes: &[DimensionGlobalId]) -> String {
             items.push(format!("node.{}", column(axis)));
         } else {
             let table = member_table(axis);
-            joins.push_str(&format!(" CROSS JOIN {table}"));
+            let _ = write!(joins, " CROSS JOIN {table}");
             items.push(format!("{table}.member AS {}", column(axis)));
         }
     }
@@ -215,13 +217,14 @@ fn sum_of_terms(terms: &[Term], packing_orders: &PackingOrders) -> Query {
             Sign::Plus => "+",
             Sign::Minus => "-",
         };
-        total.push_str(&format!(" {operator} COALESCE({alias}.value, 0)"));
+        let _ = write!(total, " {operator} COALESCE({alias}.value, 0)");
         let on: Vec<String> = term
             .axes
             .iter()
             .map(|&axis| format!("{alias}.{0} = coordinate.{0}", column(axis)))
             .collect();
-        joins.push_str(&format!(
+        let _ = write!(
+            joins,
             " LEFT JOIN ({}) AS {alias} ON {}",
             term.sql,
             if on.is_empty() {
@@ -229,7 +232,7 @@ fn sum_of_terms(terms: &[Term], packing_orders: &PackingOrders) -> Query {
             } else {
                 on.join(" AND ")
             }
-        ));
+        );
     }
     let mut items: Vec<String> = axes_list
         .iter()
@@ -321,11 +324,12 @@ fn sum(value: &Query, by: &[CheckedAxis], packing_orders: &PackingOrders) -> Que
             } => {
                 let alias = format!("by_{index}");
                 axes.insert(target);
-                joins.push_str(&format!(
+                let _ = write!(
+                    joins,
                     " JOIN {} AS {alias} ON {alias}.member = node.{} AND {alias}.target IS NOT NULL",
                     attribute_table(attribute),
                     column(dimension)
-                ));
+                );
                 groups.push(format!("{alias}.target"));
                 items.push(format!("{alias}.target AS {}", column(target)));
             }

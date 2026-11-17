@@ -251,14 +251,14 @@ impl Parser {
                 .is_some()
             {}
         }
-        let end = match self.next_if(|kind| matches!(kind, TokenKind::RightBracket)) {
-            Some(closing) => closing.span.end,
-            None => {
+        let end =
+            if let Some(closing) = self.next_if(|kind| matches!(kind, TokenKind::RightBracket)) {
+                closing.span.end
+            } else {
                 let position = self.position();
                 self.error(SyntaxErrorKind::ExpectedClosingBracket, position..position);
                 self.previous_end.max(opening.span.end)
-            }
-        };
+            };
         let span = value.span.start..end;
         let kind = match parts {
             Some((dimension, members)) => ExpressionKind::Filter {
@@ -494,16 +494,15 @@ impl Parser {
     }
 
     fn closing_parenthesis(&mut self, end_without_it: usize) -> usize {
-        match self.next_if(|kind| matches!(kind, TokenKind::RightParenthesis)) {
-            Some(closing) => closing.span.end,
-            None => {
-                let position = self.position();
-                self.error(
-                    SyntaxErrorKind::ExpectedClosingParenthesis,
-                    position..position,
-                );
-                end_without_it
-            }
+        if let Some(closing) = self.next_if(|kind| matches!(kind, TokenKind::RightParenthesis)) {
+            closing.span.end
+        } else {
+            let position = self.position();
+            self.error(
+                SyntaxErrorKind::ExpectedClosingParenthesis,
+                position..position,
+            );
+            end_without_it
         }
     }
 
