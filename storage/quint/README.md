@@ -21,7 +21,7 @@ storage/quint/check.sh 5000     # 短時間で確認する場合。回数が不�
 - 固定の手順(`quint test`)が失敗した。
 - 守りを除外したモデルで、`breaks`、`placement_breaks`、`placement_read_write_breaks` に記載した性質の違反を検出しなかった。または、`holds` と `log_safe_without_guard` の性質に違反した。
 
-反例の手順は `quint run seqlog.qnt --main seqlog_designed --invariant <性質> --mbt` で確認する。placement の場合は、`--init placementInit --step placementStep` を指定して `placement.qnt` を実行する。読み取りと書き込みの経路の反例は `--step placementReadWriteStep` で確認する。`mbt::actionTaken` に各ステップの操作を出力する。
+反例の手順は、守りを除外したモジュールで `quint run seqlog_mutations.qnt --main <モジュール> --invariant <性質> --mbt` を実行して確認する(例: `--main seqlog_no_fence --invariant newestAssigneeSeesAcknowledged`)。設計どおりのモデルはすべての性質を満たすので、反例を出力しない。placement の場合は、`--init placementInit --step placementStep` を指定して `placement_mutations.qnt` を実行する。読み取りと書き込みの経路の反例は `--step placementReadWriteStep` で確認する。`mbt::actionTaken` に各ステップの操作を出力する。
 
 モデルの前提である条件付き書き込みの応答は、RustFS で以下のとおり実測する。
 

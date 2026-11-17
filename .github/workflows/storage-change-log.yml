@@ -33,7 +33,8 @@ jobs:
         run: |
           version=$(node -p "require('../quint/node_modules/@informalsystems/quint/dist/src/rust/binaryManager.js').QUINT_EVALUATOR_VERSION")
           mkdir -p "$HOME/.quint/rust-evaluator-$version"
-          curl -fsSL --retry 5 "https://github.com/quint-co/quint/releases/download/evaluator/$version/quint_evaluator-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.quint/rust-evaluator-$version"
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/quint_evaluator.tar.gz" "https://github.com/quint-co/quint/releases/download/evaluator/$version/quint_evaluator-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf "$RUNNER_TEMP/quint_evaluator.tar.gz" -C "$HOME/.quint/rust-evaluator-$version"
       - run: cargo test --locked
 
   rustfs:

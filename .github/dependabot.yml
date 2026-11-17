@@ -12,6 +12,10 @@ updates:
     directory: /storage/rustfs
     schedule:
       interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /storage/postgres
+    schedule:
+      interval: weekly
   - package-ecosystem: npm
     directory: /storage/quint
     schedule:

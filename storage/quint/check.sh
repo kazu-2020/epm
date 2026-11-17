@@ -35,8 +35,16 @@ quint typecheck seqlog_mutations.qnt
 quint typecheck seqlog_replay.qnt
 quint typecheck seqlog_test.qnt
 quint test seqlog_test.qnt --main seqlog_test
-quint test seqlog_mutations.qnt --main seqlog_two_in_flight --match pipelineAcknowledgesPastHoleTest
-quint test seqlog_mutations.qnt --main seqlog_rejected_as_fenced --match ownResendRejectedTest
+# Not the exit code alone: quint test exits 0 when --match finds no test.
+scenario() {
+  local output
+  output=$(quint test "$1" --main "$2" --match "$3" 2>&1) || { echo "$output"; exit 1; }
+  echo "$output"
+  grep -q "ok $3 passed" <<<"$output" || { echo "$2 has no passing test $3"; exit 1; }
+}
+
+scenario seqlog_mutations.qnt seqlog_two_in_flight pipelineAcknowledgesPastHoleTest
+scenario seqlog_mutations.qnt seqlog_rejected_as_fenced ownResendRejectedTest
 
 run() {
   quint run "$1" --main "$2" --invariants "${@:3}" --max-samples "$samples" --max-steps 30 --seed 1 2>&1 || true
@@ -116,7 +124,7 @@ quint typecheck placement_mutations.qnt
 quint typecheck placement_test.qnt
 quint test placement_test.qnt --main placement_test
 for entry in "${placement_scenarios[@]}"; do
-  quint test placement_mutations.qnt --main "${entry%%:*}" --match "${entry##*:}"
+  scenario placement_mutations.qnt "${entry%%:*}" "${entry##*:}"
 done
 
 run_placement() {
