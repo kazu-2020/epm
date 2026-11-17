@@ -21,9 +21,11 @@ use oracle::Oracle;
 use server::snapshot::Manifest;
 use server::{Calculation, Edit, Engine, Exit, Rejection, Settings, SubmitError};
 use tokio::sync::oneshot;
-use workspace::Workspace;
+use ulid::Ulid;
+use workspace::{Workspace, WorkspaceGlobalId};
 
 const DEFAULT_SEEDS: u64 = 2000;
+const WORKSPACE: WorkspaceGlobalId = WorkspaceGlobalId(Ulid(1));
 const CALCULATION: Duration = Duration::from_millis(250);
 
 struct Model {
@@ -102,6 +104,11 @@ struct Run {
 
 impl common::Server for Assignees {
     fn start(&self, store: Arc<dyn ObjectStore>, workspace: String, epoch: u64) -> common::Started {
+        assert_eq!(
+            workspace,
+            WORKSPACE.to_string(),
+            "the harness serves WORKSPACE"
+        );
         let mut settings = Settings {
             calculation: Calculation::Simulated(CALCULATION),
             snapshot_every: 1 + self.seed % 3,
@@ -117,7 +124,7 @@ impl common::Server for Assignees {
         let exit = async move {
             let definition = Workspace::try_new(representative::generate(&Size::TINY, 7))
                 .expect("a valid workspace");
-            let (engine, start) = server::restore(store.as_ref(), &workspace, definition)
+            let (engine, start) = server::restore(store.as_ref(), WORKSPACE, definition)
                 .await
                 .map_err(|error| format!("{error:?}"))?;
             restored
@@ -129,7 +136,7 @@ impl common::Server for Assignees {
                 start,
                 settings,
                 store,
-                workspace,
+                WORKSPACE,
                 AssigneeId {
                     epoch: Epoch(epoch),
                     process: ProcessId(u128::from(epoch)),
@@ -230,10 +237,15 @@ fn simulate(model: &Model, seed: u64) -> Run {
         .build()
         .expect("a runtime")
         .block_on(async {
-            let outcome =
-                common::simulate(Arc::new(assignees), Arc::clone(&inner), "ws", seed).await;
+            let outcome = common::simulate(
+                Arc::new(assignees),
+                Arc::clone(&inner),
+                &WORKSPACE.to_string(),
+                seed,
+            )
+            .await;
             let listed: Vec<_> = inner
-                .list(Some(&Path::from("ws/snapshot")))
+                .list(Some(&Path::from(format!("{WORKSPACE}/snapshot"))))
                 .try_collect()
                 .await
                 .expect("list the snapshots");

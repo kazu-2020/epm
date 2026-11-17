@@ -32,7 +32,7 @@ App server、配置表、Assignee を以下の構成で接続する。期限と�
   - `synchronous_commit` を `on` 以上に設定し、セッションごとの緩和を禁止する。
   - 同期の standby が不在の状態でも、非同期へ自動で降格させない。Patroni では `synchronous_mode_strict` が該当する。
   - 昇格の対象を同期の standby に限定する。非同期のレプリカは、手動でも昇格させない。
-- **ワークスペースの ID は `WorkspaceGlobalId`(ULID)とし、App server がワークスペースの作成時に発行する(#139)**。 S3 のキーの先頭は WorkspaceGlobalId で、名前は表示専用とする。`--workspace` が ULID でない場合、Assignee は起動を中止する。【未検証】
+- **ワークスペースの ID は `WorkspaceGlobalId`(ULID)とし、App server がワークスペースの作成時に発行する(#139)**。 【未検証】S3 のキーの先頭は WorkspaceGlobalId で、名前は表示専用とする。`--workspace` が ULID でない場合、Assignee は起動を中止する。【実測】
 
 配置表の中心になる更新は以下の1文である。`$seen` は直前に読み取ったエポックである。`$wait` は、同時に読み取った行から App server が計算した待機時間である。起動中の行では起動期限と backoff の長い方、起動中でない行では backoff、計画的な入れ替えでは 0 である。起動中の行でも、プロセスの終了を確認した場合は backoff だけである。時刻の比較は PostgreSQL が実行する。更新が0行の場合は、ほかの App server が先行しているか、待機時間の経過前である。計画的な入れ替えは、起動中でない行だけを対象にする。起動中の Assignee をフェンスで停止させないためである。
 

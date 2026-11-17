@@ -4,17 +4,17 @@ use dimension::Dimension;
 use measure::MeasureDefinition;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
-use workspace::{CalculateError, Workspace};
+use workspace::{CalculateError, Workspace, WorkspaceGlobalId};
 
 use crate::Engine;
 use crate::snapshot::{Manifest, Snapshot};
 
 pub async fn restore(
     store: &dyn ObjectStore,
-    name: &str,
+    global_id: WorkspaceGlobalId,
     mut workspace: Workspace,
 ) -> Result<(Engine, Start), CalculateError> {
-    let folder = Path::from(name).join("snapshot");
+    let folder = Path::from(global_id.to_string()).join("snapshot");
     // Not an error: without a list, the assignee reads the whole log, which gives the same state.
     let mut found = store
         .list_with_delimiter(Some(&folder))

@@ -9,7 +9,10 @@ use change_log::{AssigneeId, Epoch, ProcessId, Start};
 use datagen::representative::{self, Size};
 use object_store::ObjectStore;
 use server::{Engine, Exit, Handle, Settings};
-use workspace::Workspace;
+use ulid::Ulid;
+use workspace::{Workspace, WorkspaceGlobalId};
+
+pub const WORKSPACE: WorkspaceGlobalId = WorkspaceGlobalId(Ulid(1));
 
 pub fn engine() -> Engine {
     Engine::new(
@@ -23,7 +26,6 @@ pub fn start(
     start: Start,
     settings: Settings,
     store: Arc<dyn ObjectStore>,
-    workspace: &str,
     epoch: u64,
 ) -> (Handle, impl Future<Output = Exit> + use<>) {
     server::start(
@@ -31,7 +33,7 @@ pub fn start(
         start,
         settings,
         store,
-        workspace.to_owned(),
+        WORKSPACE,
         AssigneeId {
             epoch: Epoch(epoch),
             process: ProcessId(u128::from(epoch)),
