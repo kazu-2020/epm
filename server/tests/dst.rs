@@ -25,6 +25,7 @@ use workspace::Workspace;
 
 const DEFAULT_SEEDS: u64 = 2000;
 const CALCULATION: Duration = Duration::from_millis(250);
+const LOADING_RETRY: Duration = Duration::from_millis(50);
 
 struct Model {
     workspace: Workspace,
@@ -171,6 +172,11 @@ impl common::Server for Assignees {
                         Some(Err(common::Refusal::Invalid))
                     }
                     Err(SubmitError::Stopped) => None,
+                    Err(SubmitError::Loading) => {
+                        // Not wait_loaded: a watch wakes its waiters in a random order, and the seed would not give the same history.
+                        tokio::time::sleep(LOADING_RETRY).await;
+                        None
+                    }
                 }
             }
             .boxed()
