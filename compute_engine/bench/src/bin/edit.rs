@@ -4,6 +4,7 @@
     reason = "the bench reports its measurements on the terminal"
 )]
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,7 @@ use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 fn main() -> std::io::Result<()> {
     let usage = "usage: edit <directory> <edits per input>";
     let directory = PathBuf::from(std::env::args().nth(1).expect(usage));
-    let edits: usize = std::env::args()
+    let edits: NonZeroUsize = std::env::args()
         .nth(2)
         .and_then(|edits| edits.parse().ok())
         .expect(usage);
@@ -52,8 +53,8 @@ fn main() -> std::io::Result<()> {
     for input in 0..inputs {
         let name = measures[input].definition().name().to_string();
         let rows = measures[input].base_values().len();
-        let mut times = Vec::new();
-        for edit in 0..edits {
+        let mut timings = Vec::new();
+        for edit in 0..edits.get() {
             let row = (edit * 7_919 * 104_729) % rows;
             let measure = &measures[input];
             // Not DeltaBuilder::set: it takes the coordinate in the declared order, and the base row gives it packed.
@@ -65,43 +66,54 @@ fn main() -> std::io::Result<()> {
                 .expect("a packed coordinate of the base fits the measure");
             let global_id = measures[input].global_id();
             let started = Instant::now();
-            measures = column_engine::edit(&measures, [(global_id, delta)], &order, &dimensions)
-                .expect("the edit recalculates")
+            let edited = column_engine::edit(&measures, [(global_id, delta)], &order, &dimensions)
+                .expect("the edit recalculates");
+            let evaluated = started.elapsed();
+            let folding = Instant::now();
+            measures = edited.iter().map(Measure::fold_deltas_or_compact).collect();
+            let folded = folding.elapsed();
+            let elapsed = evaluated + folded;
+            let compacted = edited
                 .iter()
-                .map(Measure::fold_deltas_or_compact)
-                .collect();
-            let elapsed = started.elapsed();
-            times.push(elapsed);
+                .zip(&measures)
+                .filter(|(before, after)| before.delta_len() > 0 && after.delta_len() == 0)
+                .count();
+            timings.push(EditTiming { elapsed, compacted });
             let delta_len: usize = measures.iter().map(Measure::delta_len).sum();
             eprintln!(
-                "{name}\t{edit}\t{:.3}s\tdelta {delta_len}",
-                elapsed.as_secs_f64()
+                "{name}\t{edit}\t{:.3}s\tevaluate {:.3}s\tfold {:.3}s\tcompacted {compacted}\tdelta {delta_len}",
+                elapsed.as_secs_f64(),
+                evaluated.as_secs_f64(),
+                folded.as_secs_f64()
             );
         }
-        report(&name, &mut times);
-        all.extend(times);
+        report(&name, &mut timings);
+        all.extend(timings);
     }
     report("all", &mut all);
     Ok(())
 }
 
-#[expect(
-    clippy::as_conversions,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a quantile position is a small whole number after ceil, and f64 has no TryFrom to usize"
-)]
-fn report(name: &str, times: &mut [Duration]) {
-    times.sort();
-    let at = |quantile: f64| {
-        times[((times.len() as f64 * quantile).ceil() as usize).saturating_sub(1)].as_secs_f64()
-    };
+struct EditTiming {
+    elapsed: Duration,
+    compacted: usize,
+}
+
+fn report(name: &str, timings: &mut [EditTiming]) {
+    timings.sort_by_key(|timing| timing.elapsed);
+    let rank = |percent: usize| (timings.len() * percent).div_ceil(100).saturating_sub(1);
+    let at = |percent: usize| timings[rank(percent)].elapsed.as_secs_f64();
+    let compacting =
+        |timings: &[EditTiming]| timings.iter().filter(|timing| timing.compacted > 0).count();
+    let slowest = &timings[rank(99)..];
     println!(
-        "{name}\tedits {}\tp50 {:.3}s\tp99 {:.3}s\tmax {:.3}s",
-        times.len(),
-        at(0.5),
-        at(0.99),
-        at(1.0)
+        "{name}\tedits {}\tp50 {:.3}s\tp99 {:.3}s\tmax {:.3}s\tcompacting {}\tcompacting at p99 and above {}/{}",
+        timings.len(),
+        at(50),
+        at(99),
+        at(100),
+        compacting(timings),
+        compacting(slowest),
+        slowest.len()
     );
 }

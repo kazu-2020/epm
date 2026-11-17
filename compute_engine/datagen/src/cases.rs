@@ -229,6 +229,9 @@ pub const CASES: &[Case] = &[
     },
 ];
 
+const REVISED_COORDINATES: &str =
+    "the '改定' coordinates are within the 3 departments and 2 periods";
+
 #[derive(Debug)]
 pub struct Fixture {
     pub dimensions: Vec<Dimension>,
@@ -313,16 +316,16 @@ impl Default for Fixture {
         let mut delta = revised.delta();
         delta
             .set(&[MemberIndex(0), MemberIndex(0)], 5.0)
-            .expect("the fixture coordinate is within '改定'");
+            .expect(REVISED_COORDINATES);
         delta
             .delete(&[MemberIndex(1), MemberIndex(0)])
-            .expect("the fixture coordinate is within '改定'");
+            .expect(REVISED_COORDINATES);
         delta
             .set(&[MemberIndex(2), MemberIndex(1)], 3.0)
-            .expect("the fixture coordinate is within '改定'");
+            .expect(REVISED_COORDINATES);
         *revised = revised
             .apply(delta.finish())
-            .expect("the delta belongs to '改定'");
+            .expect("a delta taken from '改定' applies to '改定'");
         Fixture {
             dimensions,
             inputs,
@@ -402,12 +405,12 @@ fn dimension(
         natural_key_attribute(global_id).global_id,
         [vec![natural_key_attribute(global_id)], attributes].concat(),
     )
-    .expect("the fixture dimension definitions are valid");
+    .expect("each fixture dimension has a text natural key and distinct attributes that do not reference their own dimension");
     let global_ids = FixedSizeBinaryArray::try_from_iter((0..natural_keys.len()).map(|row| {
         Ulid(global_id.0.0 * 100 + u128::try_from(row).expect("a fixture row fits in u128"))
             .to_bytes()
     }))
-    .expect("every member ULID is 16 bytes");
+    .expect("every ULID is 16 bytes");
     let mut columns: Vec<ArrayRef> = vec![
         Arc::new(global_ids),
         Arc::new(StringArray::from(natural_keys.to_vec())),
@@ -416,8 +419,9 @@ fn dimension(
         columns.push(Arc::new(UInt32Array::from(attribute_values.to_vec())));
     }
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns)
-        .expect("the columns follow the dimension schema");
-    Dimension::try_new(definition, batch, targets).expect("the fixture dimensions are valid")
+        .expect("each fixture dimension has at most one attribute besides its natural key, with one value per member");
+    Dimension::try_new(definition, batch, targets)
+        .expect("each fixture dimension has distinct natural keys, is built after the dimensions it references, and its reference values point at existing members")
 }
 
 fn measure_definition(
@@ -438,5 +442,6 @@ fn measure(
         .iter()
         .map(|&(coordinate, value)| (coordinate.iter().copied().map(MemberIndex).collect(), value))
         .collect();
-    Measure::from_cells(definition, cells, dimensions).expect("the fixture cells are valid")
+    Measure::from_cells(definition, cells, dimensions)
+        .expect("the fixture lists each cell once, within the members of its axes")
 }

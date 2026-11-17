@@ -2,7 +2,6 @@ use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -60,13 +59,18 @@ pub struct Lag {
 pub struct Stopped;
 
 #[derive(Debug, PartialEq)]
+pub struct Loading;
+
+#[derive(Debug, PartialEq)]
 pub enum SubmitError {
+    Loading,
     Rejected(Rejection),
     Stopped,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum ReadError {
+    Loading,
     NotCommitted(Lag),
     NoMeasure(MeasureGlobalId),
     Coordinate(CoordinateError),
@@ -77,8 +81,7 @@ pub enum ReadError {
 pub struct Handle {
     submission_sender: mpsc::Sender<Submission<Rejection>>,
     engine_receiver: watch::Receiver<Arc<Engine>>,
-    committed_count: Arc<AtomicU64>,
-    loaded_receiver: watch::Receiver<bool>,
+    committed: watch::Sender<Committed>,
     #[cfg(feature = "apply_before_commit")]
     commit_sender: mpsc::UnboundedSender<(Slot, Commit)>,
 }
@@ -88,8 +91,12 @@ struct Admission {
     engine_receiver: watch::Receiver<Arc<Engine>>,
     accepted_count: u64,
     busy_after: u64,
-    committed_count: Arc<AtomicU64>,
-    loaded_sender: watch::Sender<bool>,
+    committed: watch::Sender<Committed>,
+}
+
+enum Committed {
+    LogNotRead,
+    Next(Sequence),
 }
 
 enum Calculator {
@@ -116,24 +123,21 @@ pub fn start(
     let (submission_sender, submission_receiver) = mpsc::channel(WAITING_REQUESTS);
     let (commit_sender, commit_receiver) = mpsc::unbounded_channel();
     let engine_next = engine.next.0;
-    let committed_count = Arc::new(AtomicU64::new(engine_next));
+    let committed = watch::Sender::new(Committed::LogNotRead);
     let edit_check = engine.edit_check().clone();
     let engine = Arc::new(engine);
     let (engine_sender, engine_receiver) = watch::channel(Arc::clone(&engine));
-    let (loaded_sender, loaded_receiver) = watch::channel(false);
     let admission = Admission {
         edit_check,
         engine_receiver: engine_receiver.clone(),
         accepted_count: engine_next,
         busy_after: settings.busy_after,
-        committed_count: Arc::clone(&committed_count),
-        loaded_sender,
+        committed: committed.clone(),
     };
     let handle = Handle {
         submission_sender,
         engine_receiver,
-        committed_count: Arc::clone(&committed_count),
-        loaded_receiver,
+        committed: committed.clone(),
         #[cfg(feature = "apply_before_commit")]
         commit_sender: commit_sender.clone(),
     };
@@ -155,7 +159,7 @@ pub fn start(
                 commit_receiver,
                 &calculator,
                 &engine_sender,
-                &committed_count,
+                &committed,
                 (&store, &workspace),
             ) => {
                 Exit::Engine(alarm)
@@ -170,7 +174,7 @@ async fn apply(
     mut commit_receiver: mpsc::UnboundedReceiver<(Slot, Commit)>,
     calculator: &Calculator,
     engine_sender: &watch::Sender<Arc<Engine>>,
-    committed_count: &AtomicU64,
+    committed: &watch::Sender<Committed>,
     (store, workspace): (&Arc<dyn ObjectStore>, &str),
 ) -> EngineAlarm {
     let mut calculation = None;
@@ -185,7 +189,7 @@ async fn apply(
                     batch.push(commit);
                 }
                 let last = batch.last().expect("the batch starts with a commit").1.sequence;
-                committed_count.fetch_max(last.0 + 1, Ordering::SeqCst);
+                raise(committed, last.next());
                 if cfg!(feature = "skip_commit") {
                     batch.retain(|(_, commit)| commit.sequence != Sequence(1));
                 }
@@ -313,6 +317,13 @@ impl Handle {
         request_id: RequestId,
         edit: &Edit,
     ) -> Result<Sequence, SubmitError> {
+        if self.next_sequence().is_err() {
+            return Err(if self.submission_sender.is_closed() {
+                SubmitError::Stopped
+            } else {
+                SubmitError::Loading
+            });
+        }
         let payload = crate::edit::encode(edit);
         #[cfg(feature = "apply_before_commit")]
         let _ = self.commit_sender.send((
@@ -336,8 +347,7 @@ impl Handle {
             .map_err(|_| SubmitError::Stopped)?
             .map_err(SubmitError::Rejected)?;
         // Not left to the apply loop: this ACK can reach the caller before the loop receives the commit, and a read of this sequence would be refused.
-        self.committed_count
-            .fetch_max(sequence.0 + 1, Ordering::SeqCst);
+        raise(&self.committed, sequence.next());
         Ok(sequence)
     }
 
@@ -346,15 +356,14 @@ impl Handle {
         at_least: Option<Sequence>,
         cells: &[(MeasureGlobalId, Vec<MemberIndex>)],
     ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
-        // Not only after the wait: a read that can never succeed would get NotCommitted, and the caller would try it again.
+        let lag = self.lag().map_err(|Loading| {
+            if self.submission_sender.is_closed() {
+                ReadError::Stopped
+            } else {
+                ReadError::Loading
+            }
+        })?;
         values(&self.engine_receiver.borrow(), cells)?;
-        if at_least.is_some() {
-            // Not NotCommitted at once: a new assignee counts the commits of the log only when it has read the log, and a committed sequence would look uncommitted.
-            self.wait_loaded()
-                .await
-                .map_err(|Stopped| ReadError::Stopped)?;
-        }
-        let lag = self.lag();
         if lag.committed < at_least {
             return Err(ReadError::NotCommitted(lag));
         }
@@ -368,21 +377,34 @@ impl Handle {
         Ok((engine.recalculated(), values(&engine, cells)?))
     }
 
-    pub fn lag(&self) -> Lag {
-        lag(&self.engine_receiver, &self.committed_count)
+    pub fn lag(&self) -> Result<Lag, Loading> {
+        let recalculated = self.engine_receiver.borrow().recalculated();
+        let next = self.next_sequence()?;
+        Ok(Lag {
+            committed: next.0.checked_sub(1).map(Sequence),
+            recalculated,
+        })
     }
 
-    pub fn loaded(&self) -> bool {
-        *self.loaded_receiver.borrow()
+    pub fn definitions(&self) -> Result<Arc<Engine>, Loading> {
+        self.next_sequence()?;
+        Ok(Arc::clone(&self.engine_receiver.borrow()))
+    }
+
+    fn next_sequence(&self) -> Result<Sequence, Loading> {
+        match *self.committed.borrow() {
+            Committed::LogNotRead => Err(Loading),
+            Committed::Next(next) => Ok(next),
+        }
     }
 
     pub async fn wait_loaded(&self) -> Result<(), Stopped> {
-        self.loaded_receiver
-            .clone()
-            .wait_for(|loaded| *loaded)
-            .await
-            .map(|_| ())
-            .map_err(|_| Stopped)
+        let mut committed_receiver = self.committed.subscribe();
+        tokio::select! {
+            biased;
+            _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::Next(_))) => Ok(()),
+            () = self.submission_sender.closed() => Err(Stopped),
+        }
     }
 
     pub fn engine_receiver(&self) -> watch::Receiver<Arc<Engine>> {
@@ -430,19 +452,18 @@ impl Admit for Admission {
     }
 
     fn ready(&mut self, next: Sequence) {
-        self.committed_count.fetch_max(next.0, Ordering::SeqCst);
-        self.loaded_sender.send_replace(true);
+        self.committed.send_replace(Committed::Next(next));
     }
 }
 
-fn lag(engine_receiver: &watch::Receiver<Arc<Engine>>, committed_count: &AtomicU64) -> Lag {
-    // Not the committed count first: a batch that finishes between the two reads would show more recalculated than committed.
-    let recalculated = engine_receiver.borrow().recalculated();
-    let committed_count = committed_count.load(Ordering::SeqCst);
-    Lag {
-        committed: committed_count.checked_sub(1).map(Sequence),
-        recalculated,
-    }
+fn raise(committed: &watch::Sender<Committed>, next: Sequence) {
+    committed.send_if_modified(|committed| match committed {
+        Committed::Next(current) if *current < next => {
+            *current = next;
+            true
+        }
+        _ => false,
+    });
 }
 
 #[cfg(test)]
