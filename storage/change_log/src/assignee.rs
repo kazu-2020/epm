@@ -351,15 +351,19 @@ fn replay<A: Admit>(
             break;
         }
         expected = next(*slot);
-        // Not every commit of the first slot: the start already counts the commits up to its last sequence, and that slot can hold some of them.
-        let skipped = if *slot == first {
+        let counted_by_start = if *slot == first {
             segment
                 .commits()
                 .partition_point(|commit| view.committed.contains(commit.sequence))
         } else {
             0
         };
-        view.add_older(&segment.commits()[skipped..], *slot, admit, effects);
+        view.add_older(
+            &segment.commits()[counted_by_start..],
+            *slot,
+            admit,
+            effects,
+        );
     }
     view
 }

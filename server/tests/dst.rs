@@ -389,7 +389,6 @@ fn recalculation_witnesses(outcome: &common::Outcome) -> BTreeSet<&'static str> 
             }
             Record::Crashed { server } => crashed.extend(epochs.get(server)),
             Record::Recalculated { epoch, sequence } => {
-                // Not None before the first record: every assignee recalculates from the first Commit Sequence, so its first batch starts there.
                 let first = recalculated_so_far
                     .insert(*epoch, *sequence)
                     .map_or(Sequence::FIRST, Sequence::next);
