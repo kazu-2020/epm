@@ -355,7 +355,7 @@ fn replay<A: Admit>(
         let skipped = if *slot == first {
             segment
                 .commits()
-                .partition_point(|commit| CommitCount::from(commit.sequence) <= view.committed)
+                .partition_point(|commit| view.committed.contains(commit.sequence))
         } else {
             0
         };

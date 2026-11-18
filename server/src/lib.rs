@@ -108,9 +108,10 @@ impl Engine {
         let mut edits = Edits::default();
         for (_, commit) in commits {
             let sequence = commit.sequence;
-            if sequence != applied.next() {
+            let expected = applied.next();
+            if sequence != expected {
                 return Err(EngineAlarm::OutOfOrder {
-                    expected: applied.next(),
+                    expected,
                     found: sequence,
                 });
             }

@@ -101,7 +101,7 @@ struct Admission {
 #[derive(Debug)]
 enum Committed {
     LogNotRead,
-    Read(Option<Sequence>),
+    LogRead(Option<Sequence>),
 }
 
 enum Calculator {
@@ -401,7 +401,7 @@ impl Handle {
     fn committed(&self) -> Result<Option<Sequence>, Loading> {
         match *self.committed.borrow() {
             Committed::LogNotRead => Err(Loading),
-            Committed::Read(last) => Ok(last),
+            Committed::LogRead(last) => Ok(last),
         }
     }
 
@@ -409,7 +409,7 @@ impl Handle {
         let mut committed_receiver = self.committed.subscribe();
         tokio::select! {
             biased;
-            _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::Read(_))) => Ok(()),
+            _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::LogRead(_))) => Ok(()),
             () = self.submission_sender.closed() => Err(Stopped),
         }
     }
@@ -443,33 +443,30 @@ impl Admit for Admission {
     type Rejection = Rejection;
 
     fn admit(&mut self, payload: &Bytes) -> Result<(), Rejection> {
-        let behind = self
-            .accepted
-            .0
-            .saturating_sub(self.engine_receiver.borrow().applied.0);
+        let behind = self.accepted.since(self.engine_receiver.borrow().applied);
         if behind > self.busy_after {
             return Err(Rejection::Busy { behind });
         }
         if !cfg!(feature = "no_admission_check") {
             edit::check(&self.edit_check, payload).map_err(Rejection::Invalid)?;
         }
-        self.accepted.0 += 1;
+        self.accepted = self.accepted.next().into();
         Ok(())
     }
 
     fn replay(&mut self, _payload: &Bytes) {
-        self.accepted.0 += 1;
+        self.accepted = self.accepted.next().into();
     }
 
     fn ready(&mut self, committed: CommitCount) {
         self.committed
-            .send_replace(Committed::Read(committed.last()));
+            .send_replace(Committed::LogRead(committed.last()));
     }
 }
 
 fn raise(committed: &watch::Sender<Committed>, last: Sequence) {
     committed.send_if_modified(|committed| match committed {
-        Committed::Read(current) if *current < Some(last) => {
+        Committed::LogRead(current) if *current < Some(last) => {
             *current = Some(last);
             true
         }

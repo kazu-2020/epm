@@ -19,7 +19,7 @@ pub struct Slot(pub u64);
 pub struct Sequence(NonZeroU64);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CommitCount(pub u64);
+pub struct CommitCount(pub(crate) u64);
 
 impl Sequence {
     pub const FIRST: Sequence = Sequence(NonZeroU64::MIN);
@@ -60,6 +60,14 @@ impl CommitCount {
 
     pub fn length(self) -> usize {
         usize::try_from(self.0).expect("a count fits in usize")
+    }
+
+    pub fn contains(self, sequence: Sequence) -> bool {
+        sequence.get() <= self.0
+    }
+
+    pub fn since(self, earlier: CommitCount) -> u64 {
+        self.0.saturating_sub(earlier.0)
     }
 }
 
@@ -360,6 +368,10 @@ mod tests {
         assert_eq!(CommitCount(1).last(), Some(Sequence::FIRST));
         assert_eq!(CommitCount::from(Sequence::FIRST), CommitCount(1));
         assert_eq!(Sequence::FIRST.index(), 0);
+        assert!(CommitCount(1).contains(Sequence::FIRST));
+        assert!(!CommitCount(0).contains(Sequence::FIRST));
+        assert_eq!(CommitCount(3).since(CommitCount(1)), 2);
+        assert_eq!(CommitCount(1).since(CommitCount(3)), 0);
     }
 
     #[test]

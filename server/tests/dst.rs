@@ -507,7 +507,7 @@ fn snapshot_witnesses(run: &Run) -> BTreeSet<&'static str> {
     }
     let acked_from_snapshot = run.outcome.history.iter().any(|record| {
         matches!(record, Record::Acked { epoch, sequence, .. }
-            if counts.get(epoch).is_some_and(|count| CommitCount::from(*sequence) <= *count))
+            if counts.get(epoch).is_some_and(|count| count.contains(*sequence)))
     });
     if acked_from_snapshot {
         seen.insert("resendAckedFromSnapshot");
