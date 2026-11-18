@@ -8,7 +8,8 @@ base="http://$listen/epm.v1.Workspace"
 alphabet=0123456789ABCDEFGHJKMNPQRSTVWXYZ
 workspace=0
 for _ in $(seq 1 25); do workspace+=${alphabet:RANDOM%32:1}; done
-cell='[0,1,1,0,1]'
+members='[0,1,1,0,1]'
+cell=''
 server_pid=""
 trap '[ -z "$server_pid" ] || kill -9 "$server_pid" 2>/dev/null || true' EXIT
 
@@ -87,6 +88,11 @@ start 1
 definitions=$(body_of "$(call ListDefinitions '{}')")
 quantity=$(jq -r '.measures[] | select(.name == "数量") | .ulid' <<<"$definitions")
 sales=$(jq -r '.measures[] | select(.name == "売上") | .ulid' <<<"$definitions")
+cell=$(jq -c --arg quantity "$quantity" --argjson members "$members" '
+  (.measures[] | select(.ulid == $quantity) | .axes) as $axes
+  | [range($axes | length) as $i | $axes[$i] as $axis
+     | {dimension: $axis, member: (.dimensions[] | select(.ulid == $axis) | .members[$members[$i]].ulid)}]
+' <<<"$definitions")
 echo "  quantity (数量) is $quantity, sales (売上 = 数量 * 単価) is $sales, cell is $cell"
 
 echo "== 1. An edit to an input changes a calculated value"

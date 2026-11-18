@@ -8,12 +8,11 @@ use bytes::Bytes;
 use change_log::{
     Admit, AssigneeId, Commit, Request, RequestId, Sequence, Slot, Start, Submission,
 };
-use dimension::MemberIndex;
-use measure::{CoordinateError, MeasureGlobalId};
+use measure::MeasureGlobalId;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use tokio::sync::{mpsc, oneshot, watch};
-use workspace::{EditCheck, WorkspaceGlobalId};
+use workspace::{CellError, Coordinate, EditCheck, WorkspaceGlobalId, resolve};
 
 use crate::apply::{Applier, Effect, Event};
 use crate::edit;
@@ -75,7 +74,7 @@ pub enum ReadError {
     Loading,
     NotCommitted(Lag),
     NoMeasure(MeasureGlobalId),
-    Coordinate(CoordinateError),
+    Cell(CellError),
     Stopped,
 }
 
@@ -357,7 +356,7 @@ impl Handle {
     pub async fn read(
         &self,
         at_least: Option<Sequence>,
-        cells: &[(MeasureGlobalId, Vec<MemberIndex>)],
+        cells: &[(MeasureGlobalId, Coordinate)],
     ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
         let lag = self.lag().map_err(|Loading| {
             if self.submission_sender.is_closed() {
@@ -418,18 +417,20 @@ impl Handle {
 
 fn values(
     engine: &Engine,
-    cells: &[(MeasureGlobalId, Vec<MemberIndex>)],
+    cells: &[(MeasureGlobalId, Coordinate)],
 ) -> Result<Vec<Option<f64>>, ReadError> {
     cells
         .iter()
         .map(|(measure, coordinate)| {
-            engine
+            let measure = engine
                 .measures()
                 .iter()
                 .find(|candidate| candidate.global_id() == *measure)
-                .ok_or(ReadError::NoMeasure(*measure))?
-                .get(coordinate)
-                .map_err(ReadError::Coordinate)
+                .ok_or(ReadError::NoMeasure(*measure))?;
+            let coordinate = resolve(engine.axes(measure), coordinate).map_err(ReadError::Cell)?;
+            Ok(measure
+                .get(&coordinate)
+                .expect("resolve gives a member of each dimension of the measure"))
         })
         .collect()
 }

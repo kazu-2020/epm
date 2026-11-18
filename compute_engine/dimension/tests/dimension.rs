@@ -534,6 +534,14 @@ fn a_global_id_reads_and_prints_as_one_canonical_ulid() {
         "",
     ] {
         assert_eq!(parse_global_id(text), Err(InvalidGlobalId), "{text:?}");
+        assert_eq!(
+            text.parse::<MemberGlobalId>(),
+            Err(InvalidGlobalId),
+            "{text:?}"
+        );
     }
+    assert_eq!("00000000000000000000000034".parse(), Ok(DEPARTMENT));
+    let member = MemberGlobalId(Ulid(7));
+    assert_eq!(member.to_string().parse(), Ok(member));
     assert_eq!(InvalidGlobalId.to_string(), "not a ULID");
 }

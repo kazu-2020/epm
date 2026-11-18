@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::str::FromStr;
 use std::time::Duration;
 
 use axum::extract::State;
@@ -9,13 +10,14 @@ use axum::routing::post;
 use axum::{Json, Router};
 use bytes::Bytes;
 use change_log::{RequestId, Sequence};
-use dimension::MemberIndex;
+use dimension::{InvalidGlobalId, MemberIndex};
 use measure::MeasureGlobalId;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use workspace::Coordinate;
 
 use crate::{Edit, Exit, Handle, Invalid, Loading, ReadError, Rejection, SubmitError};
 
@@ -27,7 +29,7 @@ const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 struct SubmitEditRequest {
     request_id: String,
     measure: String,
-    coordinate: Vec<u32>,
+    coordinate: Vec<AxisMember>,
     // Not the default for a missing Option: a request that forgets the value would clear the cell.
     #[serde(deserialize_with = "Option::deserialize")]
     value: Option<f64>,
@@ -44,7 +46,15 @@ struct ReadCellsRequest {
 #[serde(deny_unknown_fields)]
 struct CellRequest {
     measure: String,
-    coordinate: Vec<u32>,
+    coordinate: Vec<AxisMember>,
+}
+
+// Not the members in the declared order: a client that read the definition before a change would name another cell (#184).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AxisMember {
+    dimension: String,
+    member: String,
 }
 
 #[derive(Clone, Copy)]
@@ -116,7 +126,7 @@ async fn submit_edit(
     }
     let edit = Edit {
         measure: measure(&request.measure)?,
-        coordinate: coordinate(request.coordinate),
+        coordinate: coordinate(request.coordinate)?,
         value: request.value,
     };
     let request_id = RequestId(Bytes::from(request.request_id));
@@ -136,7 +146,7 @@ async fn read_cells(
     let cells = request
         .cells
         .into_iter()
-        .map(|cell| Ok((measure(&cell.measure)?, coordinate(cell.coordinate))))
+        .map(|cell| Ok((measure(&cell.measure)?, coordinate(cell.coordinate)?)))
         .collect::<Result<Vec<_>, Failure>>()?;
     let (recalculated, values) = handle
         .read(request.at_least.map(Sequence), &cells)
@@ -174,7 +184,9 @@ async fn list_definitions(State(handle): State<Handle>) -> Result<Json<Value>, F
         .map(|dimension| {
             let members: Vec<Value> = (0..dimension.len())
                 .filter_map(|id| dimension.member(MemberIndex(id)))
-                .map(|member| json!({ "id": member.id().0, "natural_key": member.natural_key() }))
+                .map(|member| {
+                    json!({ "ulid": member.global_id().to_string(), "natural_key": member.natural_key() })
+                })
                 .collect();
             json!({
                 "ulid": dimension.global_id().to_string(),
@@ -215,12 +227,24 @@ fn parse<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, Fai
 }
 
 fn measure(text: &str) -> Result<MeasureGlobalId, Failure> {
-    text.parse()
-        .map_err(|error| Failure::new(Code::InvalidArgument, format!("measure {text:?}: {error}")))
+    global_id("measure", text)
 }
 
-fn coordinate(members: Vec<u32>) -> Vec<MemberIndex> {
-    members.into_iter().map(MemberIndex).collect()
+fn coordinate(members: Vec<AxisMember>) -> Result<Coordinate, Failure> {
+    members
+        .into_iter()
+        .map(|AxisMember { dimension, member }| {
+            Ok((
+                global_id("dimension", &dimension)?,
+                global_id("member", &member)?,
+            ))
+        })
+        .collect()
+}
+
+fn global_id<T: FromStr<Err = InvalidGlobalId>>(name: &str, text: &str) -> Result<T, Failure> {
+    text.parse()
+        .map_err(|error| Failure::new(Code::InvalidArgument, format!("{name} {text:?}: {error}")))
 }
 
 // Not a loaded flag in each answer: the App server records an Assignee only after a GetLag that is not unavailable (ADR 0012).
@@ -238,7 +262,7 @@ fn submit_failure(error: SubmitError) -> Failure {
             let message = match invalid {
                 Invalid::Undecodable(_) => "the edit cannot be decoded".to_owned(),
                 Invalid::NotAnInput(measure) => format!("measure {measure} is not an input"),
-                Invalid::Coordinate(error) => error.to_string(),
+                Invalid::Cell(error) => error.to_string(),
             };
             Failure::new(Code::InvalidArgument, message)
         }
@@ -266,7 +290,7 @@ fn read_failure(error: ReadError) -> Failure {
         ReadError::NoMeasure(measure) => {
             Failure::new(Code::NotFound, format!("no measure {measure}"))
         }
-        ReadError::Coordinate(error) => Failure::new(Code::InvalidArgument, error.to_string()),
+        ReadError::Cell(error) => Failure::new(Code::InvalidArgument, error.to_string()),
         ReadError::Stopped => Failure::new(Code::Unavailable, "the assignee stopped".to_owned()),
     }
 }

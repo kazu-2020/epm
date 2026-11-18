@@ -1,24 +1,26 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use dimension::{Dimension, MemberIndex};
+use dimension::Dimension;
 use formula::{CheckedExpression, EvaluateError};
-use measure::{CoordinateError, DeltaBuilder, Measure, MeasureGlobalId};
+use measure::{DeltaBuilder, Measure, MeasureGlobalId};
 
+use crate::cell::{CellError, Coordinate, resolve};
 use crate::compile::CompiledFormula;
 use crate::workspace::Workspace;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Edit {
     pub measure: MeasureGlobalId,
-    pub coordinate: Vec<MemberIndex>,
+    // Not the member indexes in the declared order: the change log keeps an edit, and a later definition can declare the axes in another order or move a member to another row (#184).
+    pub coordinate: Coordinate,
     pub value: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditError {
     NotAnInput(MeasureGlobalId),
-    Coordinate(CoordinateError),
+    Cell(CellError),
 }
 
 #[derive(Debug, PartialEq)]
@@ -29,7 +31,14 @@ pub struct CalculateError {
 
 #[derive(Clone, Debug)]
 pub struct EditCheck {
-    empty: Arc<BTreeMap<MeasureGlobalId, DeltaBuilder>>,
+    inputs: Arc<BTreeMap<MeasureGlobalId, Input>>,
+    dimensions: Arc<[Dimension]>,
+}
+
+#[derive(Debug)]
+struct Input {
+    empty: DeltaBuilder,
+    axis_positions: Vec<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -48,7 +57,7 @@ pub struct Calculated {
 
 impl EditCheck {
     pub fn is_input(&self, measure: MeasureGlobalId) -> bool {
-        self.empty.contains_key(&measure)
+        self.inputs.contains_key(&measure)
     }
 
     pub fn check(&self, edit: &Edit) -> Result<(), EditError> {
@@ -56,33 +65,57 @@ impl EditCheck {
     }
 
     pub fn add(&self, edit: &Edit, edits: &mut Edits) -> Result<(), EditError> {
-        let empty = self
-            .empty
+        let input = self
+            .inputs
             .get(&edit.measure)
             .ok_or(EditError::NotAnInput(edit.measure))?;
+        let axes = input
+            .axis_positions
+            .iter()
+            .map(|&position| &self.dimensions[position]);
+        let coordinate = resolve(axes, &edit.coordinate).map_err(EditError::Cell)?;
         let delta = edits
             .deltas
             .entry(edit.measure)
-            .or_insert_with(|| empty.clone());
+            .or_insert_with(|| input.empty.clone());
         match edit.value {
-            Some(value) => delta.set(&edit.coordinate, value),
-            None => delta.delete(&edit.coordinate),
+            Some(value) => delta.set(&coordinate, value),
+            None => delta.delete(&coordinate),
         }
-        .map_err(EditError::Coordinate)
+        .expect(
+            "Workspace::try_new checks that the member counts of every input match its dimensions",
+        );
+        Ok(())
     }
 }
 
 impl Calculated {
     pub fn new(workspace: Workspace) -> Result<Calculated, CalculateError> {
         let (dimensions, inputs, formulas) = workspace.into_compiled();
+        let dimensions: Arc<[Dimension]> = dimensions.into();
         let references: Vec<&Dimension> = dimensions.iter().collect();
         let edit_check = EditCheck {
-            empty: Arc::new(
+            inputs: Arc::new(
                 inputs
                     .iter()
-                    .map(|input| (input.global_id(), input.delta()))
+                    .map(|input| {
+                        let axis_positions = input
+                            .definition()
+                            .axes()
+                            .iter()
+                            .map(|&axis| {
+                                dimensions
+                                    .iter()
+                                    .position(|dimension| dimension.global_id() == axis)
+                                    .expect("Workspace::try_new checks that every input is made from its dimensions")
+                            })
+                            .collect();
+                        let empty = input.delta();
+                        (input.global_id(), Input { empty, axis_positions })
+                    })
                     .collect(),
             ),
+            dimensions: Arc::clone(&dimensions),
         };
         let input_count = inputs.len();
         let mut measures = inputs;
@@ -101,7 +134,7 @@ impl Calculated {
             measures.push(result);
         }
         Ok(Calculated {
-            dimensions: dimensions.into(),
+            dimensions,
             formulas: formulas.into(),
             measures,
             input_count,
