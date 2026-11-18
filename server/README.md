@@ -81,6 +81,7 @@ curl -X POST "${headers[@]}" "$api/GetLag" -d '{}'
 ```
 
 - A coordinate names one member of each axis of the measure by the ULIDs of the dimension and the member, in any order. `ListDefinitions` gives the axes of each measure and the ULIDs of the members. A position in the declared order is not a coordinate. The change log keeps the edit, and the declared order can change later (#184).
+- The `kind` of a measure in `ListDefinitions` is `MEASURE_KIND_INPUT` or `MEASURE_KIND_CALCULATED`. Only an input measure takes an edit.
 - `SubmitEdit` returns `{"sequence": "N"}`. A `null` value clears the cell. An edit without `value` is an error. If you send the same `request_id` again, you get the same sequence.
 - `ReadCells` returns `{"recalculated": "N", "values": [...]}`. The values include all commits up to `at_least` or later. If you leave out `at_least`, you get the values that the server has recalculated so far.
 - A value is `null` if the cell is empty. A member that is not in its dimension is an error, the same as in an edit.

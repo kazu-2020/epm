@@ -342,8 +342,8 @@ async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions()
             .find(|measure| measure["ulid"] == global_id.to_string())
             .map(|measure| measure["kind"].clone())
     };
-    assert_eq!(kind(QUANTITY), Some(json!("input")));
-    assert_eq!(kind(SALES), Some(json!("calculated")));
+    assert_eq!(kind(QUANTITY), Some(json!("MEASURE_KIND_INPUT")));
+    assert_eq!(kind(SALES), Some(json!("MEASURE_KIND_CALCULATED")));
     let first_axis = &measures[0]["axes"][0];
     let dimension = definitions["dimensions"]
         .as_array()

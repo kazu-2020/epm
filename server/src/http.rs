@@ -33,7 +33,7 @@ mod proto {
 
 use proto::epm::v1::{
     AxisMember, Dimension, GetLagRequest, GetLagResponse, ListDefinitionsRequest,
-    ListDefinitionsResponse, Measure, Member, ReadCellsRequest, ReadCellsResponse,
+    ListDefinitionsResponse, Measure, MeasureKind, Member, ReadCellsRequest, ReadCellsResponse,
     SubmitEditRequest, SubmitEditResponse, Workspace,
 };
 
@@ -162,15 +162,15 @@ impl Workspace for Handle {
             .map(|measure| {
                 let definition = measure.definition();
                 let kind = if engine.edit_check().is_input(definition.global_id()) {
-                    "input"
+                    MeasureKind::Input
                 } else {
-                    "calculated"
+                    MeasureKind::Calculated
                 };
                 Measure {
                     ulid: definition.global_id().to_string(),
                     name: definition.name().to_owned(),
                     axes: definition.axes().iter().map(ToString::to_string).collect(),
-                    kind: kind.to_owned(),
+                    kind: kind.into(),
                     ..Default::default()
                 }
             })

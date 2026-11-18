@@ -56,7 +56,13 @@ message Measure {
   string ulid = 1;
   string name = 2;
   repeated string axes = 3;
-  string kind = 4;
+  MeasureKind kind = 4;
+}
+
+enum MeasureKind {
+  MEASURE_KIND_UNSPECIFIED = 0;
+  MEASURE_KIND_INPUT = 1;
+  MEASURE_KIND_CALCULATED = 2;
 }
 
 message Dimension {
