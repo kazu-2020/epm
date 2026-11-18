@@ -1,6 +1,3 @@
-// Not a dead code warning: each test binary compiles this module and uses only some of it.
-#![allow(dead_code)]
-
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,16 +9,16 @@ use server::{Engine, Exit, Handle, Settings};
 use ulid::Ulid;
 use workspace::{Workspace, WorkspaceGlobalId};
 
-pub const WORKSPACE: WorkspaceGlobalId = WorkspaceGlobalId(Ulid(1));
+pub(crate) const WORKSPACE: WorkspaceGlobalId = WorkspaceGlobalId(Ulid(1));
 
-pub fn engine() -> Engine {
+pub(crate) fn engine() -> Engine {
     Engine::new(
         Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
     )
     .expect("valid formulas")
 }
 
-pub fn start(
+pub(crate) fn start(
     engine: Engine,
     start: Start,
     settings: Settings,
@@ -41,8 +38,8 @@ pub fn start(
     )
 }
 
-pub async fn loaded(handle: &Handle) {
-    tokio::time::timeout(Duration::from_secs(60), handle.wait_loaded())
+pub(crate) async fn loaded(handle: &Handle) {
+    tokio::time::timeout(Duration::from_mins(1), handle.wait_loaded())
         .await
         .expect("the assignee loads the change log in time")
         .expect("the assignee runs");

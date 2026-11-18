@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use dimension::DimensionGlobalId;
 use measure::CoordinatePacking;
 
-use crate::usize_from;
+use dimension::usize_from;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Region {

@@ -1,12 +1,12 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use dimension::MemberIndex;
+use dimension::{DimensionGlobalId, MemberGlobalId};
 use measure::MeasureGlobalId;
 use ulid::Ulid;
 use workspace::{Edit, EditCheck, EditError, Edits};
 
 use crate::Invalid;
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const CLEAR: u8 = 0;
 const SET: u8 = 1;
 
@@ -29,20 +29,25 @@ pub(crate) fn add(
     edits: &mut Edits,
 ) -> Result<(), Invalid> {
     let edit = decode(payload.clone()).map_err(Invalid::Undecodable)?;
-    edit_check.add(&edit, edits).map_err(|error| match error {
+    edit_check.add(&edit, edits).map_err(invalid)
+}
+
+fn invalid(error: EditError) -> Invalid {
+    match error {
         EditError::NotAnInput(measure) => Invalid::NotAnInput(measure),
-        EditError::Coordinate(error) => Invalid::Coordinate(error),
-    })
+        EditError::Cell(error) => Invalid::Cell(error),
+    }
 }
 
 pub fn encode(edit: &Edit) -> Bytes {
     let mut out = BytesMut::new();
     out.put_u8(VERSION);
     out.put_slice(&edit.measure.0.to_bytes());
-    let count = u32::try_from(edit.coordinate.len()).expect("a coordinate has < 2^32 members");
+    let count = u32::try_from(edit.coordinate.iter().len()).expect("a coordinate has < 2^32 axes");
     out.put_u32_le(count);
-    for member in &edit.coordinate {
-        out.put_u32_le(member.0);
+    for (axis, member) in edit.coordinate.iter() {
+        out.put_slice(&axis.0.to_bytes());
+        out.put_slice(&member.0.to_bytes());
     }
     match edit.value {
         None => out.put_u8(CLEAR),
@@ -64,7 +69,9 @@ pub fn decode(mut bytes: Bytes) -> Result<Edit, DecodeError> {
     // Not Vec::with_capacity(count): the count is untrusted until the bytes behind it are read.
     let mut coordinate = Vec::new();
     for _ in 0..count {
-        coordinate.push(MemberIndex(take(&mut bytes, 4)?.get_u32_le()));
+        let axis = DimensionGlobalId(Ulid(take(&mut bytes, 16)?.get_u128()));
+        let member = MemberGlobalId(Ulid(take(&mut bytes, 16)?.get_u128()));
+        coordinate.push((axis, member));
     }
     let value = match take(&mut bytes, 1)?.get_u8() {
         CLEAR => None,
@@ -79,7 +86,7 @@ pub fn decode(mut bytes: Bytes) -> Result<Edit, DecodeError> {
     }
     Ok(Edit {
         measure,
-        coordinate,
+        coordinate: coordinate.into_iter().collect(),
         value,
     })
 }
@@ -98,7 +105,12 @@ mod tests {
     fn edit(value: Option<f64>) -> Edit {
         Edit {
             measure: MeasureGlobalId(Ulid(0x0102)),
-            coordinate: vec![MemberIndex(3), MemberIndex(0x0405)],
+            coordinate: [
+                (DimensionGlobalId(Ulid(0x0a)), MemberGlobalId(Ulid(3))),
+                (DimensionGlobalId(Ulid(0x0b)), MemberGlobalId(Ulid(0x0405))),
+            ]
+            .into_iter()
+            .collect(),
             value,
         }
     }
@@ -113,11 +125,20 @@ mod tests {
     #[test]
     fn the_layout_is_fixed() {
         let global_id = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01\x02";
-        let members = b"\x02\0\0\0\x03\0\0\0\x05\x04\0\0";
-        let cleared = [&b"\x01"[..], global_id, members, b"\0"].concat();
+        let members = [
+            &b"\x02\0\0\0"[..],
+            b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x0a",
+            b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03",
+            b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x0b",
+            b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x04\x05",
+        ]
+        .concat();
+        let members = &members[..];
+        let cleared = [&b"\x02"[..], global_id, members, b"\0"].concat();
         assert_eq!(&encode(&edit(None))[..], cleared);
+        assert_eq!(decode(cleared.into()), Ok(edit(None)));
         let set = [
-            &b"\x01"[..],
+            &b"\x02"[..],
             global_id,
             members,
             b"\x01",
@@ -125,6 +146,7 @@ mod tests {
         ]
         .concat();
         assert_eq!(&encode(&edit(Some(1.5)))[..], set);
+        assert_eq!(decode(set.into()), Ok(edit(Some(1.5))));
     }
 
     #[test]
@@ -144,8 +166,8 @@ mod tests {
         let bytes = encode(&edit(Some(2.0))).to_vec();
         let tag = bytes.len() - 9;
         let mut version = bytes.clone();
-        version[0] = 2;
-        assert_eq!(decode(version.into()), Err(DecodeError::Version(2)));
+        version[0] = 1;
+        assert_eq!(decode(version.into()), Err(DecodeError::Version(1)));
         let mut unknown = bytes.clone();
         unknown[tag] = 2;
         assert_eq!(decode(unknown.into()), Err(DecodeError::Tag(2)));

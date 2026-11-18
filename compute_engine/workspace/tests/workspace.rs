@@ -1,17 +1,19 @@
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use datagen::cases::exact;
 use datagen::numbered_dimension;
 use datagen::representative::{self, Size};
 use dimension::{
-    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, InvalidGlobalId, MemberIndex,
+    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, InvalidGlobalId,
+    MemberGlobalId, MemberIndex,
 };
 use formula::{AxisErrorKind, EvaluateError, ResolveErrorKind};
-use measure::{CoordinateError, Measure, MeasureDefinition, MeasureGlobalId};
+use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 use workspace::{
-    Calculated, Edit, EditError, Edits, Formula, FormulaError, UncheckedWorkspace, Workspace,
-    WorkspaceError, WorkspaceGlobalId,
+    Calculated, CellError, Coordinate, Edit, EditError, Edits, Formula, FormulaError,
+    UncheckedWorkspace, Workspace, WorkspaceError, WorkspaceGlobalId, resolve,
 };
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
@@ -20,6 +22,7 @@ const OVERHEAD: MeasureGlobalId = MeasureGlobalId(Ulid(203));
 const COST: MeasureGlobalId = MeasureGlobalId(Ulid(206));
 const GROSS_PROFIT: MeasureGlobalId = MeasureGlobalId(Ulid(207));
 const PERIOD: DimensionGlobalId = DimensionGlobalId(Ulid(9));
+const PERIOD_OTHER: DimensionGlobalId = DimensionGlobalId(Ulid(0xdead));
 
 fn generated() -> UncheckedWorkspace {
     representative::generate(&Size::TINY, 7)
@@ -62,10 +65,32 @@ fn formula(unchecked: &mut UncheckedWorkspace, result: MeasureGlobalId) -> &mut 
         .expect("the representative model has the formula")
 }
 
+fn quantity_cell() -> [MemberIndex; 5] {
+    [0, 1, 1, 0, 1].map(MemberIndex)
+}
+
+static QUANTITY_CELL: LazyLock<Coordinate> = LazyLock::new(|| {
+    let unchecked = generated();
+    let input = &unchecked.inputs[0];
+    assert_eq!(
+        input.global_id(),
+        QUANTITY,
+        "the first input is the quantity"
+    );
+    let axes = input.definition().axes().iter().map(|&axis| {
+        unchecked
+            .dimensions
+            .iter()
+            .find(|dimension| dimension.global_id() == axis)
+            .expect("the axis is a dimension")
+    });
+    Coordinate::named(axes, &quantity_cell()).expect("the members exist")
+});
+
 fn quantity(value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
-        coordinate: [0, 1, 1, 0, 1].map(MemberIndex).to_vec(),
+        coordinate: QUANTITY_CELL.clone(),
         value,
     }
 }
@@ -263,15 +288,89 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     let mut result = quantity(Some(2.5));
     result.measure = SALES;
     assert_eq!(checks.check(&result), Err(EditError::NotAnInput(SALES)));
-    let mut short = quantity(Some(2.5));
-    short.coordinate.pop();
+    let pairs: Vec<_> = quantity(None).coordinate.iter().collect();
+    let (first, _) = pairs[0];
+    let member = pairs[1].1;
+    let with = |coordinate: Vec<(DimensionGlobalId, MemberGlobalId)>| Edit {
+        coordinate: coordinate.into_iter().collect(),
+        ..quantity(Some(2.5))
+    };
+    let short = with(pairs[1..].to_vec());
     assert_eq!(
         checks.check(&short),
-        Err(EditError::Coordinate(CoordinateError::Length {
+        Err(EditError::Cell(CellError::Length {
             expected: 5,
             found: 4,
         }))
     );
+    let mut swapped = pairs.clone();
+    swapped[0].0 = PERIOD_OTHER;
+    assert_eq!(
+        checks.check(&with(swapped)),
+        Err(EditError::Cell(CellError::MissingAxis(first)))
+    );
+    let mut repeated = pairs.clone();
+    repeated[0] = repeated[1];
+    assert_eq!(
+        checks.check(&with(repeated)),
+        Err(EditError::Cell(CellError::Length {
+            expected: 5,
+            found: 4,
+        })),
+        "a coordinate keeps one member for each axis"
+    );
+    let mut foreign = pairs;
+    foreign[0].1 = member;
+    let foreign = with(foreign);
+    assert_eq!(
+        checks.check(&foreign),
+        Err(EditError::Cell(CellError::NoMember {
+            axis: first,
+            member
+        }))
+    );
+}
+
+#[test]
+fn an_edit_gives_the_same_cell_under_a_definition_that_declares_the_axes_in_another_order() {
+    let mut reversed = generated();
+    let original = generated();
+    let dimensions: Vec<&Dimension> = original.dimensions.iter().collect();
+    let input = &reversed.inputs[0];
+    let axes = input.definition().axes().iter().rev().copied().collect();
+    let definition = MeasureDefinition::try_new(QUANTITY, input.definition().name().into(), axes)
+        .expect("the same axes");
+    let cells_reversed = input
+        .cells()
+        .map(|(mut coordinate, value)| {
+            coordinate.reverse();
+            (coordinate, value)
+        })
+        .collect();
+    reversed.inputs[0] = Measure::from_cells(definition, cells_reversed, &dimensions)
+        .expect("the cells fit the reversed axes");
+    let edited = |calculated: Calculated| {
+        let mut edits = Edits::default();
+        calculated
+            .edit_check()
+            .add(&quantity(Some(123.5)), &mut edits)
+            .expect("the edit fits the input");
+        calculated.apply(edits).expect("the edit recalculates")
+    };
+
+    let declared = edited(calculated(generated()));
+    let reversed = edited(calculated(reversed));
+
+    let mut cell = quantity_cell();
+    cell.reverse();
+    assert_eq!(reversed.inputs()[0].get(&cell), Ok(Some(123.5)));
+    assert_eq!(declared.inputs()[0].get(&quantity_cell()), Ok(Some(123.5)));
+    let results = |calculated: &Calculated| {
+        let mut all = cells(calculated);
+        all.remove(&QUANTITY);
+        all
+    };
+    assert_eq!(results(&reversed), results(&declared));
 }
 
 #[test]
@@ -288,10 +387,14 @@ fn applied_edits_give_the_cells_of_a_workspace_that_starts_with_the_edited_input
 
     let mut edited = generated();
     let input = &mut edited.inputs[0];
-    assert_eq!(input.global_id(), QUANTITY);
+    assert_eq!(
+        input.global_id(),
+        QUANTITY,
+        "the first input is the quantity"
+    );
     let mut delta = input.delta();
     delta
-        .set(&quantity(None).coordinate, 7.25)
+        .set(&quantity_cell(), 7.25)
         .expect("the coordinate fits");
     *input = input
         .apply(delta.finish())
@@ -351,7 +454,7 @@ fn a_workspace_takes_only_inputs_of_its_definitions_and_dimensions() {
     let mut edited = generated().inputs;
     let mut delta = edited[0].delta();
     delta
-        .set(&quantity(None).coordinate, 7.25)
+        .set(&quantity_cell(), 7.25)
         .expect("the coordinate fits");
     edited[0] = edited[0]
         .apply(delta.finish())
@@ -478,4 +581,74 @@ fn a_workspace_global_id_above_128_bits_is_not_another_workspace() {
         );
     }
     assert_eq!(InvalidGlobalId.to_string(), "not a ULID");
+}
+
+#[test]
+fn a_coordinate_names_a_member_by_its_global_id_in_whatever_row_the_member_is() {
+    let dimension = numbered_dimension(1, 3, DimensionKind::Ordinary, &[]);
+    let member = dimension
+        .member(MemberIndex(1))
+        .expect("three members")
+        .global_id();
+    let moved = Dimension::try_new(
+        dimension.definition().clone(),
+        dimension.batch().slice(1, 2),
+        &[],
+    )
+    .expect("a valid dimension");
+    let coordinate: Coordinate = [(dimension.global_id(), member)].into_iter().collect();
+
+    assert_eq!(
+        resolve([&dimension].into_iter(), &coordinate),
+        Ok(vec![MemberIndex(1)])
+    );
+    assert_eq!(
+        resolve([&moved].into_iter(), &coordinate),
+        Ok(vec![MemberIndex(0)])
+    );
+}
+
+#[test]
+fn a_coordinate_named_from_member_indexes_resolves_to_the_same_indexes() {
+    let unchecked = generated();
+    let declared = &unchecked.dimensions;
+    let members: Vec<MemberIndex> = declared.iter().map(|_| MemberIndex(1)).collect();
+    let coordinate =
+        Coordinate::named(declared.iter(), &members).expect("every dimension has two members");
+
+    assert_eq!(resolve(declared.iter(), &coordinate), Ok(members.clone()));
+    assert_eq!(
+        Coordinate::named(declared.iter(), &members[1..]),
+        None,
+        "one member for each dimension"
+    );
+    let mut outside = members;
+    outside[0] = MemberIndex(u32::MAX);
+    assert_eq!(
+        Coordinate::named(declared.iter(), &outside),
+        None,
+        "a member outside the dimension"
+    );
+}
+
+#[test]
+fn a_cell_error_names_what_the_coordinate_lacks() {
+    let axis = DimensionGlobalId(Ulid(1));
+    let member = MemberGlobalId(Ulid(2));
+    assert_eq!(
+        CellError::Length {
+            expected: 5,
+            found: 4
+        }
+        .to_string(),
+        "the coordinate needs 5 axes, but it has 4"
+    );
+    assert_eq!(
+        CellError::MissingAxis(axis).to_string(),
+        format!("the coordinate has no member of axis {axis}")
+    );
+    assert_eq!(
+        CellError::NoMember { axis, member }.to_string(),
+        format!("member {member} is not in dimension {axis}")
+    );
 }

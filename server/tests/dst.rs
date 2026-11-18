@@ -1,3 +1,7 @@
+#[expect(
+    clippy::allow_attributes,
+    reason = "change_log shares this module and does not enable these lints, so an expect would be unfulfilled there"
+)]
 #[path = "../../storage/change_log/tests/common/mod.rs"]
 mod common;
 
@@ -11,7 +15,7 @@ use change_log::{AssigneeId, Commit, Epoch, ProcessId, Request, Sequence, Slot, 
 use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::{Dimension, MemberIndex};
+use dimension::{Dimension, DimensionGlobalId, MemberGlobalId, MemberIndex};
 use futures_util::{FutureExt, StreamExt, TryStreamExt, stream};
 use measure::{Measure, MeasureDefinition};
 use object_store::memory::InMemory;
@@ -60,9 +64,16 @@ impl Model {
             let input = inputs
                 .iter()
                 .position(|input| input.global_id() == edit.measure)?;
+            let axes = inputs[input].definition().axes().iter().map(|&axis| {
+                let mut dimensions = self.workspace.dimensions().iter();
+                dimensions
+                    .find(|dimension| dimension.global_id() == axis)
+                    .expect("an input is made from the dimensions of its workspace")
+            });
+            let coordinate = workspace::resolve(axes, &edit.coordinate).ok()?;
             match edit.value {
-                Some(value) => cells[input].insert(edit.coordinate, value),
-                None => cells[input].remove(&edit.coordinate),
+                Some(value) => cells[input].insert(coordinate, value),
+                None => cells[input].remove(&coordinate),
             };
         }
         inputs
@@ -92,6 +103,7 @@ impl Model {
 struct Assignees {
     inputs: Vec<MeasureDefinition>,
     results: Vec<MeasureDefinition>,
+    first_two_members: BTreeMap<DimensionGlobalId, [MemberGlobalId; 2]>,
     seed: u64,
     restored: Arc<Mutex<Vec<(u64, Start)>>>,
 }
@@ -122,7 +134,7 @@ impl common::Server for Assignees {
         // Not a watch: it wakes its waiters in a random order, and the requests would reach the assignee in another order on each run.
         let handle = handle.map(Result::ok).shared();
         let restored = Arc::clone(&self.restored);
-        let exit = async move {
+        let stopped = async move {
             let definition = Workspace::try_new(representative::generate(&Size::TINY, 7))
                 .expect("a valid workspace");
             let (engine, start) = server::restore(store.as_ref(), WORKSPACE, definition)
@@ -189,7 +201,7 @@ impl common::Server for Assignees {
             .boxed()
         });
         common::Started {
-            exit: exit.boxed(),
+            exit: stopped.boxed(),
             submit,
             commit_receiver: None,
             recalculated: Some(recalculated.boxed()),
@@ -200,19 +212,31 @@ impl common::Server for Assignees {
         let mut hasher = DefaultHasher::new();
         (self.seed, request).hash(&mut hasher);
         let hash = hasher.finish();
-        let pick = |len: usize| usize::try_from(hash % len as u64).expect("below len");
+        let pick = |len: usize| {
+            usize::try_from(
+                hash % u64::try_from(len).expect("u64 holds every usize on supported targets"),
+            )
+            .expect("below len")
+        };
         let input = &self.inputs[pick(self.inputs.len())];
         let result = &self.results[pick(self.results.len())];
-        let member = MemberIndex(u32::from(hash & 0x100 != 0));
-        let value = (hash & 0x600 != 0).then(|| ((hash >> 12) % 8) as f64 / 4.0);
-        let (measure, axes) = match (hash >> 20) % 8 {
-            0 => (result, result.axes().len()),
-            1 => (input, input.axes().len() + 1),
-            _ => (input, input.axes().len()),
+        let member = usize::from(hash & 0x100 != 0);
+        let value = (hash & 0x600 != 0)
+            .then(|| f64::from(u8::try_from((hash >> 12) % 8).expect("below 8")) / 4.0);
+        let (measure, extra) = match (hash >> 20) % 8 {
+            0 => (result, None),
+            1 => (input, Some(result.axes()[0])),
+            _ => (input, None),
         };
         server::edit::encode(&Edit {
             measure: measure.global_id(),
-            coordinate: vec![member; axes],
+            coordinate: measure
+                .axes()
+                .iter()
+                .copied()
+                .chain(extra)
+                .map(|axis| (axis, self.first_two_members[&axis][member]))
+                .collect(),
             value,
         })
     }
@@ -232,6 +256,18 @@ fn simulate(model: &Model, seed: u64) -> Run {
             .formulas()
             .iter()
             .map(|formula| formula.result().clone())
+            .collect(),
+        first_two_members: model
+            .workspace
+            .dimensions()
+            .iter()
+            .map(|dimension| {
+                let member = |index| {
+                    let member = dimension.member(MemberIndex(index));
+                    member.expect("two members").global_id()
+                };
+                (dimension.global_id(), [member(0), member(1)])
+            })
             .collect(),
         seed,
         restored: Arc::clone(&restored),
@@ -303,7 +339,7 @@ fn final_values(model: &Model, seed: u64, outcome: &common::Outcome) -> common::
         .into();
     };
     let expected = model.recalculate_all(inputs);
-    let batch = 1 + (seed % 4) as usize;
+    let batch = 1 + usize::try_from(seed % 4).expect("below 4");
     let difference = match recalculated_log(model, &log, batch) {
         Err(alarm) => Some(alarm),
         Ok(engine) => engine
@@ -433,7 +469,9 @@ fn snapshots_match_log(model: &Model, run: &Run) -> common::Violations {
         {
             violate("the Request IDs are not the start of the log".to_owned());
         }
-        let last = count.checked_sub(1).map(|last| Sequence(last as u64));
+        let last = count.checked_sub(1).map(|last| {
+            Sequence(u64::try_from(last).expect("u64 holds every usize on supported targets"))
+        });
         let in_slot = segments.get(&start.slot).is_some_and(|segment| {
             segment
                 .commits()
@@ -461,7 +499,13 @@ fn snapshot_witnesses(run: &Run) -> BTreeSet<&'static str> {
         .restored
         .iter()
         .filter(|(_, start)| !start.request_ids.is_empty())
-        .map(|(epoch, start)| (*epoch, start.request_ids.len() as u64))
+        .map(|(epoch, start)| {
+            (
+                *epoch,
+                u64::try_from(start.request_ids.len())
+                    .expect("u64 holds every usize on supported targets"),
+            )
+        })
         .collect();
     let mut seen = BTreeSet::new();
     if !counts.is_empty() {

@@ -258,8 +258,14 @@ mod tests {
         let input = &engine.measures()[0];
         let edit = crate::Edit {
             measure: input.global_id(),
-            coordinate: vec![dimension::MemberIndex(0); input.definition().axes().len()],
-            value: Some(sequence as f64),
+            coordinate: workspace::Coordinate::named(
+                engine.axes(input),
+                &vec![dimension::MemberIndex(0); input.definition().axes().len()],
+            )
+            .expect("every dimension has a first member"),
+            value: Some(f64::from(
+                u32::try_from(sequence).expect("a test sequence fits in u32"),
+            )),
         };
         let (_, commit) = commit(sequence);
         (
@@ -271,8 +277,8 @@ mod tests {
         )
     }
 
-    fn applied(applier: &mut Applier, effects: Vec<Effect>) -> Vec<Effect> {
-        let [Effect::Calculate { engine, commits }] = &effects[..] else {
+    fn applied(applier: &mut Applier, effects: &[Effect]) -> Vec<Effect> {
+        let [Effect::Calculate { engine, commits }] = effects else {
             panic!("{effects:?}")
         };
         applier.step(Event::Finished(engine.apply_batch(commits)))
@@ -289,7 +295,7 @@ mod tests {
 
     fn published(applier: &mut Applier, engine: &Engine, sequence: u64, slot: u64) -> Vec<Effect> {
         let effects = applier.step(Event::Committed(vec![edit(sequence, slot, engine)]));
-        applied(applier, effects)
+        applied(applier, &effects)
     }
 
     #[test]
@@ -324,7 +330,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            written(&applied(&mut applier, effects)),
+            written(&applied(&mut applier, &effects)),
             Some((Slot(6), 5)),
             "a failed write is tried again, and holds only the published commits"
         );

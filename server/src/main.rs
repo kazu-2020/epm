@@ -9,6 +9,9 @@ use server::Settings;
 use server::http::Shutdown;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::LevelFilter;
 use ulid::Ulid;
 use workspace::{Workspace, WorkspaceGlobalId};
 
@@ -17,6 +20,7 @@ const SIZE: Size = Size::TINY;
 const SEED: u64 = 7;
 // Not the 10 seconds of docker stop: SIGKILL comes then, and the process cannot report the missed deadline.
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
+const USAGE: &str = "usage: server --workspace ULID --epoch NUMBER [--listen ADDRESS]";
 
 struct Arguments {
     listen: String,
@@ -26,46 +30,27 @@ struct Arguments {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    initialize_log();
     let arguments = match parse(std::env::args().skip(1)) {
         Ok(arguments) => arguments,
         Err(message) => {
-            eprintln!(
-                "{message}\nusage: server --workspace ULID --epoch NUMBER [--listen ADDRESS]"
-            );
+            print_to_terminal(&format!("{message}\n{USAGE}"));
             return ExitCode::from(2);
         }
     };
     let Ok(bucket) = std::env::var("EPM_S3_BUCKET") else {
-        eprintln!("set EPM_S3_BUCKET");
+        print_to_terminal("set EPM_S3_BUCKET");
         return ExitCode::from(2);
     };
     let store = match AmazonS3Builder::from_env().with_bucket_name(bucket).build() {
         Ok(store) => Arc::new(store),
         Err(error) => {
-            eprintln!("S3: {error}");
+            print_to_terminal(&format!("could not configure the S3 client: {error}"));
             return ExitCode::FAILURE;
         }
     };
     // Not after the restore: as PID 1 in a container, the process ignores SIGTERM until it has a handler.
-    let mut interrupt = signal(SignalKind::interrupt()).expect("a handler for SIGINT");
-    let mut terminate = signal(SignalKind::terminate()).expect("a handler for SIGTERM");
-    let (first_signal, signalled) = oneshot::channel();
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = interrupt.recv() => {}
-            _ = terminate.recv() => {}
-        }
-        let _ = first_signal.send(());
-        tokio::select! {
-            _ = interrupt.recv() => {}
-            _ = terminate.recv() => {}
-        }
-        eprintln!("stopped by a second signal before the requests finished");
-        std::process::exit(1);
-    });
-    let mut shutdown = Box::pin(async move {
-        let _ = signalled.await;
-    });
+    let mut shutdown = Box::pin(first_signal());
     let starting = async {
         let started = Instant::now();
         let (engine, start) = server::restore(
@@ -75,10 +60,10 @@ async fn main() -> ExitCode {
         )
         .await
         .expect("valid formulas");
-        eprintln!(
-            "engine ready in {:?} from Commit Sequence {}",
-            started.elapsed(),
-            start.request_ids.len()
+        info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            commit_sequence = start.request_ids.len(),
+            "engine ready"
         );
         tokio::net::TcpListener::bind(&arguments.listen)
             .await
@@ -88,18 +73,20 @@ async fn main() -> ExitCode {
         started = starting => match started {
             Ok(started) => started,
             Err(error) => {
-                eprintln!("listen on {}: {error}", arguments.listen);
+                error!(listen = %arguments.listen, %error, "could not listen");
                 return ExitCode::FAILURE;
             }
         },
         () = &mut shutdown => {
-            eprintln!("stopped by a signal during the start");
+            info!("stopped by a signal during the start");
             return ExitCode::SUCCESS;
         }
     };
-    eprintln!(
-        "workspace {} epoch {} listening on {}",
-        arguments.workspace, arguments.epoch.0, arguments.listen
+    info!(
+        workspace = %arguments.workspace,
+        epoch = arguments.epoch.0,
+        listen = %arguments.listen,
+        "listening"
     );
     let (handle, assignee) = server::start(
         engine,
@@ -115,16 +102,58 @@ async fn main() -> ExitCode {
     match server::http::serve(listener, handle, assignee, shutdown, SHUTDOWN_DEADLINE).await {
         Shutdown::Drained => ExitCode::SUCCESS,
         Shutdown::Deadline => {
-            eprintln!(
-                "the requests did not finish in {SHUTDOWN_DEADLINE:?} after the shutdown signal"
+            error!(
+                deadline = ?SHUTDOWN_DEADLINE,
+                "the requests did not finish before the deadline after the shutdown signal"
             );
             ExitCode::FAILURE
         }
         // Not a restart in this process after an exit: the same epoch must not write again (ADR 0006).
         Shutdown::Assignee(exit) => {
-            eprintln!("the assignee stopped: {exit:?}");
+            error!(?exit, "the assignee stopped");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "a configuration error before the start is for the person at the terminal, and RUST_LOG must not hide it"
+)]
+fn print_to_terminal(text: &str) {
+    eprintln!("{text}");
+}
+
+fn initialize_log() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+}
+
+fn first_signal() -> impl Future<Output = ()> {
+    let mut interrupt = signal(SignalKind::interrupt()).expect("a handler for SIGINT");
+    let mut terminate = signal(SignalKind::terminate()).expect("a handler for SIGTERM");
+    let (first_signal, signalled) = oneshot::channel();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+        let _ = first_signal.send(());
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+        error!("stopped by a second signal before the requests finished");
+        std::process::exit(1);
+    });
+    async move {
+        let _ = signalled.await;
     }
 }
 
