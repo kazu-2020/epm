@@ -246,8 +246,9 @@ fn edit_value(value: Option<&Value>) -> Result<Option<f64>, ConnectError> {
         Some(value) if value.is_null() => Ok(None),
         Some(value) => value
             .as_number()
+            .filter(|number| number.is_finite())
             .map(Some)
-            .ok_or_else(|| ConnectError::invalid_argument("value must be a number or null")),
+            .ok_or_else(|| ConnectError::invalid_argument("value must be a finite number or null")),
     }
 }
 

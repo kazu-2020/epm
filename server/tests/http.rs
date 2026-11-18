@@ -74,7 +74,14 @@ fn destination(workspace: &str, epoch: &str) -> Vec<(&'static str, String)> {
 }
 
 async fn call(app: &App, method: &str, body: Value) -> (StatusCode, Value) {
-    call_as(app, method, "application/json", &app.destination, body).await
+    call_as(
+        app,
+        method,
+        "application/json",
+        &app.destination,
+        body.to_string(),
+    )
+    .await
 }
 
 async fn call_as(
@@ -82,16 +89,14 @@ async fn call_as(
     method: &str,
     content_type: &str,
     headers: &[(&str, String)],
-    body: Value,
+    body: impl Into<Body>,
 ) -> (StatusCode, Value) {
     let mut request =
         Request::post(format!("/epm.v1.Workspace/{method}")).header(CONTENT_TYPE, content_type);
     for (name, value) in headers {
         request = request.header(*name, value);
     }
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("a request");
+    let request = request.body(body.into()).expect("a request");
     let response = app
         .router
         .clone()
@@ -99,13 +104,17 @@ async fn call_as(
         .await
         .expect("a response");
     let status = response.status();
+    let json = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .is_some_and(|value| value == "application/json");
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("a body");
-    let body = if bytes.is_empty() {
-        Value::Null
-    } else {
+    let body = if json {
         serde_json::from_slice(&bytes).expect("a JSON body")
+    } else {
+        Value::Null
     };
     (status, body)
 }
@@ -256,7 +265,7 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
         "SubmitEdit",
         "text/plain",
         &app.destination,
-        edit("r6", QUANTITY, &app.coordinate, Some(1.0)),
+        edit("r6", QUANTITY, &app.coordinate, Some(1.0)).to_string(),
     )
     .await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{failure}");
@@ -446,6 +455,74 @@ async fn a_misspelled_field_is_invalid_argument_and_not_a_read_without_freshness
     }
 }
 
+fn length_delimited(field: u8, bytes: &[u8]) -> Vec<u8> {
+    let length = u8::try_from(bytes.len()).expect("a field shorter than 128 bytes");
+    assert!(length < 0x80, "the length fits in one varint byte");
+    [&[field << 3 | 2, length][..], bytes].concat()
+}
+
+fn binary_edit(app: &App, value: &[u8]) -> Vec<u8> {
+    let mut edit = [
+        length_delimited(1, b"r1"),
+        length_delimited(2, QUANTITY.to_string().as_bytes()),
+    ]
+    .concat();
+    for axis in &app.coordinate {
+        let member = [
+            length_delimited(1, axis["dimension"].as_str().expect("a ULID").as_bytes()),
+            length_delimited(2, axis["member"].as_str().expect("a ULID").as_bytes()),
+        ]
+        .concat();
+        edit.extend(length_delimited(3, &member));
+    }
+    edit.extend(length_delimited(4, value));
+    edit
+}
+
+#[tokio::test]
+async fn a_binary_value_that_json_cannot_hold_is_invalid_argument_and_clears_nothing() {
+    let app = app(Settings::default()).await;
+    let number_value = |number: f64| [&[2 << 3 | 1][..], &number.to_le_bytes()].concat();
+    for (case, value) in [
+        ("a value with no kind", Vec::new()),
+        ("NaN", number_value(f64::NAN)),
+        ("infinity", number_value(f64::INFINITY)),
+    ] {
+        let (status, failure) = call_as(
+            &app,
+            "SubmitEdit",
+            "application/proto",
+            &app.destination,
+            binary_edit(&app, &value),
+        )
+        .await;
+        assert_eq!(
+            (status, failure["code"].clone()),
+            (StatusCode::BAD_REQUEST, json!("invalid_argument")),
+            "{case}"
+        );
+    }
+    let (status, _) = call_as(
+        &app,
+        "SubmitEdit",
+        "application/proto",
+        &app.destination,
+        binary_edit(&app, &number_value(1.0)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the hand-made bytes are a valid edit"
+    );
+    let (_, read) = read(&app, Some(0)).await;
+    assert_eq!(
+        read["values"][0],
+        json!(1.0),
+        "only the valid edit committed"
+    );
+}
+
 fn wrong_destinations() -> [(&'static str, Vec<(&'static str, String)>); 6] {
     let workspace = support::WORKSPACE.to_string();
     let other_workspace = WorkspaceGlobalId(Ulid(2)).to_string();
@@ -480,7 +557,7 @@ async fn a_call_for_another_workspace_or_epoch_is_failed_precondition_and_commit
     for (method, body) in every_operation(&app) {
         for (case, headers) in wrong_destinations() {
             let (status, failure) =
-                call_as(&app, method, "application/json", &headers, body.clone()).await;
+                call_as(&app, method, "application/json", &headers, body.to_string()).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{method} with {case}");
             assert_eq!(
                 failure,
@@ -513,7 +590,7 @@ async fn a_call_for_another_epoch_is_failed_precondition_while_the_change_log_is
             method,
             "application/json",
             &destination(&support::WORKSPACE.to_string(), "1"),
-            body,
+            body.to_string(),
         )
         .await;
         assert_eq!(
