@@ -151,8 +151,9 @@ async fn send_submit_edit(address: SocketAddr) -> TcpStream {
         "value": 3.0,
     })
     .to_string();
+    // Not HTTP/1.1: the Connect response body is chunked, and this test reads the body as it is.
     let request = format!(
-        "POST /epm.v1.Workspace/SubmitEdit HTTP/1.1\r\nhost: test\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        "POST /epm.v1.Workspace/SubmitEdit HTTP/1.0\r\nhost: test\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     );
     let mut stream = TcpStream::connect(address).await.expect("a connection");
@@ -187,10 +188,10 @@ async fn a_shutdown_waits_for_the_edit_in_flight_and_then_stops_with_success() {
         .read_to_string(&mut response)
         .await
         .expect("a response");
-    assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+    assert!(response.starts_with("HTTP/1.0 200 "), "{response}");
     let (_, body) = response.split_once("\r\n\r\n").expect("a body");
     let body: Value = serde_json::from_str(body).expect("a JSON body");
-    assert_eq!(body, json!({ "sequence": 0 }));
+    assert_eq!(body, json!({ "sequence": "0" }));
     let stopped = running.stopped.await.expect("serve does not panic");
     assert!(matches!(stopped, Shutdown::Drained), "{stopped:?}");
 }

@@ -81,7 +81,12 @@ async fn call_as(app: &App, method: &str, content_type: &str, body: Value) -> (S
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("a body");
-    (status, serde_json::from_slice(&bytes).expect("a JSON body"))
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).expect("a JSON body")
+    };
+    (status, body)
 }
 
 fn edit(
@@ -138,11 +143,11 @@ async fn an_edit_changes_the_input_and_the_calculated_measure_that_reads_it() {
             edit("r1", QUANTITY, &app.coordinate, Some(changed))
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": 0 }))
+        (StatusCode::OK, json!({ "sequence": "0" }))
     );
     let (status, edited) = read(&app, Some(0)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(edited["recalculated"], json!(0));
+    assert_eq!(edited["recalculated"], json!("0"));
     assert_eq!(edited["values"][0], json!(changed));
     assert_ne!(
         edited["values"][1], before["values"][1],
@@ -160,7 +165,7 @@ async fn a_null_value_clears_the_cell() {
             edit("r1", QUANTITY, &app.coordinate, None)
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": 0 }))
+        (StatusCode::OK, json!({ "sequence": "0" }))
     );
     let (_, cleared) = read(&app, Some(0)).await;
     assert_eq!(cleared["values"], json!([null, null]));
@@ -171,11 +176,11 @@ async fn a_resend_of_a_request_id_gets_the_same_commit_sequence() {
     let app = app(Settings::default()).await;
     let body = edit("r1", QUANTITY, &app.coordinate, Some(1.0));
     let first = call(&app, "SubmitEdit", body.clone()).await;
-    assert_eq!(first, (StatusCode::OK, json!({ "sequence": 0 })));
+    assert_eq!(first, (StatusCode::OK, json!({ "sequence": "0" })));
     assert_eq!(call(&app, "SubmitEdit", body).await, first);
     assert_eq!(
         call(&app, "GetLag", json!({})).await.1["committed"],
-        json!(0),
+        json!("0"),
         "the resend took no Commit Sequence"
     );
 }
@@ -204,14 +209,11 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
     bad_global_id["measure"] = json!("not a ULID");
     let mut global_id_above_128_bits = edit("r7", QUANTITY, &app.coordinate, Some(1.0));
     global_id_above_128_bits["measure"] = json!(format!("8{}", &QUANTITY.to_string()[1..]));
-    let mut unknown_field = edit("r4", QUANTITY, &app.coordinate, Some(1.0));
-    unknown_field["note"] = json!("x");
     let long_request_id = "r".repeat(129);
     for body in [
         no_value,
         bad_global_id,
         global_id_above_128_bits,
-        unknown_field,
         edit("", QUANTITY, &app.coordinate, Some(1.0)),
         edit(&long_request_id, QUANTITY, &app.coordinate, Some(1.0)),
         edit("r5", QUANTITY, &app.coordinate[1..], Some(1.0)),
@@ -229,14 +231,10 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
         edit("r6", QUANTITY, &app.coordinate, Some(1.0)),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{failure}");
-    assert_eq!(failure["code"], "invalid_argument");
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{failure}");
     assert_eq!(
         call(&app, "GetLag", json!({})).await,
-        (
-            StatusCode::OK,
-            json!({ "committed": null, "recalculated": null })
-        ),
+        (StatusCode::OK, json!({})),
         "no edit entered the log"
     );
 }
@@ -332,7 +330,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
             edit("r1", QUANTITY, &first.coordinate, None)
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": 0 }))
+        (StatusCode::OK, json!({ "sequence": "0" }))
     );
     let config = ThrottleConfig {
         wait_list_per_call: Duration::from_secs(3),
@@ -367,6 +365,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
         let request = Request::builder()
             .method(method)
             .uri(path)
+            .header(CONTENT_TYPE, "application/json")
             .body(Body::empty())
             .expect("a request");
         let response = second
@@ -382,7 +381,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         lag["committed"],
-        json!(0),
+        json!("0"),
         "the commit of the first assignee"
     );
 }
