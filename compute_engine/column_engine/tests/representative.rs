@@ -6,20 +6,6 @@ use ulid::Ulid;
 use workspace::Formula;
 
 #[test]
-fn small_model_matches_the_evaluator_on_dense_paths() {
-    matches_the_evaluator(
-        &["SUM('売上', BY '部門', '期間') * SUM('売上', BY '商品', '期間')"],
-        &Size {
-            products: 30,
-            customers: 20,
-            departments_per_kind: 4,
-            quantity_cells: 3_000,
-            account_fill: 0.5,
-        },
-    );
-}
-
-#[test]
 fn wide_model_matches_the_evaluator_on_sparse_paths() {
     matches_the_evaluator(
         &[

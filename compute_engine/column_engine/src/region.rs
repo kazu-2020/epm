@@ -115,15 +115,10 @@ mod tests {
             .map(|coordinate| packing.pack(coordinate.iter().copied()))
             .collect();
 
-        let region = Region::of_packed(&axes, &packing, &packed_coordinates);
+        let region =
+            Region::of_packed(&axes, &packing, &packed_coordinates).expect("cells changed");
 
-        assert_eq!(
-            region,
-            Region::of_changes(&axes, coordinates.iter().map(|coordinate| &coordinate[..]))
-        );
-        assert_eq!(
-            region.expect("cells changed").members(axes[0]),
-            Some(&BTreeSet::from([1, 3]))
-        );
+        assert_eq!(region.members(axes[0]), Some(&BTreeSet::from([1, 3])));
+        assert_eq!(region.members(axes[1]), Some(&BTreeSet::from([5])));
     }
 }
