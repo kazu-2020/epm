@@ -9,7 +9,7 @@ pub mod snapshot;
 use std::ops::RangeInclusive;
 
 use change_log::{Commit, CommitCount, RequestId, Sequence, Slot, Start};
-use dimension::Dimension;
+use dimension::{Dimension, Dimensions};
 use formula::EvaluateError;
 use measure::{Measure, MeasureGlobalId};
 use workspace::{CalculateError, Calculated, CellError, EditCheck, Edits, Workspace};
@@ -80,7 +80,7 @@ impl Engine {
         })
     }
 
-    pub fn dimensions(&self) -> &[Dimension] {
+    pub fn dimensions(&self) -> &Dimensions {
         self.calculated.dimensions()
     }
 
@@ -90,8 +90,7 @@ impl Engine {
     ) -> impl ExactSizeIterator<Item = &'e Dimension> {
         measure.definition().axes().iter().map(|&axis| {
             self.dimensions()
-                .iter()
-                .find(|dimension| dimension.global_id() == axis)
+                .get(axis)
                 .expect("every measure of the engine is made from its dimensions")
         })
     }

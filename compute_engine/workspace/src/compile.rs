@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use dimension::Dimension;
+use dimension::Dimensions;
 use formula::{AxisError, CheckedExpression, EvaluateError, ResolveError, SyntaxError};
 use measure::{MeasureDefinition, MeasureGlobalId};
 
@@ -28,7 +28,7 @@ impl CompiledFormula {
     pub(crate) fn new(
         formula: Formula,
         measures: &[MeasureDefinition],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<CompiledFormula, FormulaError> {
         let expression = compile(&formula.text, &formula.result, measures, dimensions)?;
         Ok(CompiledFormula {
@@ -58,7 +58,7 @@ pub fn compile(
     text: &str,
     result: &MeasureDefinition,
     measures: &[MeasureDefinition],
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<CheckedExpression, FormulaError> {
     let parsed = formula::parse(text);
     if !parsed.errors.is_empty() {

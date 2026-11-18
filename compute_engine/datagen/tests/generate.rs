@@ -4,7 +4,7 @@ use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt32Type;
 use datagen::Configuration;
-use dimension::{Dimension, usize_from};
+use dimension::usize_from;
 use measure::{Measure, MeasureDefinition};
 use workspace::UncheckedWorkspace;
 
@@ -45,7 +45,7 @@ fn every_formula_parses_resolves_and_passes_the_axis_check() {
     let mut texts = String::new();
     for seed in 0..300 {
         let workspace = datagen::generate(&configuration(seed));
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let measures: Vec<MeasureDefinition> = workspace
             .inputs
             .iter()
@@ -58,7 +58,7 @@ fn every_formula_parses_resolves_and_passes_the_axis_check() {
             )
             .collect();
         for (index, workspace::Formula { result, text }) in workspace.formulas.iter().enumerate() {
-            let compiled = workspace::compile(text, result, &measures, &dimensions);
+            let compiled = workspace::compile(text, result, &measures, dimensions);
             assert_eq!(compiled.err(), None, "seed {seed}: {text}");
             if index > 0 {
                 let previous = format!("'計算{}'", index - 1);
@@ -94,8 +94,7 @@ fn a_few_members_hold_most_cells() {
         .expect("an input has both axes");
     let members = workspace
         .dimensions
-        .iter()
-        .find(|dimension| dimension.global_id() == input.definition().axes()[0])
+        .get(input.definition().axes()[0])
         .expect("the axis is a generated dimension")
         .len();
     let members = usize_from(members);
@@ -131,8 +130,7 @@ fn the_representative_model_declares_its_axes_in_packing_order() {
     let packing_order = |axis| {
         workspace
             .dimensions
-            .iter()
-            .find(|dimension| dimension.global_id() == axis)
+            .get(axis)
             .expect("every axis is a dimension")
             .packing_order()
     };

@@ -3,7 +3,7 @@ use std::iter;
 use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
-use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute, usize_from};
+use dimension::{DimensionGlobalId, Dimensions, MemberIndex, ReferenceAttribute, usize_from};
 use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
 use measure::{CoordinatePacking, Measure, MeasureDefinition, MeasureError, normalize};
 use rayon::prelude::*;
@@ -39,27 +39,17 @@ enum Source<'c> {
     Indexed(Index<'c>, Vec<usize>),
 }
 
-pub(crate) fn find_dimension<'d>(
-    dimensions: &[&'d Dimension],
-    global_id: DimensionGlobalId,
-) -> Result<&'d Dimension, EvaluateError> {
-    dimensions
-        .iter()
-        .find(|dimension| dimension.global_id() == global_id)
-        .copied()
-        .ok_or(EvaluateError::MissingDimension(global_id))
-}
-
 pub(crate) fn sort_in_packing_order<T>(
     items: &mut [T],
     axis: impl Fn(&T) -> DimensionGlobalId,
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<(), EvaluateError> {
     for item in items.iter() {
-        find_dimension(dimensions, axis(item))?;
+        dimensions.require(axis(item))?;
     }
     items.sort_by_cached_key(|item| {
-        find_dimension(dimensions, axis(item))
+        dimensions
+            .get(axis(item))
             .expect("every axis was found above")
             .packing_order()
     });
@@ -67,16 +57,16 @@ pub(crate) fn sort_in_packing_order<T>(
 }
 
 fn member_counts(
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
     axes: &[DimensionGlobalId],
 ) -> Result<Vec<u32>, EvaluateError> {
     axes.iter()
-        .map(|&axis| find_dimension(dimensions, axis).map(Dimension::len))
+        .map(|&axis| Ok(dimensions.require(axis)?.len()))
         .collect()
 }
 
 pub(crate) fn packing_of(
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
     axes: &[DimensionGlobalId],
 ) -> Result<CoordinatePacking, EvaluateError> {
     CoordinatePacking::new(&member_counts(dimensions, axes)?)
@@ -117,7 +107,7 @@ struct Index<'c> {
 }
 
 impl<'c> Index<'c> {
-    fn new(columns: &'c Columns, dimensions: &[&Dimension]) -> Result<Self, EvaluateError> {
+    fn new(columns: &'c Columns, dimensions: &Dimensions) -> Result<Self, EvaluateError> {
         let dense =
             dense_strides(&member_counts(dimensions, &columns.axes)?).map(|(space, strides)| {
                 let mut rows = vec![u32::MAX; space];
@@ -174,7 +164,7 @@ impl Columns {
         axes: Vec<DimensionGlobalId>,
         members: Vec<Vec<u32>>,
         values: Vec<f64>,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Columns, EvaluateError> {
         let mut by_axis: Vec<(DimensionGlobalId, Vec<u32>)> =
             axes.into_iter().zip(members).collect();
@@ -489,7 +479,7 @@ impl Columns {
         dimension: DimensionGlobalId,
         members: &[MemberIndex],
         filtered_axis: FilteredAxis,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Columns, EvaluateError> {
         let mut region = Region::default();
         region.constrain(dimension, members.iter().map(|member| member.0).collect());
@@ -528,7 +518,7 @@ impl Columns {
         operator: ProductOperator,
         left: &Columns,
         right: &Columns,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Columns, EvaluateError> {
         let apply: fn(f64, f64) -> f64 = match operator {
             ProductOperator::Multiply => |left, right| left * right,
@@ -630,7 +620,7 @@ impl Columns {
         larger: &Columns,
         smaller: &Columns,
         apply: impl Fn(f64, f64) -> f64 + Sync,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Columns, EvaluateError> {
         let positions: Vec<usize> = smaller
             .axes
@@ -672,7 +662,7 @@ impl Columns {
 
     pub(crate) fn add(
         terms: &[(Sign, Columns)],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Columns, EvaluateError> {
         let mut axes: Vec<DimensionGlobalId> = terms
             .iter()
@@ -778,7 +768,7 @@ impl Columns {
     pub(crate) fn sum(
         &self,
         by: &[ByAxis<'_>],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Columns, EvaluateError> {
         let mut outputs: Vec<&ByAxis<'_>> = by.iter().collect();
         sort_in_packing_order(&mut outputs, |axis| axis.output, dimensions)?;
@@ -903,7 +893,7 @@ impl Columns {
     pub(crate) fn broadcast(
         &self,
         axes: &[DimensionGlobalId],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Columns, EvaluateError> {
         if axes.iter().all(|axis| self.axes.contains(axis)) {
             return Ok(Columns {
@@ -927,7 +917,7 @@ impl Columns {
             if spread_axes.contains(&axis) {
                 continue;
             }
-            let member_count = find_dimension(dimensions, axis)?.len();
+            let member_count = dimensions.require(axis)?.len();
             let copies = usize_from(member_count);
             for column in &mut members {
                 *column = column
@@ -948,7 +938,7 @@ impl Columns {
     pub(crate) fn into_measure(
         self,
         definition: MeasureDefinition,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Measure, MeasureError> {
         Measure::try_from_packed(definition, self.packed_coordinates, self.values, dimensions)
     }
@@ -983,8 +973,8 @@ mod tests {
     #[test]
     fn adding_terms_on_the_same_coordinates_keeps_their_packed_coordinates() {
         let fixture = datagen::cases::Fixture::default();
-        let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
-        let axis = dimensions[1].global_id();
+        let dimensions = &fixture.dimensions;
+        let axis = fixture.dimension("部門").global_id();
         let packing = CoordinatePacking::new(&[3]).expect("2 bits fit in a packed coordinate");
         let sales = Columns::from_packed(vec![axis], packing, vec![0, 1, 2], vec![3.0, 4.0, 5.0]);
         let cost = Columns {
@@ -995,7 +985,7 @@ mod tests {
         };
         let packed_coordinates = sales.packed_coordinates.clone();
 
-        let profit = Columns::add(&[(Sign::Plus, sales), (Sign::Minus, cost)], &dimensions)
+        let profit = Columns::add(&[(Sign::Plus, sales), (Sign::Minus, cost)], dimensions)
             .expect("both terms have every axis");
 
         assert!(profit.packed_coordinates.ptr_eq(&packed_coordinates));

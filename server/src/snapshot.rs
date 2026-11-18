@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use change_log::{RequestId, Slot, Start};
-use dimension::{Dimension, DimensionGlobalId};
+use dimension::{Dimension, DimensionGlobalId, Dimensions};
 use measure::{Measure, MeasureDefinition, MeasureError, MeasureGlobalId};
 use ulid::Ulid;
 
@@ -170,7 +170,7 @@ impl Manifest {
         &self,
         objects: Vec<Bytes>,
         definitions: &[MeasureDefinition],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Snapshot, SnapshotError> {
         let paths = self.paths();
         if objects.len() != paths.len() {
@@ -257,17 +257,12 @@ impl Manifest {
 
 fn axes(
     definition: &MeasureDefinition,
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Option<Vec<(DimensionGlobalId, u32)>> {
     let mut found = definition
         .axes()
         .iter()
-        .map(|&axis| {
-            dimensions
-                .iter()
-                .find(|dimension| dimension.global_id() == axis)
-                .copied()
-        })
+        .map(|&axis| dimensions.get(axis))
         .collect::<Option<Vec<&Dimension>>>()?;
     // Not the declared order: the cells are packed in packing order, so a definition that declares the same axes in another order reads the same bytes.
     found.sort_by_key(|dimension| dimension.packing_order());
@@ -475,7 +470,7 @@ mod tests {
         manifest: Bytes,
         objects: Vec<Object>,
         definitions: &[MeasureDefinition],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Snapshot, SnapshotError> {
         let manifest = Manifest::decode(manifest)?;
         let paths: Vec<_> = objects.iter().map(|object| object.path.clone()).collect();
@@ -504,15 +499,15 @@ mod tests {
     #[test]
     fn a_snapshot_reads_back_as_written_across_chunks() {
         let workspace = workspace();
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let snapshot = snapshot(&workspace);
         let (objects, manifest) = encode_in_chunks(&snapshot, 2, 5);
         assert!(
             objects.len() > 2 + workspace.inputs.len(),
             "more than one chunk per measure"
         );
-        let read = read_back(manifest, objects, &definitions(&workspace), &dimensions)
-            .expect("reads back");
+        let read =
+            read_back(manifest, objects, &definitions(&workspace), dimensions).expect("reads back");
         assert_eq!(read.start, snapshot.start);
         assert_eq!(cells(&read.inputs), cells(&snapshot.inputs));
     }
@@ -541,13 +536,13 @@ mod tests {
     #[test]
     fn a_snapshot_that_does_not_match_the_definitions_is_an_error() {
         let workspace = workspace();
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let (objects, manifest) = encode(&snapshot(&workspace));
         let mut fewer = definitions(&workspace);
         let missing = fewer.pop().expect("an input").global_id();
         let first = fewer[0].global_id();
         assert_eq!(
-            read_back(manifest.clone(), objects, &fewer, &dimensions).err(),
+            read_back(manifest.clone(), objects, &fewer, dimensions).err(),
             Some(SnapshotError::Definitions(missing)),
             "a measure without a definition"
         );
@@ -561,7 +556,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_back(manifest, objects, &narrower, &dimensions).err(),
+            read_back(manifest, objects, &narrower, dimensions).err(),
             Some(SnapshotError::Definitions(first)),
             "a definition with other axes"
         );
@@ -570,7 +565,7 @@ mod tests {
     #[test]
     fn a_snapshot_reads_back_under_a_definition_that_declares_the_same_axes_in_another_order() {
         let workspace = workspace();
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let snapshot = snapshot(&workspace);
         let (objects, manifest) = encode(&snapshot);
         let mut reversed = definitions(&workspace);
@@ -582,7 +577,7 @@ mod tests {
         }
         assert_ne!(reversed, definitions(&workspace));
 
-        let read = read_back(manifest, objects, &reversed, &dimensions).expect("reads back");
+        let read = read_back(manifest, objects, &reversed, dimensions).expect("reads back");
 
         for (read, written) in read.inputs.iter().zip(&snapshot.inputs) {
             assert_eq!(
@@ -620,7 +615,7 @@ mod tests {
     #[test]
     fn a_changed_chunk_is_corrupt() {
         let workspace = workspace();
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let (mut objects, manifest) = encode(&snapshot(&workspace));
         let last = objects.last_mut().expect("an object");
         let mut bytes = last.bytes.to_vec();
@@ -629,7 +624,7 @@ mod tests {
         last.bytes = bytes.into();
         let path = last.path.clone();
         assert_eq!(
-            read_back(manifest, objects, &definitions(&workspace), &dimensions).err(),
+            read_back(manifest, objects, &definitions(&workspace), dimensions).err(),
             Some(SnapshotError::Corrupt { path })
         );
     }
@@ -663,13 +658,7 @@ mod tests {
                 .definition()
                 .axes()
                 .iter()
-                .map(|&axis| {
-                    workspace
-                        .dimensions
-                        .iter()
-                        .find(|dimension| dimension.global_id() == axis)
-                        .expect("a dimension")
-                })
+                .map(|&axis| workspace.dimensions.get(axis).expect("a dimension"))
                 .collect();
             axes.sort_by_key(|dimension| dimension.packing_order());
             let member_counts: Vec<_> = axes
@@ -683,12 +672,12 @@ mod tests {
     #[test]
     fn a_definition_without_a_measure_in_the_snapshot_is_an_error() {
         let workspace = workspace();
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let mut fewer = snapshot(&workspace);
         let dropped = fewer.inputs.pop().expect("an input").global_id();
         let (objects, manifest) = encode(&fewer);
         assert_eq!(
-            read_back(manifest, objects, &definitions(&workspace), &dimensions).err(),
+            read_back(manifest, objects, &definitions(&workspace), dimensions).err(),
             Some(SnapshotError::Definitions(dropped))
         );
     }
@@ -696,7 +685,7 @@ mod tests {
     #[test]
     fn a_chunk_with_bytes_after_its_cells_is_an_error() {
         let workspace = workspace();
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let (mut objects, manifest) = encode(&snapshot(&workspace));
         let mut manifest = Manifest::decode(manifest).expect("valid");
         let mut uncompressed = BytesMut::new();
@@ -713,7 +702,7 @@ mod tests {
         let bytes = objects.into_iter().map(|object| object.bytes).collect();
         assert_eq!(
             manifest
-                .decode_objects(bytes, &definitions(&workspace), &dimensions)
+                .decode_objects(bytes, &definitions(&workspace), dimensions)
                 .err(),
             Some(SnapshotError::Corrupt {
                 path: "requests/000000".to_owned()
@@ -724,14 +713,14 @@ mod tests {
     #[test]
     fn a_measure_listed_two_times_in_the_manifest_is_an_error() {
         let workspace = workspace();
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let mut doubled = snapshot(&workspace);
         let first = doubled.inputs[0].clone();
         let global_id = first.global_id();
         doubled.inputs.push(first);
         let (objects, manifest) = encode(&doubled);
         assert_eq!(
-            read_back(manifest, objects, &definitions(&workspace), &dimensions).err(),
+            read_back(manifest, objects, &definitions(&workspace), dimensions).err(),
             Some(SnapshotError::Definitions(global_id))
         );
     }

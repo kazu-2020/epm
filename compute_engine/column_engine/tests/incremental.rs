@@ -1,6 +1,6 @@
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::{Dimension, DimensionGlobalId, MemberIndex};
+use dimension::{Dimension, DimensionGlobalId, Dimensions, MemberIndex};
 use formula::CheckedExpression;
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
@@ -42,7 +42,7 @@ impl Model {
 
     fn with_every_measure_reversed() -> Model {
         let mut workspace = Model::with_results_reversed().workspace;
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         workspace.inputs = workspace
             .inputs
             .iter()
@@ -55,7 +55,7 @@ impl Model {
                         (coordinate, value)
                     })
                     .collect();
-                Measure::from_cells(definition, cells, &dimensions)
+                Measure::from_cells(definition, cells, dimensions)
                     .expect("the reversed cells fit the reversed axes")
             })
             .collect();
@@ -63,7 +63,7 @@ impl Model {
     }
 
     fn of(workspace: UncheckedWorkspace) -> Model {
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let definitions: Vec<MeasureDefinition> = workspace
             .inputs
             .iter()
@@ -80,7 +80,7 @@ impl Model {
             .iter()
             .map(|formula| {
                 let checked =
-                    workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
+                    workspace::compile(&formula.text, &formula.result, &definitions, dimensions)
                         .expect("the representative formulas are checked");
                 (formula.result.clone(), checked)
             })
@@ -88,15 +88,14 @@ impl Model {
         Model { workspace, checked }
     }
 
-    fn dimensions(&self) -> Vec<&Dimension> {
-        self.workspace.dimensions.iter().collect()
+    fn dimensions(&self) -> &Dimensions {
+        &self.workspace.dimensions
     }
 
     fn dimension(&self, global_id: DimensionGlobalId) -> &Dimension {
         self.workspace
             .dimensions
-            .iter()
-            .find(|dimension| dimension.global_id() == global_id)
+            .get(global_id)
             .expect("the representative model has the dimension")
     }
 
@@ -128,7 +127,7 @@ impl Model {
         let mut measures = inputs;
         for (result, expression) in &self.checked {
             let references: Vec<&Measure> = measures.iter().collect();
-            let measure = column_engine::evaluate(expression, result, &references, &dimensions)
+            let measure = column_engine::evaluate(expression, result, &references, dimensions)
                 .expect("the formula evaluates");
             measures.push(measure);
         }
@@ -159,9 +158,9 @@ fn a_full_recalculation_matches_the_evaluator_when_every_measure_declares_axes_o
     let mut measures = model.workspace.inputs.clone();
     for (result, expression) in &model.checked {
         let references: Vec<&Measure> = measures.iter().collect();
-        let expected = evaluator::evaluate(expression, result, &references, &dimensions)
+        let expected = evaluator::evaluate(expression, result, &references, dimensions)
             .expect("the evaluator evaluates the formula");
-        let column = column_engine::evaluate(expression, result, &references, &dimensions)
+        let column = column_engine::evaluate(expression, result, &references, dimensions)
             .expect("the column engine evaluates the formula");
         let expected = exact(&expected.cells().collect::<Vec<_>>());
         assert!(!expected.is_empty(), "{} has cells", result.name());
@@ -212,7 +211,7 @@ fn edit_and_compare(model: &Model) {
             &measures,
             [(inputs[input].global_id(), edited)],
             &formulas,
-            &dimensions,
+            dimensions,
         )
         .expect("the edit recalculates");
         assert_same_cells(&measures, &model.recalculate_all(inputs.clone()));
@@ -243,7 +242,7 @@ fn two_deltas_for_one_measure_recalculate_the_cells_of_both() {
         (quantity, delta(&measures[input], first)),
         (quantity, delta(&measures[input], last)),
     ];
-    measures = column_engine::edit(&measures, deltas, &formulas, &dimensions)
+    measures = column_engine::edit(&measures, deltas, &formulas, dimensions)
         .expect("the edit recalculates");
     for coordinate in [first, last] {
         inputs[input] = inputs[input]

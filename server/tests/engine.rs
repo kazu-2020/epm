@@ -4,7 +4,6 @@ use bytes::Bytes;
 use change_log::{Commit, RequestId, Sequence, Slot};
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::Dimension;
 use dimension::MemberIndex;
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use server::{DecodeError, Edit, Engine, EngineAlarm, Invalid};
@@ -227,7 +226,7 @@ fn a_logged_edit_replays_to_the_same_cell_under_a_definition_that_declares_the_a
  {
     let mut unchecked = representative::generate(&Size::TINY, 7);
     let original = representative::generate(&Size::TINY, 7);
-    let dimensions: Vec<&Dimension> = original.dimensions.iter().collect();
+    let dimensions = &original.dimensions;
     let input = &unchecked.inputs[0];
     assert_eq!(
         input.global_id(),
@@ -244,7 +243,7 @@ fn a_logged_edit_replays_to_the_same_cell_under_a_definition_that_declares_the_a
             (coordinate, value)
         })
         .collect();
-    unchecked.inputs[0] = Measure::from_cells(definition, reversed_cells, &dimensions)
+    unchecked.inputs[0] = Measure::from_cells(definition, reversed_cells, dimensions)
         .expect("the cells fit the axes");
     let reversed = Engine::new(Workspace::try_new(unchecked).expect("a valid workspace"))
         .expect("the representative formulas are valid");

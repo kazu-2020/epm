@@ -1,6 +1,5 @@
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::Dimension;
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 use workspace::Formula;
@@ -78,7 +77,7 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
             text: text.to_string(),
         });
     }
-    let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+    let dimensions = &workspace.dimensions;
     let definitions: Vec<MeasureDefinition> = workspace
         .inputs
         .iter()
@@ -92,12 +91,12 @@ fn matches_the_evaluator(extra_formulas: &[&str], size: &Size) {
         .collect();
     let mut measures: Vec<Measure> = workspace.inputs.clone();
     for formula in &workspace.formulas {
-        let checked = workspace::compile(&formula.text, &formula.result, &definitions, &dimensions)
+        let checked = workspace::compile(&formula.text, &formula.result, &definitions, dimensions)
             .unwrap_or_else(|error| panic!("{}: {error:?}", formula.text));
         let references: Vec<&Measure> = measures.iter().collect();
-        let expected = evaluator::evaluate(&checked, &formula.result, &references, &dimensions)
+        let expected = evaluator::evaluate(&checked, &formula.result, &references, dimensions)
             .expect("the evaluator evaluates the formula");
-        let column = column_engine::evaluate(&checked, &formula.result, &references, &dimensions)
+        let column = column_engine::evaluate(&checked, &formula.result, &references, dimensions)
             .expect("the column engine evaluates the formula");
         let expected = exact(&expected.cells().collect::<Vec<_>>());
         assert!(!expected.is_empty(), "{} has cells", formula.result.name());

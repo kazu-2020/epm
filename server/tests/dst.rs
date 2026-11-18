@@ -17,7 +17,7 @@ use change_log::{
 use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
-use dimension::{Dimension, DimensionGlobalId, MemberGlobalId, MemberIndex};
+use dimension::{DimensionGlobalId, Dimensions, MemberGlobalId, MemberIndex};
 use futures_util::{FutureExt, StreamExt, TryStreamExt, stream};
 use measure::{Measure, MeasureDefinition};
 use object_store::memory::InMemory;
@@ -52,8 +52,8 @@ impl Model {
         Model { workspace, engine }
     }
 
-    fn dimensions(&self) -> Vec<&Dimension> {
-        self.workspace.dimensions().iter().collect()
+    fn dimensions(&self) -> &Dimensions {
+        self.workspace.dimensions()
     }
 
     fn fold(&self, log: &[Commit]) -> Option<Vec<Measure>> {
@@ -67,9 +67,8 @@ impl Model {
                 .iter()
                 .position(|input| input.global_id() == edit.measure)?;
             let axes = inputs[input].definition().axes().iter().map(|&axis| {
-                let mut dimensions = self.workspace.dimensions().iter();
-                dimensions
-                    .find(|dimension| dimension.global_id() == axis)
+                self.dimensions()
+                    .get(axis)
                     .expect("an input is made from the dimensions of its workspace")
             });
             let coordinate = workspace::resolve(axes, &edit.coordinate).ok()?;
@@ -83,7 +82,7 @@ impl Model {
             .zip(cells)
             .map(|(input, cells)| {
                 let cells = cells.into_iter().collect();
-                Measure::from_cells(input.definition().clone(), cells, &self.dimensions()).ok()
+                Measure::from_cells(input.definition().clone(), cells, self.dimensions()).ok()
             })
             .collect()
     }
@@ -94,7 +93,7 @@ impl Model {
         for formula in self.workspace.formulas() {
             let references: Vec<&Measure> = measures.iter().collect();
             let (result, expression) = (formula.result(), formula.expression());
-            let measure = column_engine::evaluate(expression, result, &references, &dimensions)
+            let measure = column_engine::evaluate(expression, result, &references, dimensions)
                 .expect("the formula evaluates");
             measures.push(measure);
         }
@@ -450,7 +449,7 @@ fn snapshots_match_log(model: &Model, run: &Run) -> common::Violations {
             violate("an object of the manifest is missing".to_owned());
             continue;
         };
-        let snapshot = match manifest.decode_objects(objects, &definitions, &model.dimensions()) {
+        let snapshot = match manifest.decode_objects(objects, &definitions, model.dimensions()) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 violate(format!("{error:?}"));
@@ -630,7 +629,7 @@ fn final_values_agree_with_duckdb() {
         let inputs = model.fold(&log).expect("the log holds valid edits");
         let references: Vec<&Measure> = inputs.iter().collect();
         let mut oracle =
-            Oracle::new(&model.dimensions(), &references).expect("DuckDB loads the inputs");
+            Oracle::new(model.dimensions(), &references).expect("DuckDB loads the inputs");
         let engine =
             recalculated_log(&model, &log, log.len().max(1)).expect("the engine applies the log");
         let (engine_inputs, results) = engine.measures().split_at(inputs.len());

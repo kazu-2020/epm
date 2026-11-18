@@ -40,8 +40,7 @@ impl Model {
     fn dimension(&self, global_id: DimensionGlobalId) -> &Dimension {
         self.workspace
             .dimensions()
-            .iter()
-            .find(|dimension| dimension.global_id() == global_id)
+            .get(global_id)
             .expect("the representative model has the dimension")
     }
 
@@ -79,8 +78,8 @@ impl Model {
             .iter()
             .find(|candidate| candidate.result().name() == formula)
             .expect("the formula exists");
-        let dimensions: Vec<&Dimension> = self.workspace.dimensions().iter().collect();
-        crate::changed_region(formula.expression(), &changed, &dimensions)
+        let dimensions = self.workspace.dimensions();
+        crate::changed_region(formula.expression(), &changed, dimensions)
             .expect("the region is found")
     }
 }

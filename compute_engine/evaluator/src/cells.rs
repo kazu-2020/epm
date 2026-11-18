@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
+use dimension::{DimensionGlobalId, Dimensions, MemberIndex, ReferenceAttribute};
 use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
@@ -18,17 +18,6 @@ pub(crate) struct ByAxis<'d> {
 enum Source {
     Kept(usize),
     Repeated(u32),
-}
-
-pub(crate) fn find_dimension<'d>(
-    dimensions: &[&'d Dimension],
-    global_id: DimensionGlobalId,
-) -> Result<&'d Dimension, EvaluateError> {
-    dimensions
-        .iter()
-        .find(|dimension| dimension.global_id() == global_id)
-        .copied()
-        .ok_or(EvaluateError::MissingDimension(global_id))
 }
 
 fn normalized(
@@ -112,7 +101,7 @@ impl Cells {
 
     pub(crate) fn add(
         terms: &[(Sign, Cells)],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Cells, EvaluateError> {
         let mut axes: Vec<DimensionGlobalId> = Vec::new();
         for (_, term) in terms {
@@ -194,12 +183,12 @@ impl Cells {
     pub(crate) fn sum(
         &self,
         by: &[ByAxis<'_>],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Cells, EvaluateError> {
         let orders = self
             .axes
             .iter()
-            .map(|&axis| Ok(find_dimension(dimensions, axis)?.packing_order()))
+            .map(|&axis| Ok(dimensions.require(axis)?.packing_order()))
             .collect::<Result<Vec<_>, EvaluateError>>()?;
         let mut order: Vec<usize> = (0..self.axes.len()).collect();
         order.sort_by_key(|&axis| orders[axis]);
@@ -236,14 +225,15 @@ impl Cells {
     pub(crate) fn broadcast(
         &self,
         axes: &[DimensionGlobalId],
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Cells, EvaluateError> {
         let sources = axes
             .iter()
             .map(
                 |&axis| match self.axes.iter().position(|&own| own == axis) {
                     Some(position) => Ok(Source::Kept(position)),
-                    None => find_dimension(dimensions, axis)
+                    None => dimensions
+                        .require(axis)
                         .map(|dimension| Source::Repeated(dimension.len())),
                 },
             )
@@ -278,7 +268,7 @@ impl Cells {
     pub(crate) fn into_measure(
         self,
         definition: MeasureDefinition,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Measure, MeasureError> {
         Measure::from_cells(definition, self.values.into_iter().collect(), dimensions)
     }

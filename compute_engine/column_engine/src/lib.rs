@@ -6,18 +6,18 @@ mod tests;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
-use dimension::{Dimension, MemberIndex, ReferenceAttribute, usize_from};
+use dimension::{Dimensions, MemberIndex, ReferenceAttribute, usize_from};
 use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError, FilteredAxis};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
-use crate::columns::{ByAxis, Columns, find_dimension, packing_of};
+use crate::columns::{ByAxis, Columns, packing_of};
 use crate::region::Region;
 
 pub fn evaluate(
     expression: &CheckedExpression,
     result: &MeasureDefinition,
     measures: &[&Measure],
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<Measure, EvaluateError> {
     evaluate_in(expression, result, measures, dimensions, &Region::default())?
         .into_measure(result.clone(), dimensions)
@@ -28,14 +28,14 @@ pub fn evaluate(
 pub fn plan(
     expression: &CheckedExpression,
     result: &MeasureDefinition,
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<(), EvaluateError> {
     plan_node(expression.root(), dimensions)?;
     packing_of(dimensions, result.axes())?;
     Ok(())
 }
 
-fn plan_node(node: &CheckedNode, dimensions: &[&Dimension]) -> Result<(), EvaluateError> {
+fn plan_node(node: &CheckedNode, dimensions: &Dimensions) -> Result<(), EvaluateError> {
     for operand in operands(node) {
         plan_node(operand, dimensions)?;
     }
@@ -47,7 +47,7 @@ pub fn edit(
     measures: &[Measure],
     deltas: impl IntoIterator<Item = (MeasureGlobalId, Delta)>,
     formulas: &[(MeasureGlobalId, &CheckedExpression)],
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<Vec<Measure>, EvaluateError> {
     let mut next = measures.to_vec();
     let mut changed = HashMap::new();
@@ -71,7 +71,7 @@ fn apply(
     global_id: MeasureGlobalId,
     delta: Delta,
     changed: &mut HashMap<MeasureGlobalId, Region>,
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<(), EvaluateError> {
     let index = position(measures, global_id)?;
     let axes = measures[index].axes_in_packing_order();
@@ -80,7 +80,7 @@ fn apply(
     {
         for &axis in axes {
             if region.members(axis).map(BTreeSet::len)
-                == Some(usize_from(find_dimension(dimensions, axis)?.len()))
+                == Some(usize_from(dimensions.require(axis)?.len()))
             {
                 region = region.without(axis);
             }
@@ -107,7 +107,7 @@ fn position(measures: &[Measure], global_id: MeasureGlobalId) -> Result<usize, E
 fn changed_region(
     expression: &CheckedExpression,
     changed: &HashMap<MeasureGlobalId, Region>,
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<Option<Region>, EvaluateError> {
     changed_in(expression.root(), changed, dimensions)
 }
@@ -117,7 +117,7 @@ fn recalculate(
     result: &Measure,
     region: &Region,
     measures: &[&Measure],
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<Delta, EvaluateError> {
     let definition = result.definition();
     check_packing(result, dimensions)?;
@@ -133,14 +133,14 @@ fn evaluate_in(
     expression: &CheckedExpression,
     result: &MeasureDefinition,
     measures: &[&Measure],
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
     region: &Region,
 ) -> Result<Columns, EvaluateError> {
     if expression.result_axes() != result.axes() {
         return Err(EvaluateError::ResultAxesChanged(result.global_id()));
     }
     for &axis in result.axes() {
-        find_dimension(dimensions, axis)?;
+        dimensions.require(axis)?;
     }
     let evaluator = Evaluator {
         measures,
@@ -168,7 +168,7 @@ fn evaluate_in(
 fn changed_in(
     node: &CheckedNode,
     changed: &HashMap<MeasureGlobalId, Region>,
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Result<Option<Region>, EvaluateError> {
     Ok(match node {
         CheckedNode::Number(_) => None,
@@ -232,19 +232,20 @@ fn changed_in(
     })
 }
 
-fn check_packing(measure: &Measure, dimensions: &[&Dimension]) -> Result<(), EvaluateError> {
+fn check_packing(measure: &Measure, dimensions: &Dimensions) -> Result<(), EvaluateError> {
     if *measure.packing() != packing_of(dimensions, measure.axes_in_packing_order())? {
         return Err(EvaluateError::MeasurePackingChanged(measure.global_id()));
     }
     Ok(())
 }
 
-fn find_attribute<'d>(
-    dimensions: &[&'d Dimension],
+fn find_attribute(
+    dimensions: &Dimensions,
     dimension: dimension::DimensionGlobalId,
     attribute: dimension::AttributeGlobalId,
-) -> Result<ReferenceAttribute<'d>, EvaluateError> {
-    find_dimension(dimensions, dimension)?
+) -> Result<ReferenceAttribute<'_>, EvaluateError> {
+    dimensions
+        .require(dimension)?
         .reference_attributes()
         .find(|candidate| candidate.global_id() == attribute)
         .ok_or(EvaluateError::MissingAttribute(attribute))
@@ -252,7 +253,7 @@ fn find_attribute<'d>(
 
 struct Evaluator<'a, 'e> {
     measures: &'a [&'a Measure],
-    dimensions: &'a [&'a Dimension],
+    dimensions: &'a Dimensions,
     shared: RefCell<Vec<Shared<'e>>>,
 }
 
@@ -437,14 +438,14 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 } => {
                     if let Some(targets) = region.members(target) {
                         let attribute = find_attribute(self.dimensions, dimension, attribute)?;
-                        let members: BTreeSet<u32> =
-                            (0..find_dimension(self.dimensions, dimension)?.len())
-                                .filter(|&member| {
-                                    attribute
-                                        .value(MemberIndex(member))
-                                        .is_some_and(|target| targets.contains(&target.0))
-                                })
-                                .collect();
+                        let member_count = self.dimensions.require(dimension)?.len();
+                        let members: BTreeSet<u32> = (0..member_count)
+                            .filter(|&member| {
+                                attribute
+                                    .value(MemberIndex(member))
+                                    .is_some_and(|target| targets.contains(&target.0))
+                            })
+                            .collect();
                         source.constrain(dimension, members);
                     }
                 }

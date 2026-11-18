@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use change_log::{Slot, Start};
-use dimension::Dimension;
+use dimension::Dimensions;
 use measure::MeasureDefinition;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -27,10 +27,9 @@ pub async fn restore(
         .map(|input| input.definition().clone())
         .collect();
     for snapshot in found.iter().rev() {
-        let dimensions: Vec<&Dimension> = workspace.dimensions().iter().collect();
         // Not an alarm: a snapshot without a manifest is not written yet, and an unreadable one is only a lost cache.
         let Some(Snapshot { mut start, inputs }) =
-            read(store, snapshot, &definitions, &dimensions).await
+            read(store, snapshot, &definitions, workspace.dimensions()).await
         else {
             continue;
         };
@@ -49,7 +48,7 @@ async fn read(
     store: &dyn ObjectStore,
     folder: &Path,
     definitions: &[MeasureDefinition],
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Option<Snapshot> {
     let manifest = Manifest::decode(get(store, folder, "manifest").await?).ok()?;
     let mut objects = Vec::new();

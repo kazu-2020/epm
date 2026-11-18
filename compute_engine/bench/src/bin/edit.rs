@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use datagen::representative::{self, Size};
-use dimension::Dimension;
 use formula::CheckedExpression;
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 
@@ -21,7 +20,6 @@ fn main() -> std::io::Result<()> {
         .and_then(|edits| edits.parse().ok())
         .expect(usage);
     let dimensions = representative::dimensions(&Size::FULL, bench::SEED);
-    let dimensions: Vec<&Dimension> = dimensions.iter().collect();
     let mut measures = bench::read_measures(&directory, &dimensions)?;
     let inputs = measures.len();
     let formulas = representative::formulas();
