@@ -10,6 +10,7 @@ workspace=0
 for _ in $(seq 1 25); do workspace+=${alphabet:RANDOM%32:1}; done
 members='[0,1,1,0,1]'
 cell=''
+epoch=''
 server_pid=""
 trap '[ -z "$server_pid" ] || kill -9 "$server_pid" 2>/dev/null || true' EXIT
 
@@ -25,7 +26,8 @@ check() {
 
 call() {
   local body
-  body=$(curl -sS --max-time 30 -w '\n%{http_code}' -X POST -H 'content-type: application/json' -d "$2" "$base/$1") || return 1
+  body=$(curl -sS --max-time 30 -w '\n%{http_code}' -X POST -H 'content-type: application/json' \
+    -H "epm-workspace: $workspace" -H "epm-epoch: $epoch" -d "$2" "$base/$1") || return 1
   echo "${body##*$'\n'} ${body%$'\n'*}"
 }
 
@@ -38,6 +40,7 @@ ready() {
 }
 
 start() {
+  epoch=$1
   # Not only the wait below: another server on the same address also answers GetLag, and the demo would write to that server.
   ! call GetLag '{}' >/dev/null 2>&1 || fail "another server listens on $listen"
   cargo run --locked --quiet -- --listen "$listen" --workspace "$workspace" --epoch "$1" &
@@ -79,7 +82,7 @@ read_values() {
 sequence_of() {
   check "$(status_of "$1")" 200 "SubmitEdit returns 200" >&2
   echo "  < $(body_of "$1")" >&2
-  body_of "$1" | jq '.sequence'
+  body_of "$1" | jq -r '.sequence'
 }
 
 echo "== Build and start the server (workspace $workspace)"
@@ -131,7 +134,14 @@ check "$(status_of "$restored")" 200 "ReadCells at sequence $second returns 200"
 echo "  < $(body_of "$restored")"
 check "$(body_of "$restored" | jq -c '.values')" "$after_second" "the values are the same as before the kill"
 
-echo "== 5. After kill -TERM, the server stops with code 0"
+echo "== 5. A write for the old epoch 1 is rejected by the process of epoch 2"
+stale=$(epoch=1 && submit r4 "$quantity" 7)
+echo "  < $(body_of "$stale")"
+check "$(status_of "$stale")" 400 "SubmitEdit for epoch 1 returns 400"
+check "$(body_of "$stale" | jq -r '.code')" failed_precondition "the code is failed_precondition"
+check "$(body_of "$(call GetLag '{}')" | jq -r '.committed')" "$second" "the last Commit Sequence is still $second"
+
+echo "== 6. After kill -TERM, the server stops with code 0"
 kill -TERM "$server_pid"
 code=0
 wait "$server_pid" || code=$?
