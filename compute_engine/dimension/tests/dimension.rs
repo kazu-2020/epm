@@ -598,3 +598,22 @@ fn two_dimensions_with_one_global_id_are_an_error() {
         Some(DEPARTMENT)
     );
 }
+
+#[test]
+fn dimensions_keep_the_order_they_were_given_in() {
+    assert!(Dimensions::default().is_empty());
+    let dimensions = Dimensions::try_new(vec![departments(), divisions()]).unwrap();
+    assert!(!dimensions.is_empty());
+    assert_eq!(dimensions.len(), 2);
+    let order: Vec<DimensionGlobalId> = (&dimensions)
+        .into_iter()
+        .map(Dimension::global_id)
+        .collect();
+    assert_eq!(order, [DEPARTMENT, DIVISION]);
+    let order: Vec<DimensionGlobalId> = dimensions
+        .into_vec()
+        .iter()
+        .map(Dimension::global_id)
+        .collect();
+    assert_eq!(order, [DEPARTMENT, DIVISION]);
+}
