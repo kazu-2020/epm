@@ -1,13 +1,14 @@
+use std::collections::BTreeMap;
 use std::fmt;
 
 use dimension::{Dimension, DimensionGlobalId, Member, MemberGlobalId, MemberIndex};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Coordinate(Vec<(DimensionGlobalId, MemberGlobalId)>);
+pub struct Coordinate(BTreeMap<DimensionGlobalId, MemberGlobalId>);
 
 impl Coordinate {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (DimensionGlobalId, MemberGlobalId)> + '_ {
-        self.0.iter().copied()
+        self.0.iter().map(|(&axis, &member)| (axis, member))
     }
 
     pub fn named<'d>(
@@ -57,13 +58,12 @@ pub fn resolve<'d>(
             found: coordinate.0.len(),
         });
     }
-    // Not a check for a repeated axis: with equal lengths, a repeated axis leaves a declared axis missing.
     declared
         .map(|dimension| {
             let axis = dimension.global_id();
-            let (_, member) = coordinate
-                .iter()
-                .find(|&(named, _)| named == axis)
+            let member = *coordinate
+                .0
+                .get(&axis)
                 .ok_or(CellError::MissingAxis(axis))?;
             dimension
                 .member_by_global_id(member)

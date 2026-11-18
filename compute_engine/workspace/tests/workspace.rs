@@ -69,7 +69,6 @@ fn quantity_cell() -> [MemberIndex; 5] {
     [0, 1, 1, 0, 1].map(MemberIndex)
 }
 
-// Not a fresh model for each edit: generating the representative model repeats for every call.
 static QUANTITY_CELL: LazyLock<Coordinate> = LazyLock::new(|| {
     let unchecked = generated();
     let input = &unchecked.inputs[0];
@@ -314,7 +313,11 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     repeated[0] = repeated[1];
     assert_eq!(
         checks.check(&with(repeated)),
-        Err(EditError::Cell(CellError::MissingAxis(first)))
+        Err(EditError::Cell(CellError::Length {
+            expected: 5,
+            found: 4,
+        })),
+        "a coordinate keeps one member for each axis"
     );
     let mut foreign = pairs;
     foreign[0].1 = member;

@@ -103,8 +103,7 @@ impl Model {
 struct Assignees {
     inputs: Vec<MeasureDefinition>,
     results: Vec<MeasureDefinition>,
-    // The first two members of each dimension, so that a seed picks a member without the dimension.
-    members: BTreeMap<DimensionGlobalId, [MemberGlobalId; 2]>,
+    first_two_members: BTreeMap<DimensionGlobalId, [MemberGlobalId; 2]>,
     seed: u64,
     restored: Arc<Mutex<Vec<(u64, Start)>>>,
 }
@@ -236,7 +235,7 @@ impl common::Server for Assignees {
                 .iter()
                 .copied()
                 .chain(extra)
-                .map(|axis| (axis, self.members[&axis][member]))
+                .map(|axis| (axis, self.first_two_members[&axis][member]))
                 .collect(),
             value,
         })
@@ -258,7 +257,7 @@ fn simulate(model: &Model, seed: u64) -> Run {
             .iter()
             .map(|formula| formula.result().clone())
             .collect(),
-        members: model
+        first_two_members: model
             .workspace
             .dimensions()
             .iter()

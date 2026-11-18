@@ -38,8 +38,7 @@ pub struct EditCheck {
 #[derive(Debug)]
 struct Input {
     empty: DeltaBuilder,
-    // Not the dimension global ids: replaying the change log resolves every edit, and a search of all dimensions for each axis repeats the same work.
-    axes: Vec<usize>,
+    axis_positions: Vec<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -70,7 +69,10 @@ impl EditCheck {
             .inputs
             .get(&edit.measure)
             .ok_or(EditError::NotAnInput(edit.measure))?;
-        let axes = input.axes.iter().map(|&axis| &self.dimensions[axis]);
+        let axes = input
+            .axis_positions
+            .iter()
+            .map(|&position| &self.dimensions[position]);
         let coordinate = resolve(axes, &edit.coordinate).map_err(EditError::Cell)?;
         let delta = edits
             .deltas
@@ -97,7 +99,7 @@ impl Calculated {
                 inputs
                     .iter()
                     .map(|input| {
-                        let axes = input
+                        let axis_positions = input
                             .definition()
                             .axes()
                             .iter()
@@ -109,7 +111,7 @@ impl Calculated {
                             })
                             .collect();
                         let empty = input.delta();
-                        (input.global_id(), Input { empty, axes })
+                        (input.global_id(), Input { empty, axis_positions })
                     })
                     .collect(),
             ),
