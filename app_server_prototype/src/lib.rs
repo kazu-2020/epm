@@ -115,8 +115,10 @@ impl Assignee {
     }
 }
 
-// Not the impl Encodable return type of the trait: a concrete message is easier to read, and the generated trait accepts it.
-#[allow(refining_impl_trait)]
+#[expect(
+    refining_impl_trait,
+    reason = "a concrete message is easier to read than the impl Encodable return type, and the generated trait accepts it"
+)]
 impl Workspace for Assignee {
     async fn submit_edit(
         &self,

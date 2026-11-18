@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use app_server_prototype::proto::epm::v1::{
-    Cell, GetLagRequest, ListDefinitionsRequest, ReadCellsRequest, SubmitEditRequest,
+    AxisMember, Cell, GetLagRequest, ListDefinitionsRequest, ReadCellsRequest, SubmitEditRequest,
 };
 use app_server_prototype::{
     Assignee, EPOCH_HEADER, EditValue, EpochCheck, FIRST_SEQUENCE, WORKSPACE_HEADER,
@@ -21,6 +21,18 @@ const WORKSPACE: &str = "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C";
 const EPOCH: u64 = 7;
 const MEASURE: &str = "00000000000000000000000034";
 const JSON: Option<&str> = Some("application/json");
+const DIMENSION: &str = "00000000000000000000000001";
+const MEMBER: &str = "00000000000000000000000002";
+const COORDINATE: &str =
+    r#"[{"dimension":"00000000000000000000000001","member":"00000000000000000000000002"}]"#;
+
+fn coordinate() -> Vec<AxisMember> {
+    vec![AxisMember {
+        dimension: DIMENSION.to_owned(),
+        member: MEMBER.to_owned(),
+        ..Default::default()
+    }]
+}
 
 async fn start(assignee: Assignee) -> (SocketAddr, Arc<Assignee>) {
     let assignee = Arc::new(assignee);
@@ -35,7 +47,7 @@ fn edit(request_id: &str, value: Option<Value>) -> SubmitEditRequest {
     let mut request = SubmitEditRequest {
         request_id: request_id.to_owned(),
         measure: MEASURE.to_owned(),
-        coordinate: vec![0, 1, 1, 0, 1],
+        coordinate: coordinate(),
         ..Default::default()
     };
     if let Some(value) = value {
@@ -105,7 +117,7 @@ async fn four_operations_round_trip_through_the_generated_client() {
             at_least: Some(submitted.sequence),
             cells: vec![Cell {
                 measure: MEASURE.to_owned(),
-                coordinate: vec![0, 1, 1, 0, 1],
+                coordinate: coordinate(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -139,13 +151,13 @@ async fn existing_json_requests_are_accepted_and_responses_differ_only_as_listed
     let submitted = post_json(
         address,
         "SubmitEdit",
-        r#"{"request_id":"r1","measure":"00000000000000000000000034","coordinate":[0,1,1,0,1],"value":3}"#,
+        &format!(r#"{{"request_id":"r1","measure":"00000000000000000000000034","coordinate":{COORDINATE},"value":3}}"#),
     )
     .await;
     let read = post_json(
         address,
         "ReadCells",
-        r#"{"at_least":0,"cells":[{"measure":"00000000000000000000000068","coordinate":[0,1,1,0,1]},{"measure":"00000000000000000000000068","coordinate":[0,1,1,0,0]}]}"#,
+        &format!(r#"{{"at_least":0,"cells":[{{"measure":"00000000000000000000000068","coordinate":{COORDINATE}}},{{"measure":"00000000000000000000000068","coordinate":{COORDINATE}}}]}}"#),
     )
     .await;
     let lag = post_json(address, "GetLag", "{}").await;
@@ -153,7 +165,7 @@ async fn existing_json_requests_are_accepted_and_responses_differ_only_as_listed
     let unknown_field = post_json(
         address,
         "SubmitEdit",
-        r#"{"request_id":"r2","measure":"00000000000000000000000034","coordinate":[0],"value":3,"comment":"x"}"#,
+        &format!(r#"{{"request_id":"r2","measure":"00000000000000000000000034","coordinate":{COORDINATE},"value":3,"comment":"x"}}"#),
     )
     .await;
     let form_content_type = post(
@@ -195,19 +207,19 @@ async fn null_value_clears_the_cell_and_a_missing_value_is_rejected() {
     let json_null = post_json(
         address,
         "SubmitEdit",
-        r#"{"request_id":"json-null","measure":"00000000000000000000000034","coordinate":[0],"value":null}"#,
+        &format!(r#"{{"request_id":"json-null","measure":"00000000000000000000000034","coordinate":{COORDINATE},"value":null}}"#),
     )
     .await;
     let json_missing = post_json(
         address,
         "SubmitEdit",
-        r#"{"request_id":"json-missing","measure":"00000000000000000000000034","coordinate":[0]}"#,
+        &format!(r#"{{"request_id":"json-missing","measure":"00000000000000000000000034","coordinate":{COORDINATE}}}"#),
     )
     .await;
     let json_string = post_json(
         address,
         "SubmitEdit",
-        r#"{"request_id":"json-string","measure":"00000000000000000000000034","coordinate":[0],"value":"3"}"#,
+        &format!(r#"{{"request_id":"json-string","measure":"00000000000000000000000034","coordinate":{COORDINATE},"value":"3"}}"#),
     )
     .await;
     let binary_null = client
@@ -234,7 +246,9 @@ async fn null_value_clears_the_cell_and_a_missing_value_is_rejected() {
 async fn sixty_four_bit_values_survive_json_numbers_json_strings_and_binary() {
     let (address, _) = start(Assignee::new(None, Duration::ZERO)).await;
     let client = assignee_client(address, WORKSPACE, EPOCH);
-    let cells = r#""cells":[{"measure":"00000000000000000000000068","coordinate":[0]}]"#;
+    let cells = format!(
+        r#""cells":[{{"measure":"00000000000000000000000068","coordinate":{COORDINATE}}}]"#
+    );
 
     let json_number = post_json(
         address,

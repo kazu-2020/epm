@@ -14,13 +14,18 @@ service Workspace {
 message SubmitEditRequest {
   string request_id = 1;
   string measure = 2;
-  repeated uint32 coordinate = 3;
+  repeated AxisMember coordinate = 3;
   // Not optional double or DoubleValue: proto3 JSON reads null as an unset field, so a clear and a missing value would be the same.
   google.protobuf.Value value = 4;
 }
 
 message SubmitEditResponse {
   uint64 sequence = 1;
+}
+
+message AxisMember {
+  string dimension = 1;
+  string member = 2;
 }
 
 message ReadCellsRequest {
@@ -30,7 +35,7 @@ message ReadCellsRequest {
 
 message Cell {
   string measure = 1;
-  repeated uint32 coordinate = 2;
+  repeated AxisMember coordinate = 2;
 }
 
 message ReadCellsResponse {
@@ -60,7 +65,7 @@ message Dimension {
 }
 
 message Member {
-  uint32 id = 1;
+  string ulid = 1;
   string natural_key = 2 [json_name = "natural_key"];
 }
 
