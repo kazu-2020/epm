@@ -241,7 +241,6 @@ impl Interceptor for Destination {
 
 fn edit_value(value: Option<&Value>) -> Result<Option<f64>, ConnectError> {
     match value {
-        // Not a clear for a missing value: a request that forgets the value would clear the cell.
         None => Err(ConnectError::invalid_argument("value is required")),
         Some(value) if value.is_null() => Ok(None),
         Some(value) => value

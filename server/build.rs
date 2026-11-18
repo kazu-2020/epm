@@ -28,7 +28,6 @@ fn main() {
     println!("cargo:rerun-if-changed=proto");
 }
 
-// Not the response messages too: a JSON client would refuse the answer of a newer server that has a new field.
 fn request_messages(descriptors: &FileDescriptorSet) -> BTreeSet<String> {
     let messages: Vec<_> = descriptors
         .file
