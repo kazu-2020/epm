@@ -28,7 +28,7 @@ use server::snapshot::Manifest;
 use server::{Calculation, Edit, Engine, Exit, Rejection, Settings, SubmitError};
 use tokio::sync::oneshot;
 use ulid::Ulid;
-use workspace::{Workspace, WorkspaceGlobalId};
+use workspace::{Coordinate, Workspace, WorkspaceGlobalId};
 
 const DEFAULT_SEEDS: u64 = 2000;
 const WORKSPACE: WorkspaceGlobalId = WorkspaceGlobalId(Ulid(1));
@@ -230,18 +230,27 @@ impl common::Server for Assignees {
             .then(|| f64::from(u8::try_from((hash >> 12) % 8).expect("below 8")) / 4.0);
         let (measure, extra) = match (hash >> 20) % 8 {
             0 => (result, None),
-            1 => (input, Some(result.axes()[0])),
+            1 => (
+                input,
+                result
+                    .axes()
+                    .iter()
+                    .copied()
+                    .find(|axis| !input.axes().contains(axis)),
+            ),
             _ => (input, None),
         };
         server::edit::encode(&Edit {
             measure: measure.global_id(),
-            coordinate: measure
-                .axes()
-                .iter()
-                .copied()
-                .chain(extra)
-                .map(|axis| (axis, self.first_two_members[&axis][member]))
-                .collect(),
+            coordinate: Coordinate::try_new(
+                measure
+                    .axes()
+                    .iter()
+                    .copied()
+                    .chain(extra)
+                    .map(|axis| (axis, self.first_two_members[&axis][member])),
+            )
+            .expect("the extra axis is not an axis of the measure"),
             value,
         })
     }

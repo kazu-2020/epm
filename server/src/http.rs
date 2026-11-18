@@ -13,7 +13,7 @@ use dimension::{InvalidGlobalId, MemberIndex};
 use measure::MeasureGlobalId;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use workspace::{Coordinate, WorkspaceGlobalId};
+use workspace::{CellError, Coordinate, WorkspaceGlobalId};
 
 use crate::{Edit, Exit, Handle, Invalid, Loading, ReadError, Rejection, SubmitError};
 
@@ -268,7 +268,7 @@ fn measure(text: &str) -> Result<MeasureGlobalId, ConnectError> {
 
 // Not the members in the declared order: a client that read the definition before a change would name another cell (#184).
 fn coordinate(members: Vec<AxisMember>) -> Result<Coordinate, ConnectError> {
-    members
+    let pairs = members
         .into_iter()
         .map(|member| {
             Ok((
@@ -276,7 +276,9 @@ fn coordinate(members: Vec<AxisMember>) -> Result<Coordinate, ConnectError> {
                 global_id("member", &member.member)?,
             ))
         })
-        .collect()
+        .collect::<Result<Vec<_>, ConnectError>>()?;
+    Coordinate::try_new(pairs)
+        .map_err(|axis| ConnectError::invalid_argument(CellError::RepeatedAxis(axis).to_string()))
 }
 
 fn global_id<T: FromStr<Err = InvalidGlobalId>>(name: &str, text: &str) -> Result<T, ConnectError> {

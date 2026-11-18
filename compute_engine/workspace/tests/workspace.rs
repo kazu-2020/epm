@@ -284,7 +284,7 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
     let (first, _) = pairs[0];
     let member = pairs[1].1;
     let with = |coordinate: Vec<(DimensionGlobalId, MemberGlobalId)>| Edit {
-        coordinate: coordinate.into_iter().collect(),
+        coordinate: Coordinate::try_new(coordinate).expect("the axes are distinct"),
         ..quantity(Some(2.5))
     };
     let short = with(pairs[1..].to_vec());
@@ -302,15 +302,8 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
         Err(EditError::Cell(CellError::MissingAxis(first)))
     );
     let mut repeated = pairs.clone();
-    repeated[0] = repeated[1];
-    assert_eq!(
-        checks.check(&with(repeated)),
-        Err(EditError::Cell(CellError::Length {
-            expected: 5,
-            found: 4,
-        })),
-        "a coordinate keeps one member for each axis"
-    );
+    repeated[0].0 = repeated[1].0;
+    assert_eq!(Coordinate::try_new(repeated), Err(pairs[1].0));
     let mut foreign = pairs;
     foreign[0].1 = member;
     let foreign = with(foreign);
@@ -563,7 +556,7 @@ fn a_coordinate_names_a_member_by_its_global_id_in_whatever_row_the_member_is() 
         &Dimensions::default(),
     )
     .expect("a valid dimension");
-    let coordinate: Coordinate = [(dimension.global_id(), member)].into_iter().collect();
+    let coordinate = Coordinate::try_new([(dimension.global_id(), member)]).expect("one axis");
 
     assert_eq!(
         resolve([&dimension].into_iter(), &coordinate),
@@ -613,6 +606,10 @@ fn a_cell_error_names_what_the_coordinate_lacks() {
     assert_eq!(
         CellError::MissingAxis(axis).to_string(),
         format!("the coordinate has no member of axis {axis}")
+    );
+    assert_eq!(
+        CellError::RepeatedAxis(axis).to_string(),
+        format!("the coordinate names axis {axis} more than once")
     );
     assert_eq!(
         CellError::NoMember { axis, member }.to_string(),

@@ -18,20 +18,29 @@ impl Coordinate {
         if declared.len() != members.len() {
             return None;
         }
-        declared
+        let pairs = declared
             .zip(members)
             .map(|(dimension, &member)| {
                 dimension
                     .member(member)
                     .map(|member| (dimension.global_id(), member.global_id()))
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()?;
+        Coordinate::try_new(pairs).ok()
     }
 }
 
-impl FromIterator<(DimensionGlobalId, MemberGlobalId)> for Coordinate {
-    fn from_iter<I: IntoIterator<Item = (DimensionGlobalId, MemberGlobalId)>>(pairs: I) -> Self {
-        Coordinate(pairs.into_iter().collect())
+impl Coordinate {
+    pub fn try_new(
+        pairs: impl IntoIterator<Item = (DimensionGlobalId, MemberGlobalId)>,
+    ) -> Result<Coordinate, DimensionGlobalId> {
+        let mut members = BTreeMap::new();
+        for (axis, member) in pairs {
+            if members.insert(axis, member).is_some() {
+                return Err(axis);
+            }
+        }
+        Ok(Coordinate(members))
     }
 }
 
@@ -42,6 +51,7 @@ pub enum CellError {
         found: usize,
     },
     MissingAxis(DimensionGlobalId),
+    RepeatedAxis(DimensionGlobalId),
     NoMember {
         axis: DimensionGlobalId,
         member: MemberGlobalId,
@@ -84,6 +94,9 @@ impl fmt::Display for CellError {
             }
             CellError::MissingAxis(axis) => {
                 write!(f, "the coordinate has no member of axis {axis}")
+            }
+            CellError::RepeatedAxis(axis) => {
+                write!(f, "the coordinate names axis {axis} more than once")
             }
             CellError::NoMember { axis, member } => {
                 write!(f, "member {member} is not in dimension {axis}")

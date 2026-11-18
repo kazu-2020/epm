@@ -2,7 +2,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use dimension::{DimensionGlobalId, MemberGlobalId};
 use measure::MeasureGlobalId;
 use ulid::Ulid;
-use workspace::{Edit, EditCheck, EditError, Edits};
+use workspace::{Coordinate, Edit, EditCheck, EditError, Edits};
 
 use crate::Invalid;
 
@@ -17,6 +17,7 @@ pub enum DecodeError {
     Tag(u8),
     NotFinite,
     TrailingBytes,
+    RepeatedAxis(DimensionGlobalId),
 }
 
 pub fn check(edit_check: &EditCheck, payload: &Bytes) -> Result<(), Invalid> {
@@ -84,9 +85,10 @@ pub fn decode(mut bytes: Bytes) -> Result<Edit, DecodeError> {
     if bytes.has_remaining() {
         return Err(DecodeError::TrailingBytes);
     }
+    let coordinate = Coordinate::try_new(coordinate).map_err(DecodeError::RepeatedAxis)?;
     Ok(Edit {
         measure,
-        coordinate: coordinate.into_iter().collect(),
+        coordinate,
         value,
     })
 }
@@ -105,12 +107,11 @@ mod tests {
     fn edit(value: Option<f64>) -> Edit {
         Edit {
             measure: MeasureGlobalId(Ulid(0x0102)),
-            coordinate: [
+            coordinate: Coordinate::try_new([
                 (DimensionGlobalId(Ulid(0x0a)), MemberGlobalId(Ulid(3))),
                 (DimensionGlobalId(Ulid(0x0b)), MemberGlobalId(Ulid(0x0405))),
-            ]
-            .into_iter()
-            .collect(),
+            ])
+            .expect("the axes are distinct"),
             value,
         }
     }
@@ -190,5 +191,15 @@ mod tests {
         let mut huge = encode(&edit(None)).to_vec();
         huge[17..21].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(decode(huge.into()), Err(DecodeError::Truncated));
+    }
+
+    #[test]
+    fn a_repeated_axis_is_an_error() {
+        let mut repeated = encode(&edit(None)).to_vec();
+        repeated.copy_within(21..37, 53);
+        assert_eq!(
+            decode(repeated.into()),
+            Err(DecodeError::RepeatedAxis(DimensionGlobalId(Ulid(0x0a))))
+        );
     }
 }

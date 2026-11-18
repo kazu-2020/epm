@@ -29,5 +29,5 @@
 ## 影響
 
 - `server` の `datagen` への通常の依存は残存する。定義を変更ログから復元する時点で dev 依存に移動する。
-- 変更ログと HTTP の座標は行番号(`MemberIndex`)のままである。`MemberGlobalId` への変更は、メンバーの追加(#170)と同時に決定する。
+- 変更ログと HTTP の座標は、#184 で `DimensionGlobalId` と `MemberGlobalId` のペアに変更した(ADR 0012)。
 - 定義の変更を変更ログに記録する時点で、`Edit` と並列の操作を `workspace` crate に追加する。

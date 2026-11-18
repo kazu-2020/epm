@@ -113,7 +113,7 @@ fn initialize_log() {
 async fn log_ready(handle: server::Handle) {
     let started = Instant::now();
     if handle.wait_loaded().await.is_ok() {
-        info!(elapsed_ms = started.elapsed().as_millis(), "ready");
+        info!(elapsed = ?started.elapsed(), "ready");
     }
 }
 

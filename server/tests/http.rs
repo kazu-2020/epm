@@ -254,6 +254,8 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
     let mut unknown_field_in_coordinate = edit("r8", QUANTITY, &app.coordinate, Some(1.0));
     unknown_field_in_coordinate["coordinate"][0]["note"] = json!("x");
     let long_request_id = "r".repeat(129);
+    let mut repeated_axis = app.coordinate.clone();
+    repeated_axis.push(app.coordinate[0].clone());
     for body in [
         no_value,
         bad_global_id,
@@ -263,6 +265,7 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
         edit("", QUANTITY, &app.coordinate, Some(1.0)),
         edit(&long_request_id, QUANTITY, &app.coordinate, Some(1.0)),
         edit("r5", QUANTITY, &app.coordinate[1..], Some(1.0)),
+        edit("r9", QUANTITY, &repeated_axis, Some(1.0)),
     ] {
         assert_eq!(
             refusal(&app, "SubmitEdit", body.clone()).await,
