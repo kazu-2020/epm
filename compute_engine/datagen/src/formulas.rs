@@ -1,4 +1,4 @@
-use dimension::{Dimension, DimensionGlobalId, MemberIndex};
+use dimension::{Dimension, DimensionGlobalId, MemberIndex, usize_from};
 use formula::BinaryOperator;
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::RngExt;
@@ -171,8 +171,8 @@ impl Formulas<'_, '_, '_> {
             .random_range(1..=filtered.len().min(2));
         let members: Vec<String> = index::sample(
             &mut self.generator.random,
-            usize::try_from(filtered.len()).expect("usize holds every u32 on supported targets"),
-            usize::try_from(count).expect("usize holds every u32 on supported targets"),
+            usize_from(filtered.len()),
+            usize_from(count),
         )
         .into_iter()
         .map(|member| {

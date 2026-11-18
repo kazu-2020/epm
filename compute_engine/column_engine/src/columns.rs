@@ -3,13 +3,12 @@ use std::iter;
 use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
-use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute};
+use dimension::{Dimension, DimensionGlobalId, MemberIndex, ReferenceAttribute, usize_from};
 use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
 use measure::{CoordinatePacking, Measure, MeasureDefinition, MeasureError, normalize};
 use rayon::prelude::*;
 
 use crate::region::Region;
-use crate::usize_from;
 
 mod rows;
 

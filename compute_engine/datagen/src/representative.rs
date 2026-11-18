@@ -7,7 +7,7 @@ use arrow_array::{
 };
 use dimension::{
     AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
-    DimensionGlobalId, DimensionKind,
+    DimensionGlobalId, DimensionKind, usize_from,
 };
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
@@ -344,7 +344,7 @@ fn cents(cents: u32) -> f64 {
 impl Representative {
     fn department_kind(&self, department: u32) -> DepartmentKind {
         let kind = department / self.size.departments_per_kind;
-        DEPARTMENT_KINDS[usize::try_from(kind).expect("usize holds every u32 on supported targets")]
+        DEPARTMENT_KINDS[usize_from(kind)]
     }
 
     fn departments(&self) -> u32 {
@@ -484,12 +484,7 @@ impl Representative {
     fn dense_columns(&self, axes: &[DimensionGlobalId]) -> Vec<Vec<u32>> {
         let member_counts = self.member_counts(axes);
         let cells: u32 = member_counts.iter().product();
-        let mut columns = vec![
-            Vec::with_capacity(
-                usize::try_from(cells).expect("usize holds every u32 on supported targets")
-            );
-            axes.len()
-        ];
+        let mut columns = vec![Vec::with_capacity(usize_from(cells)); axes.len()];
         for cell in 0..cells {
             let mut rest = cell;
             for (column, &member_count) in columns.iter_mut().zip(&member_counts).rev() {
@@ -537,10 +532,8 @@ impl Representative {
                 let mut random = StdRng::seed_from_u64(seed);
                 let pair = u32::try_from(pair).expect("pairs is a u32 count");
                 let (period, version) = (pair / versions, pair % versions);
-                let pairs =
-                    usize::try_from(pairs).expect("usize holds every u32 on supported targets");
-                let pair =
-                    usize::try_from(pair).expect("usize holds every u32 on supported targets");
+                let pairs = usize_from(pairs);
+                let pair = usize_from(pair);
                 let cells = self.size.quantity_cells / pairs
                     + usize::from(pair < self.size.quantity_cells % pairs);
                 let mut seen: HashSet<u64> = HashSet::with_capacity(cells);

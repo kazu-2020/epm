@@ -556,7 +556,7 @@ impl fmt::Debug for ReferenceAttribute<'_> {
     }
 }
 
-fn usize_from(value: u32) -> usize {
+pub fn usize_from(value: u32) -> usize {
     usize::try_from(value).expect("usize holds every u32 on supported targets")
 }
 

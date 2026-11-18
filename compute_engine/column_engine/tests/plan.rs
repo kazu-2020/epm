@@ -30,7 +30,7 @@ fn plan(
     let checked: CheckedExpression = formula::check_axes(&resolved.expression, result.axes())
         .checked
         .expect("the formula passes the axis check");
-    column_engine::plan(&checked, result, measures, &references)
+    column_engine::plan(&checked, result, &references)
 }
 
 fn ordinary(id: u128, members: u32) -> Dimension {
