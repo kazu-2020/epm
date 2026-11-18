@@ -367,7 +367,6 @@ impl Handle {
     ) -> Result<Sequence, SubmitError> {
         match self.ready() {
             Some(ready) => ready.submit(request_id, edit).await,
-            None if self.stopped() => Err(SubmitError::Stopped),
             None => Err(SubmitError::Loading),
         }
     }
@@ -379,7 +378,6 @@ impl Handle {
     ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
         match self.ready() {
             Some(ready) => ready.read(at_least, cells).await,
-            None if self.stopped() => Err(ReadError::Stopped),
             None => Err(ReadError::Loading),
         }
     }
@@ -410,10 +408,6 @@ impl Handle {
 
     fn ready(&self) -> Option<Arc<Ready>> {
         self.ready.borrow().clone()
-    }
-
-    fn stopped(&self) -> bool {
-        self.ready.has_changed().is_err()
     }
 }
 
