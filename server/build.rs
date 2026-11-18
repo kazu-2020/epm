@@ -50,6 +50,10 @@ fn request_messages(descriptors: &FileDescriptorSet) -> BTreeSet<String> {
     let mut requests = BTreeSet::new();
     while let Some(name) = pending.pop() {
         let Some((_, message)) = messages.iter().find(|(candidate, _)| *candidate == name) else {
+            assert!(
+                name.is_empty() || name.starts_with(".google."),
+                "{name} is in a request, and this script does not find it to refuse its unknown fields"
+            );
             continue;
         };
         if requests.insert(name) {
