@@ -590,7 +590,7 @@ fn two_dimensions_with_one_global_id_are_an_error() {
         dimensions.try_push(divisions()),
         Err(DuplicateDimension(DIVISION))
     );
-    assert_eq!(dimensions.iter().len(), 1);
+    assert_eq!(dimensions.len(), 1);
     assert_eq!(dimensions.get(DEPARTMENT).map(Dimension::global_id), None);
     dimensions.try_push(departments()).unwrap();
     assert_eq!(

@@ -402,19 +402,13 @@ fn applied_edits_give_the_cells_of_a_workspace_that_starts_with_the_edited_input
         global_ids(applied.inputs()),
         global_ids(&generated().inputs)
     );
-    assert_eq!(
-        applied.dimensions().iter().len(),
-        generated().dimensions.iter().len()
-    );
+    assert_eq!(applied.dimensions().len(), generated().dimensions.len());
 }
 
 #[test]
 fn a_workspace_gives_back_what_it_was_made_from() {
     let workspace = Workspace::try_new(generated()).expect("the representative model is valid");
-    assert_eq!(
-        workspace.dimensions().iter().len(),
-        generated().dimensions.iter().len()
-    );
+    assert_eq!(workspace.dimensions().len(), generated().dimensions.len());
     assert_eq!(workspace.inputs().len(), generated().inputs.len());
     assert!(workspace.dimensions().get(PERIOD).is_some());
     let formulas: Vec<Formula> = workspace

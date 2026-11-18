@@ -91,11 +91,10 @@ impl Generator<'_> {
         let member_count = self
             .random
             .random_range(1..=self.configuration.members_per_dimension);
-        let earlier_count = earlier.iter().len();
-        let parent = (earlier_count > 0 && self.random.random_bool(0.75)).then(|| {
+        let parent = (!earlier.is_empty() && self.random.random_bool(0.75)).then(|| {
             earlier
                 .iter()
-                .nth(self.random.random_range(0..earlier_count))
+                .nth(self.random.random_range(0..earlier.len()))
                 .expect("the position is below the count")
         });
         let natural_key = natural_key_attribute(global_id);

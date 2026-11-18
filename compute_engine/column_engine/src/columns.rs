@@ -6,7 +6,7 @@ use arrow_buffer::ScalarBuffer;
 use dimension::{
     Dimension, DimensionGlobalId, Dimensions, MemberIndex, ReferenceAttribute, usize_from,
 };
-use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
+use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign, required_dimension};
 use measure::{CoordinatePacking, Measure, MeasureDefinition, MeasureError, normalize};
 use rayon::prelude::*;
 
@@ -48,9 +48,7 @@ pub(crate) fn sort_in_packing_order<T>(
 ) -> Result<(), EvaluateError> {
     for item in items.iter() {
         let global_id = axis(item);
-        dimensions
-            .get(global_id)
-            .ok_or(EvaluateError::MissingDimension(global_id))?;
+        required_dimension(dimensions, global_id)?;
     }
     items.sort_by_cached_key(|item| {
         dimensions
@@ -66,12 +64,7 @@ fn member_counts(
     axes: &[DimensionGlobalId],
 ) -> Result<Vec<u32>, EvaluateError> {
     axes.iter()
-        .map(|&axis| {
-            dimensions
-                .get(axis)
-                .ok_or(EvaluateError::MissingDimension(axis))
-                .map(Dimension::len)
-        })
+        .map(|&axis| required_dimension(dimensions, axis).map(Dimension::len))
         .collect()
 }
 
@@ -927,10 +920,7 @@ impl Columns {
             if spread_axes.contains(&axis) {
                 continue;
             }
-            let member_count = dimensions
-                .get(axis)
-                .ok_or(EvaluateError::MissingDimension(axis))?
-                .len();
+            let member_count = required_dimension(dimensions, axis)?.len();
             let copies = usize_from(member_count);
             for column in &mut members {
                 *column = column

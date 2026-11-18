@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
 use dimension::{Dimensions, MemberIndex, ReferenceAttribute, usize_from};
-use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError, FilteredAxis};
+use formula::{
+    CheckedAxis, CheckedExpression, CheckedNode, EvaluateError, FilteredAxis, required_dimension,
+};
 use measure::{Delta, Measure, MeasureDefinition, MeasureGlobalId};
 
 use crate::columns::{ByAxis, Columns, packing_of};
@@ -80,12 +82,7 @@ fn apply(
     {
         for &axis in axes {
             if region.members(axis).map(BTreeSet::len)
-                == Some(usize_from(
-                    dimensions
-                        .get(axis)
-                        .ok_or(EvaluateError::MissingDimension(axis))?
-                        .len(),
-                ))
+                == Some(usize_from(required_dimension(dimensions, axis)?.len()))
             {
                 region = region.without(axis);
             }
@@ -145,9 +142,7 @@ fn evaluate_in(
         return Err(EvaluateError::ResultAxesChanged(result.global_id()));
     }
     for &axis in result.axes() {
-        dimensions
-            .get(axis)
-            .ok_or(EvaluateError::MissingDimension(axis))?;
+        required_dimension(dimensions, axis)?;
     }
     let evaluator = Evaluator {
         measures,
@@ -251,9 +246,7 @@ fn find_attribute(
     dimension: dimension::DimensionGlobalId,
     attribute: dimension::AttributeGlobalId,
 ) -> Result<ReferenceAttribute<'_>, EvaluateError> {
-    dimensions
-        .get(dimension)
-        .ok_or(EvaluateError::MissingDimension(dimension))?
+    required_dimension(dimensions, dimension)?
         .reference_attributes()
         .find(|candidate| candidate.global_id() == attribute)
         .ok_or(EvaluateError::MissingAttribute(attribute))
@@ -446,11 +439,7 @@ impl<'a, 'e> Evaluator<'a, 'e> {
                 } => {
                     if let Some(targets) = region.members(target) {
                         let attribute = find_attribute(self.dimensions, dimension, attribute)?;
-                        let member_count = self
-                            .dimensions
-                            .get(dimension)
-                            .ok_or(EvaluateError::MissingDimension(dimension))?
-                            .len();
+                        let member_count = required_dimension(self.dimensions, dimension)?.len();
                         let members: BTreeSet<u32> = (0..member_count)
                             .filter(|&member| {
                                 attribute

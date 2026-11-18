@@ -15,7 +15,7 @@ pub use axis_error::{AxisError, AxisErrorKind};
 pub use checked_expression::{
     CheckedAxis, CheckedExpression, CheckedNode, ProductOperator, Sign, Term,
 };
-pub use evaluate_error::EvaluateError;
+pub use evaluate_error::{EvaluateError, required_dimension};
 pub use expression::{Axis, BinaryOperator, Expression, ExpressionKind, FilteredAxis, QuotedName};
 pub use parser::{MAXIMUM_DEPTH, Parsed, parse};
 pub use resolve::{Resolved, resolve};
