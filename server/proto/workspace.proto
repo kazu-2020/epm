@@ -20,7 +20,6 @@ message SubmitEditRequest {
 }
 
 message SubmitEditResponse {
-  // Not plain uint64: proto3 JSON leaves out a zero, and the first commit has the sequence 0.
   optional uint64 sequence = 1;
 }
 

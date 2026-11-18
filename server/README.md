@@ -82,10 +82,11 @@ curl -X POST "${headers[@]}" "$api/GetLag" -d '{}'
 
 - A coordinate names one member of each axis of the measure by the ULIDs of the dimension and the member, in any order. `ListDefinitions` gives the axes of each measure and the ULIDs of the members. A position in the declared order is not a coordinate. The change log keeps the edit, and the declared order can change later (#184).
 - The `kind` of a measure in `ListDefinitions` is `MEASURE_KIND_INPUT` or `MEASURE_KIND_CALCULATED`. Only an input measure takes an edit.
-- `SubmitEdit` returns `{"sequence": "N"}`. A `null` value clears the cell. An edit without `value` is an error. If you send the same `request_id` again, you get the same sequence.
+- `SubmitEdit` returns `{"sequence": "N"}`. The first commit has the sequence 1. A `null` value clears the cell. An edit without `value` is an error. If you send the same `request_id` again, you get the same sequence.
 - `ReadCells` returns `{"recalculated": "N", "values": [...]}`. The values include all commits up to `at_least` or later. If you leave out `at_least`, you get the values that the server has recalculated so far.
 - A value is `null` if the cell is empty. A member that is not in its dimension is an error, the same as in an edit.
 - `GetLag` returns the last committed and the last recalculated sequence.
+- No commit has the sequence 0. Thus `"at_least": 0` gets `invalid_argument`. To read without a sequence, leave out `at_least`.
 - The responses follow the JSON form of protobuf. A sequence is a string, because a JSON number cannot hold each 64-bit value. A request can send a sequence as a number or a string.
 - A response leaves out a field that has no value. For example, `GetLag` returns `{}` before the first commit. `committed` appears after the first commit, and `recalculated` appears after the server recalculates it.
 - The server refuses an unknown field in a JSON request with `invalid_argument`. Thus a misspelled `at_least` does not read old values.

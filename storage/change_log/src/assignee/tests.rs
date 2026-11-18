@@ -33,10 +33,14 @@ fn request(name: &'static str) -> Event {
     })
 }
 
-fn commit(name: &'static str, sequence: u64) -> Commit {
+fn sequence(value: u64) -> Sequence {
+    Sequence::new(value).expect("a test sequence is not 0")
+}
+
+fn commit(name: &'static str, value: u64) -> Commit {
     Commit {
         request_id: id(name),
-        sequence: Sequence(sequence),
+        sequence: sequence(value),
         payload: Bytes::from_static(b"payload"),
     }
 }
@@ -48,10 +52,10 @@ fn committed(name: &'static str, sequence: u64, slot: Slot) -> Effect {
     }
 }
 
-fn ack(name: &'static str, sequence: u64) -> Effect {
+fn ack(name: &'static str, value: u64) -> Effect {
     Effect::Ack {
         request_id: id(name),
-        sequence: Sequence(sequence),
+        sequence: sequence(value),
     }
 }
 
@@ -166,7 +170,7 @@ fn a_new_assignee_fences_the_next_slot_and_then_writes_after_it() {
     let (slot, segment, _) = put(&assignee.step_and_flush(request("r1")));
     assert_eq!(slot, Slot(1));
     assert_eq!(segment.epoch, Epoch(1));
-    assert_eq!(segment.commits()[0].sequence, Sequence(0));
+    assert_eq!(segment.commits()[0].sequence, sequence(1));
     assert_eq!(
         acks(&assignee.step_and_flush(store.put(slot, segment))),
         vec![id("r1")]
@@ -191,7 +195,7 @@ fn requests_that_arrive_during_a_put_form_the_next_batch() {
             .iter()
             .map(|commit| commit.sequence)
             .collect::<Vec<_>>(),
-        vec![Sequence(1), Sequence(2)]
+        vec![sequence(2), sequence(3)]
     );
 }
 
@@ -215,7 +219,7 @@ fn a_request_already_held_is_not_written_again() {
     assert_eq!(request_ids(&put(&effects).1), vec![id("r2")]);
     assert_eq!(
         assignee.step_and_flush(request("r1")),
-        vec![ack("r1", 0)],
+        vec![ack("r1", 1)],
         "in the view"
     );
 }
@@ -259,10 +263,10 @@ fn carrying(name: &'static str, payload: &'static str) -> Request {
     }
 }
 
-fn committed_as(name: &'static str, sequence: u64, payload: &'static str) -> Commit {
+fn committed_as(name: &'static str, value: u64, payload: &'static str) -> Commit {
     Commit {
         request_id: id(name),
-        sequence: Sequence(sequence),
+        sequence: sequence(value),
         payload: Bytes::from_static(payload.as_bytes()),
     }
 }
@@ -292,7 +296,7 @@ fn only_a_new_request_is_checked_and_a_rejected_one_takes_no_sequence() {
     let (_, segment, _) = put(&assignee.step_and_flush(Event::Request(carrying("r3", "good"))));
     assert_eq!(
         segment.commits(),
-        vec![committed_as("r3", 1, "good")],
+        vec![committed_as("r3", 2, "good")],
         "the rejected request took no Commit Sequence"
     );
     assert_eq!(checked.admitted(), ["good", "bad", "good"]);
@@ -306,8 +310,8 @@ fn a_new_assignee_replays_the_commits_of_older_assignees_in_sequence_order() {
         Segment {
             epoch: Epoch(1),
             content: Content::Commits(vec![
-                committed_as("r1", 0, "first"),
-                committed_as("r2", 1, "bad"),
+                committed_as("r1", 1, "first"),
+                committed_as("r2", 2, "bad"),
             ]),
         },
     );
@@ -318,7 +322,7 @@ fn a_new_assignee_replays_the_commits_of_older_assignees_in_sequence_order() {
         fence_slot,
         Segment {
             epoch: Epoch(2),
-            content: Content::Commits(vec![committed_as("r3", 2, "third")]),
+            content: Content::Commits(vec![committed_as("r3", 3, "third")]),
         },
     );
     assert_eq!(
@@ -330,7 +334,7 @@ fn a_new_assignee_replays_the_commits_of_older_assignees_in_sequence_order() {
         effects[0],
         super::Effect::Committed {
             slot: fence_slot,
-            commit: committed_as("r3", 2, "third")
+            commit: committed_as("r3", 3, "third")
         }
     );
     assert_eq!(
@@ -353,7 +357,7 @@ fn requests_before_the_fence_succeeds_wait_for_it() {
             epoch: Epoch(1),
             content: Content::Commits(vec![Commit {
                 request_id: id("r1"),
-                sequence: Sequence(0),
+                sequence: sequence(1),
                 payload: Bytes::new(),
             }]),
         },
@@ -366,7 +370,7 @@ fn requests_before_the_fence_succeeds_wait_for_it() {
     assert_eq!(acks(&effects), vec![id("r1")]);
     let (slot, segment, _) = put(&effects);
     assert_eq!((slot, request_ids(&segment)), (Slot(2), vec![id("r2")]));
-    assert_eq!(segment.commits()[0].sequence, Sequence(1));
+    assert_eq!(segment.commits()[0].sequence, sequence(2));
 }
 
 #[test]
@@ -417,7 +421,7 @@ fn a_read_back_decides_by_the_epoch_and_checks_the_content() {
             slot,
             found: Some(written)
         }),
-        vec![committed("r1", 0, slot), ack("r1", 0)]
+        vec![committed("r1", 1, slot), ack("r1", 1)]
     );
 
     let (slot, _, _) = put(&assignee.step_and_flush(request("r2")));
@@ -480,7 +484,7 @@ fn other_content_under_the_own_epoch_raises_an_alarm() {
         epoch: Epoch(3),
         content: Content::Commits(vec![Commit {
             request_id: id("r1"),
-            sequence: Sequence(0),
+            sequence: sequence(1),
             payload: Bytes::from_static(b"payload"),
         }]),
     };
@@ -651,7 +655,7 @@ fn old_assignee_takes_slot_first() {
     assert_eq!(b.step_and_flush(store.put(slot, fence)), vec![]);
     assert_eq!(
         b.step_and_flush(request("r1")),
-        vec![ack("r1", 0)],
+        vec![ack("r1", 1)],
         "B sees r1"
     );
     assert_eq!(store.replay(), vec![id("r1")]);
@@ -674,7 +678,7 @@ fn old_assignee_takes_slot_first() {
         "A stops at the newer epoch"
     );
     let (slot, segment, _) = put(&b.step_and_flush(request("r2")));
-    assert_eq!(segment.commits()[0].sequence, Sequence(1));
+    assert_eq!(segment.commits()[0].sequence, sequence(2));
     assert_eq!(
         acks(&b.step_and_flush(store.put(slot, segment))),
         vec![id("r2")]
@@ -706,7 +710,7 @@ fn own_resend_acknowledged() {
     );
     assert_eq!(
         assignee.step_and_flush(store.read_back(slot)),
-        vec![committed("r1", 0, slot), ack("r1", 0)]
+        vec![committed("r1", 1, slot), ack("r1", 1)]
     );
     assert_eq!(store.replay(), vec![id("r1")]);
 }
@@ -718,18 +722,18 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
         Slot(0),
         Segment {
             epoch: Epoch(1),
-            content: Content::Commits(vec![commit("r1", 0)]),
+            content: Content::Commits(vec![commit("r1", 1)]),
         },
     );
     let mut assignee = Assignee::new(assignee_id(3), AdmitAll);
     let effects = assignee.step_and_flush(store.loaded());
-    assert_eq!(effects[0], committed("r1", 0, Slot(0)), "read on load");
+    assert_eq!(effects[0], committed("r1", 1, Slot(0)), "read on load");
     let (fence_slot, fence, _) = put(&effects);
     store.put(
         fence_slot,
         Segment {
             epoch: Epoch(2),
-            content: Content::Commits(vec![commit("r2", 1)]),
+            content: Content::Commits(vec![commit("r2", 2)]),
         },
     );
     assert_eq!(
@@ -739,7 +743,7 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
     let effects = assignee.step_and_flush(store.read_back(fence_slot));
     assert_eq!(
         effects[0],
-        committed("r2", 1, fence_slot),
+        committed("r2", 2, fence_slot),
         "found by the fence"
     );
     let (slot, fence, _) = put(&effects);
@@ -748,12 +752,12 @@ fn every_commit_is_passed_on_once_in_sequence_order_before_its_ack() {
     let (slot, segment, _) = put(&assignee.step_and_flush(request("r3")));
     assert_eq!(
         assignee.step_and_flush(store.put(slot, segment)),
-        vec![committed("r3", 2, slot), ack("r3", 2)],
+        vec![committed("r3", 3, slot), ack("r3", 3)],
         "own write"
     );
     assert_eq!(
         assignee.step_and_flush(request("r2")),
-        vec![ack("r2", 1)],
+        vec![ack("r2", 2)],
         "a resend is acknowledged with its first sequence"
     );
 }
@@ -764,9 +768,9 @@ fn three_slots() -> Store {
         content: Content::Commits(commits),
     };
     Store(BTreeMap::from([
-        (Slot(0), segment(vec![commit("r1", 0), commit("r2", 1)])),
-        (Slot(1), segment(vec![commit("r3", 2), commit("r4", 3)])),
-        (Slot(2), segment(vec![commit("r5", 4)])),
+        (Slot(0), segment(vec![commit("r1", 1), commit("r2", 2)])),
+        (Slot(1), segment(vec![commit("r3", 3), commit("r4", 4)])),
+        (Slot(2), segment(vec![commit("r5", 5)])),
     ]))
 }
 
@@ -786,7 +790,7 @@ fn an_assignee_from_a_start_continues_as_an_assignee_that_reads_the_whole_log() 
     assert_eq!(
         effects,
         whole[3..],
-        "the commits from sequence 3 and the same fence"
+        "the commits from sequence 4 and the same fence"
     );
 
     let (slot, fence, _) = put(&effects);
@@ -794,11 +798,11 @@ fn an_assignee_from_a_start_continues_as_an_assignee_that_reads_the_whole_log() 
     assert!(resumed.step_and_flush(store.put(slot, fence)).is_empty());
     assert_eq!(
         resumed.step_and_flush(request("r1")),
-        [ack("r1", 0)],
+        [ack("r1", 1)],
         "a resend from before the start keeps its sequence"
     );
     let (_, segment, _) = put(&resumed.step_and_flush(request("r6")));
-    assert_eq!(segment.commits(), [commit("r6", 5)]);
+    assert_eq!(segment.commits(), [commit("r6", 6)]);
 }
 
 #[test]
@@ -812,7 +816,7 @@ fn a_start_that_the_log_does_not_hold_is_an_alarm() {
         Assignee::resume(assignee_id(2), AdmitAll, start).step_and_flush(store.loaded()),
         [Effect::Alarm(Alarm::StartNotInLog {
             slot: Slot(0),
-            sequence: Sequence(2)
+            sequence: sequence(3)
         })]
     );
 }
@@ -827,7 +831,7 @@ fn a_start_with_another_request_id_for_its_last_commit_is_an_alarm() {
         Assignee::resume(assignee_id(2), AdmitAll, start).step_and_flush(three_slots().loaded()),
         [Effect::Alarm(Alarm::StartNotInLog {
             slot: Slot(1),
-            sequence: Sequence(2)
+            sequence: sequence(3)
         })]
     );
 }

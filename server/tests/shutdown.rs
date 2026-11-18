@@ -192,7 +192,7 @@ async fn a_shutdown_waits_for_the_edit_in_flight_and_then_stops_with_success() {
     assert!(response.starts_with("HTTP/1.0 200 "), "{response}");
     let (_, body) = response.split_once("\r\n\r\n").expect("a body");
     let body: Value = serde_json::from_str(body).expect("a JSON body");
-    assert_eq!(body, json!({ "sequence": "0" }));
+    assert_eq!(body, json!({ "sequence": "1" }));
     let stopped = running.stopped.await.expect("serve does not panic");
     assert!(matches!(stopped, Shutdown::Drained), "{stopped:?}");
 }

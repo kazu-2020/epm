@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 const MAGIC: [u8; 4] = *b"CLOG";
@@ -13,16 +15,65 @@ pub struct ProcessId(pub u128);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Slot(pub u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Sequence(NonZeroU64);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Sequence(pub u64);
+pub struct CommitCount(pub(crate) u64);
 
 impl Sequence {
+    pub const FIRST: Sequence = Sequence(NonZeroU64::MIN);
+
+    pub fn new(value: u64) -> Option<Sequence> {
+        NonZeroU64::new(value).map(Sequence)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+
     pub fn next(self) -> Sequence {
-        Sequence(self.0 + 1)
+        Sequence(
+            self.0
+                .checked_add(1)
+                .expect("a log holds fewer than 2^64 commits"),
+        )
     }
 
     pub fn index(self) -> usize {
-        usize::try_from(self.0).expect("a Commit Sequence fits in usize")
+        usize::try_from(self.get() - 1).expect("a Commit Sequence fits in usize")
+    }
+}
+
+impl CommitCount {
+    pub fn of(length: usize) -> CommitCount {
+        CommitCount(u64::try_from(length).expect("a count fits in u64"))
+    }
+
+    pub fn last(self) -> Option<Sequence> {
+        Sequence::new(self.0)
+    }
+
+    pub fn next(self) -> Sequence {
+        self.last().map_or(Sequence::FIRST, Sequence::next)
+    }
+
+    pub fn length(self) -> usize {
+        usize::try_from(self.0).expect("a count fits in usize")
+    }
+
+    pub fn contains(self, sequence: Sequence) -> bool {
+        sequence.get() <= self.0
+    }
+
+    pub fn since(self, earlier: CommitCount) -> u64 {
+        self.0.saturating_sub(earlier.0)
+    }
+}
+
+impl From<Sequence> for CommitCount {
+    fn from(last: Sequence) -> CommitCount {
+        CommitCount(last.get())
     }
 }
 
@@ -55,6 +106,7 @@ pub enum DecodeError {
     Truncated,
     TrailingBytes,
     ContentKind(u8),
+    ZeroSequence,
 }
 
 impl Segment {
@@ -101,7 +153,7 @@ pub fn encode(segment: &Segment) -> Bytes {
             out.put_u32_le(length(commits.len()));
             for commit in commits {
                 put_prefixed(&mut out, &commit.request_id.0);
-                out.put_u64_le(commit.sequence.0);
+                out.put_u64_le(commit.sequence.get());
                 put_prefixed(&mut out, &commit.payload);
             }
         }
@@ -162,7 +214,7 @@ impl Reader {
         for _ in 0..count {
             // Not a slice of the segment: the assignee keeps every Request ID, and a slice would keep the whole segment with its payloads.
             let request_id = RequestId(Bytes::copy_from_slice(&self.prefixed()?));
-            let sequence = Sequence(self.u64()?);
+            let sequence = Sequence::new(self.u64()?).ok_or(DecodeError::ZeroSequence)?;
             let payload = self.prefixed()?;
             commits.push(Commit {
                 request_id,
@@ -181,7 +233,7 @@ mod tests {
     fn commit(request_id: &'static str, sequence: u64, payload: &'static str) -> Commit {
         Commit {
             request_id: RequestId(Bytes::from_static(request_id.as_bytes())),
-            sequence: Sequence(sequence),
+            sequence: Sequence::new(sequence).expect("a test sequence is not 0"),
             payload: Bytes::from_static(payload.as_bytes()),
         }
     }
@@ -296,6 +348,22 @@ mod tests {
             Segment::decode(version.into()),
             Err(DecodeError::Version(3))
         );
+    }
+
+    #[test]
+    fn a_zero_sequence_is_an_error() {
+        let mut zero = encode(&Segment {
+            epoch: Epoch(1),
+            content: Content::Commits(vec![commit("r", 1, "p")]),
+        })
+        .to_vec();
+        zero[23] = 0;
+        assert_eq!(Segment::decode(zero.into()), Err(DecodeError::ZeroSequence));
+    }
+
+    #[test]
+    fn the_commits_since_an_earlier_count_are_the_difference() {
+        assert_eq!(CommitCount(3).since(CommitCount(1)), 2);
     }
 
     #[test]

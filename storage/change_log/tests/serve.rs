@@ -89,10 +89,14 @@ fn name(request_id: &RequestId) -> String {
     String::from_utf8(request_id.0.to_vec()).expect("utf-8")
 }
 
+fn sequence(value: u64) -> Sequence {
+    Sequence::new(value).expect("a test sequence is not 0")
+}
+
 fn named(names: &[(&str, u64)]) -> Vec<(String, Sequence)> {
     names
         .iter()
-        .map(|(name, sequence)| ((*name).to_owned(), Sequence(*sequence)))
+        .map(|(name, value)| ((*name).to_owned(), sequence(*value)))
         .collect()
 }
 
@@ -126,13 +130,13 @@ async fn log(store: &Arc<dyn ObjectStore>) -> Vec<String> {
 async fn a_newer_assignee_takes_over_and_the_old_assignee_stops() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut a = start(&store, 1);
-    assert_eq!(submit(&a.submission_sender, "r1").await, Ok(Sequence(0)));
-    assert_eq!(submit(&a.submission_sender, "r2").await, Ok(Sequence(1)));
-    assert_eq!(a.take_commits(), named(&[("r1", 0), ("r2", 1)]));
+    assert_eq!(submit(&a.submission_sender, "r1").await, Ok(sequence(1)));
+    assert_eq!(submit(&a.submission_sender, "r2").await, Ok(sequence(2)));
+    assert_eq!(a.take_commits(), named(&[("r1", 1), ("r2", 2)]));
     let mut b = start(&store, 2);
     assert_eq!(
         submit(&b.submission_sender, "r1").await,
-        Ok(Sequence(0)),
+        Ok(sequence(1)),
         "B acknowledges r1 from its view"
     );
     assert!(
@@ -140,8 +144,8 @@ async fn a_newer_assignee_takes_over_and_the_old_assignee_stops() {
         "A does not acknowledge r3"
     );
     assert_eq!(a.exit.await.expect("A ends"), Exit::Stopped);
-    assert_eq!(submit(&b.submission_sender, "r3").await, Ok(Sequence(2)));
-    assert_eq!(b.take_commits(), named(&[("r1", 0), ("r2", 1), ("r3", 2)]));
+    assert_eq!(submit(&b.submission_sender, "r3").await, Ok(sequence(3)));
+    assert_eq!(b.take_commits(), named(&[("r1", 1), ("r2", 2), ("r3", 3)]));
     assert_eq!(log(&store).await, ["r1", "r2", "r3"]);
 }
 
@@ -242,7 +246,7 @@ async fn a_crash_while_a_put_waits_for_its_reply_loses_no_acknowledged_request()
             listed_after: Duration::ZERO,
         });
         let mut a = start(&store, 1);
-        assert_eq!(submit(&a.submission_sender, "r0").await, Ok(Sequence(0)));
+        assert_eq!(submit(&a.submission_sender, "r0").await, Ok(sequence(1)));
         let submission_sender = a.submission_sender.clone();
         let r1 = tokio::spawn(async move { submit(&submission_sender, "r1").await });
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -253,7 +257,7 @@ async fn a_crash_while_a_put_waits_for_its_reply_loses_no_acknowledged_request()
         );
         assert_eq!(
             a.take_commits(),
-            named(&[("r0", 0)]),
+            named(&[("r0", 1)]),
             "{stall:?}: A passed on"
         );
         let expected: &[&str] = if written { &["r0", "r1"] } else { &["r0"] };
@@ -262,12 +266,12 @@ async fn a_crash_while_a_put_waits_for_its_reply_loses_no_acknowledged_request()
         let mut b = start(&store, 2);
         assert_eq!(
             submit(&b.submission_sender, "r1").await,
-            Ok(Sequence(1)),
+            Ok(sequence(2)),
             "{stall:?}: B acknowledges the resend"
         );
         assert_eq!(
             b.take_commits(),
-            named(&[("r0", 0), ("r1", 1)]),
+            named(&[("r0", 1), ("r1", 2)]),
             "{stall:?}: B passed on"
         );
         assert_eq!(
@@ -335,7 +339,7 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
     assert_eq!(bad.await, Ok(Err("bad")));
     assert_eq!(
         good.await,
-        Ok(Ok(Sequence(0))),
+        Ok(Ok(sequence(1))),
         "the later request with the same Request ID was committed"
     );
 }
@@ -344,10 +348,10 @@ async fn a_rejection_answers_only_the_oldest_waiter_of_its_request_id() {
 async fn an_assignee_from_a_start_reads_no_slot_before_it() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let a = start(&store, 1);
-    for (sequence, name) in (0..).zip(["r1", "r2"]) {
+    for (value, name) in (1..).zip(["r1", "r2"]) {
         assert_eq!(
             submit(&a.submission_sender, name).await,
-            Ok(Sequence(sequence))
+            Ok(sequence(value))
         );
     }
     a.exit.abort();
@@ -364,7 +368,7 @@ async fn an_assignee_from_a_start_reads_no_slot_before_it() {
             .to_vec(),
     };
     let mut b = start_from(&store, 2, start);
-    assert_eq!(submit(&b.submission_sender, "r1").await, Ok(Sequence(0)));
-    assert_eq!(submit(&b.submission_sender, "r3").await, Ok(Sequence(2)));
-    assert_eq!(b.take_commits(), named(&[("r3", 2)]));
+    assert_eq!(submit(&b.submission_sender, "r1").await, Ok(sequence(1)));
+    assert_eq!(submit(&b.submission_sender, "r3").await, Ok(sequence(3)));
+    assert_eq!(b.take_commits(), named(&[("r3", 3)]));
 }

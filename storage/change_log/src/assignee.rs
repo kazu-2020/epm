@@ -5,7 +5,8 @@ use std::convert::Infallible;
 use bytes::Bytes;
 
 use crate::segment::{
-    self, Commit, Content, DecodeError, Epoch, ProcessId, RequestId, Segment, Sequence, Slot,
+    self, Commit, CommitCount, Content, DecodeError, Epoch, ProcessId, RequestId, Segment,
+    Sequence, Slot,
 };
 
 const MAX_IN_FLIGHT: usize = if cfg!(feature = "two_in_flight") {
@@ -85,7 +86,7 @@ pub trait Admit {
 
     fn replay(&mut self, payload: &Bytes);
 
-    fn ready(&mut self, _next: Sequence) {}
+    fn ready(&mut self, _committed: CommitCount) {}
 }
 
 #[derive(Debug)]
@@ -140,7 +141,7 @@ struct Ready {
 #[derive(Debug, Default)]
 struct View {
     sequences: HashMap<RequestId, Sequence>,
-    next_sequence: Sequence,
+    committed: CommitCount,
 }
 
 #[derive(Debug)]
@@ -350,15 +351,19 @@ fn replay<A: Admit>(
             break;
         }
         expected = next(*slot);
-        // Not every commit of the first slot: the start already counts the commits before its next sequence, and that slot can hold some of them.
-        let skipped = if *slot == first {
+        let counted_by_start = if *slot == first {
             segment
                 .commits()
-                .partition_point(|commit| commit.sequence < view.next_sequence)
+                .partition_point(|commit| view.committed.contains(commit.sequence))
         } else {
             0
         };
-        view.add_older(&segment.commits()[skipped..], *slot, admit, effects);
+        view.add_older(
+            &segment.commits()[counted_by_start..],
+            *slot,
+            admit,
+            effects,
+        );
     }
     view
 }
@@ -376,7 +381,7 @@ fn ready<A: Admit>(
         batch: Vec::new(),
         in_flight: [const { None }; MAX_IN_FLIGHT],
     };
-    admit.ready(ready.view.next_sequence);
+    admit.ready(ready.view.committed);
     for request in waiting {
         ready.receive(request, admit, effects);
     }
@@ -483,10 +488,10 @@ impl Ready {
         let commits = self
             .batch
             .drain(..)
-            .zip(self.view.next_sequence.0..)
+            .zip(sequences_from(self.view.committed.next()))
             .map(|(request, sequence)| Commit {
                 request_id: request.request_id,
-                sequence: Sequence(sequence),
+                sequence,
                 payload: request.payload,
             })
             .collect();
@@ -505,24 +510,28 @@ impl Ready {
 
 impl Start {
     fn last(&self) -> Option<(Sequence, &RequestId)> {
-        let count = u64::try_from(self.request_ids.len()).expect("a count fits in u64");
-        Some((Sequence(count.checked_sub(1)?), self.request_ids.last()?))
+        Some((
+            CommitCount::of(self.request_ids.len()).last()?,
+            self.request_ids.last()?,
+        ))
     }
+}
+
+fn sequences_from(first: Sequence) -> impl Iterator<Item = Sequence> {
+    std::iter::successors(Some(first), |sequence| Some(sequence.next()))
 }
 
 impl From<Start> for View {
     fn from(start: Start) -> View {
-        let next_sequence = start
-            .last()
-            .map_or(Sequence(0), |(sequence, _)| sequence.next());
-        let sequences = (0..)
-            .map(Sequence)
-            .zip(start.request_ids)
-            .map(|(sequence, request_id)| (request_id, sequence))
+        let committed = CommitCount::of(start.request_ids.len());
+        let sequences = start
+            .request_ids
+            .into_iter()
+            .zip(sequences_from(Sequence::FIRST))
             .collect();
         View {
             sequences,
-            next_sequence,
+            committed,
         }
     }
 }
@@ -545,7 +554,7 @@ impl View {
         for commit in commits {
             self.sequences
                 .insert(commit.request_id.clone(), commit.sequence);
-            self.next_sequence = self.next_sequence.next();
+            self.committed = self.committed.next().into();
             effects.push(Effect::Committed {
                 slot,
                 commit: commit.clone(),

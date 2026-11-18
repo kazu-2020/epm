@@ -8,7 +8,7 @@ pub mod snapshot;
 
 use std::ops::RangeInclusive;
 
-use change_log::{Commit, RequestId, Sequence, Slot, Start};
+use change_log::{Commit, CommitCount, RequestId, Sequence, Slot, Start};
 use dimension::{Dimension, Dimensions};
 use formula::EvaluateError;
 use measure::{Measure, MeasureGlobalId};
@@ -31,7 +31,7 @@ pub enum Exit {
 #[derive(Clone, Debug)]
 pub struct Engine {
     calculated: Calculated,
-    next: Sequence,
+    applied: CommitCount,
     slot: Slot,
 }
 
@@ -76,7 +76,7 @@ impl Engine {
         let calculated = Calculated::new(workspace)?;
         Ok(Engine {
             calculated,
-            next: Sequence(u64::try_from(start.request_ids.len()).expect("a count fits in u64")),
+            applied: CommitCount::of(start.request_ids.len()),
             slot: start.slot,
         })
     }
@@ -104,19 +104,20 @@ impl Engine {
         let (Some((_, first)), Some((slot, last))) = (commits.first(), commits.last()) else {
             return Ok(self.clone());
         };
-        let mut next = self.next;
+        let mut applied = self.applied;
         let mut edits = Edits::default();
         for (_, commit) in commits {
             let sequence = commit.sequence;
-            if sequence != next {
+            let expected = applied.next();
+            if sequence != expected {
                 return Err(EngineAlarm::OutOfOrder {
-                    expected: next,
+                    expected,
                     found: sequence,
                 });
             }
             edit::add(self.edit_check(), &commit.payload, &mut edits)
                 .map_err(|invalid| EngineAlarm::Invalid { sequence, invalid })?;
-            next = sequence.next();
+            applied = sequence.into();
         }
         let calculated = self
             .calculated
@@ -127,7 +128,7 @@ impl Engine {
             })?;
         Ok(Engine {
             calculated,
-            next,
+            applied,
             slot: *slot,
         })
     }
@@ -137,7 +138,7 @@ impl Engine {
     }
 
     pub fn recalculated(&self) -> Option<Sequence> {
-        self.next.0.checked_sub(1).map(Sequence)
+        self.applied.last()
     }
 
     fn snapshot(&self, request_ids: &[RequestId]) -> snapshot::Snapshot {
@@ -149,7 +150,7 @@ impl Engine {
                 } else if cfg!(feature = "snapshot_ahead") {
                     request_ids.to_vec()
                 } else {
-                    request_ids[..self.next.index()].to_vec()
+                    request_ids[..self.applied.length()].to_vec()
                 },
             },
             inputs: self.calculated.inputs().to_vec(),
