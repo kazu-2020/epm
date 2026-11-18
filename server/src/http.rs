@@ -70,7 +70,7 @@ pub fn router(handle: Handle) -> Router {
 pub async fn serve(
     listener: TcpListener,
     handle: Handle,
-    assignee: impl Future<Output = Exit>,
+    assignee: impl Future<Output = Exit> + Send + 'static,
     shutdown: impl Future<Output = ()> + Send + 'static,
     deadline: Duration,
 ) -> Shutdown {
@@ -83,14 +83,19 @@ pub async fn serve(
         let _ = signal_receiver.await;
         tokio::time::sleep(deadline).await;
     };
-    tokio::select! {
-        exit = assignee => Shutdown::Assignee(exit),
+    let mut assignee = tokio::spawn(assignee);
+    let stopped = tokio::select! {
+        exit = &mut assignee => Shutdown::Assignee(
+            exit.unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic())),
+        ),
         served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => {
             served.expect("the graceful serve of axum 0.8 returns only Ok");
             Shutdown::Drained
         }
         () = deadline_passed => Shutdown::Deadline,
-    }
+    };
+    assignee.abort();
+    stopped
 }
 
 #[expect(
@@ -281,7 +286,7 @@ fn global_id<T: FromStr<Err = InvalidGlobalId>>(name: &str, text: &str) -> Resul
 
 // Not a loaded flag in each answer: the App server records an Assignee only after a GetLag that is not unavailable (ADR 0012).
 fn loading_failure(Loading: Loading) -> ConnectError {
-    ConnectError::unavailable("the assignee is loading the change log, retry later")
+    ConnectError::unavailable("the assignee is loading, retry later")
 }
 
 fn submit_failure(error: SubmitError) -> ConnectError {

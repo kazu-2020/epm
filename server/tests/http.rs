@@ -1,6 +1,8 @@
 mod coordinate;
 mod support;
 
+use std::future::Future;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,17 +10,20 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
-use change_log::Start;
+use change_log::{AssigneeId, Epoch, ProcessId, Start};
+use datagen::representative::{self, Size};
 use measure::MeasureGlobalId;
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use object_store::throttle::{ThrottleConfig, ThrottledStore};
 use serde_json::{Value, json};
-use server::http::{EPOCH_HEADER, WORKSPACE_HEADER};
-use server::{Calculation, Handle, Settings};
+use server::http::{EPOCH_HEADER, Shutdown, WORKSPACE_HEADER};
+use server::{Calculation, Engine, Exit, Handle, Settings};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
 use ulid::Ulid;
-use workspace::WorkspaceGlobalId;
+use workspace::{Workspace, WorkspaceGlobalId};
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
@@ -43,6 +48,19 @@ async fn loaded(app: &App) {
 
 fn app_on(settings: Settings, store: Arc<dyn ObjectStore>, epoch: u64) -> App {
     let engine = support::engine();
+    let (coordinate, quantity) = quantity_cell(&engine);
+    let (handle, assignee) = support::start(engine, Start::default(), settings, store, epoch);
+    tokio::spawn(assignee);
+    App {
+        router: server::http::router(handle.clone()),
+        handle,
+        coordinate,
+        quantity,
+        destination: destination(&support::WORKSPACE.to_string(), &epoch.to_string()),
+    }
+}
+
+fn quantity_cell(engine: &Engine) -> (Vec<Value>, f64) {
     let (coordinate, quantity) = engine
         .measures()
         .iter()
@@ -55,15 +73,7 @@ fn app_on(settings: Settings, store: Arc<dyn ObjectStore>, epoch: u64) -> App {
             json!({ "dimension": dimension.to_string(), "member": member.to_string() })
         })
         .collect();
-    let (handle, assignee) = support::start(engine, Start::default(), settings, store, epoch);
-    tokio::spawn(assignee);
-    App {
-        router: server::http::router(handle.clone()),
-        handle,
-        coordinate,
-        quantity,
-        destination: destination(&support::WORKSPACE.to_string(), &epoch.to_string()),
-    }
+    (coordinate, quantity)
 }
 
 fn destination(workspace: &str, epoch: &str) -> Vec<(&'static str, String)> {
@@ -436,6 +446,110 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
         json!("1"),
         "the commit of the first assignee"
     );
+}
+
+fn launch(list_latency: Duration) -> (Handle, impl Future<Output = Exit> + use<>) {
+    let config = ThrottleConfig {
+        wait_list_with_delimiter_per_call: list_latency,
+        ..ThrottleConfig::default()
+    };
+    server::launch(
+        Arc::new(ThrottledStore::new(InMemory::new(), config)),
+        support::WORKSPACE,
+        Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
+        Settings::default(),
+        AssigneeId {
+            epoch: Epoch(1),
+            process: ProcessId(1),
+        },
+    )
+}
+
+async fn post(address: SocketAddr, method: &str, body: &Value) -> (StatusCode, Value) {
+    let body = body.to_string();
+    let request = format!(
+        "POST /epm.v1.Workspace/{method} HTTP/1.0\r\nhost: test\r\ncontent-type: application/json\r\n{WORKSPACE_HEADER}: {}\r\n{EPOCH_HEADER}: 1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        support::WORKSPACE,
+        body.len()
+    );
+    let mut stream = TcpStream::connect(address)
+        .await
+        .expect("the server listens");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("the request is sent");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("a response");
+    let (head, body) = response.split_once("\r\n\r\n").expect("a body");
+    let status = head
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .and_then(|code| StatusCode::from_u16(code).ok())
+        .expect("a status line");
+    (status, serde_json::from_str(body).expect("a JSON body"))
+}
+
+#[tokio::test]
+async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_are_read() {
+    let (handle, assignee) = launch(Duration::from_secs(2));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let address = listener.local_addr().expect("an address");
+    tokio::spawn(server::http::serve(
+        listener,
+        handle.clone(),
+        assignee,
+        std::future::pending(),
+        Duration::from_secs(5),
+    ));
+    let (coordinate, _) = quantity_cell(&support::engine());
+    let cells = json!({ "cells": [cell(QUANTITY, &coordinate)] });
+    for (method, body) in [
+        ("GetLag", json!({})),
+        ("ReadCells", cells.clone()),
+        ("ListDefinitions", json!({})),
+        ("SubmitEdit", edit("r1", QUANTITY, &coordinate, Some(1.0))),
+    ] {
+        let (status, failure) = post(address, method, &body).await;
+        assert_eq!(
+            (status, failure["code"].clone()),
+            (StatusCode::SERVICE_UNAVAILABLE, json!("unavailable")),
+            "{method} while the snapshots are read"
+        );
+    }
+    support::loaded(&handle).await;
+    assert_eq!(
+        post(
+            address,
+            "SubmitEdit",
+            &edit("r1", QUANTITY, &coordinate, Some(1.0))
+        )
+        .await,
+        (StatusCode::OK, json!({ "sequence": "1" }))
+    );
+}
+
+#[tokio::test]
+async fn a_shutdown_while_the_snapshots_are_read_stops_with_success_at_once() {
+    let (handle, assignee) = launch(Duration::from_mins(1));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let stopped = tokio::time::timeout(
+        Duration::from_secs(5),
+        server::http::serve(
+            listener,
+            handle,
+            assignee,
+            std::future::ready(()),
+            Duration::from_secs(30),
+        ),
+    )
+    .await
+    .expect("serve does not wait for the snapshot read");
+    assert!(matches!(stopped, Shutdown::Drained), "{stopped:?}");
 }
 
 #[tokio::test]

@@ -284,6 +284,7 @@ async fn a_new_assignee_recalculates_the_whole_log_in_one_batch() {
     let b = start(&store, 2, slow(1000)).await;
     b.handle
         .engine_receiver()
+        .expect("start gives a started assignee")
         .wait_for(|engine| engine.recalculated() == Some(sequence(3)))
         .await
         .expect("B recalculates the log");

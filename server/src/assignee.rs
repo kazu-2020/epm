@@ -13,10 +13,11 @@ use measure::MeasureGlobalId;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use tokio::sync::{mpsc, oneshot, watch};
-use workspace::{CellError, Coordinate, EditCheck, WorkspaceGlobalId, resolve};
+use workspace::{CellError, Coordinate, EditCheck, Workspace, WorkspaceGlobalId, resolve};
 
 use crate::apply::{Applier, Effect, Event};
 use crate::edit;
+use crate::restore::restore;
 use crate::snapshot::{self, Snapshot};
 use crate::{Edit, Engine, EngineAlarm, Exit, Rejection};
 
@@ -81,11 +82,16 @@ pub enum ReadError {
 
 #[derive(Clone, Debug)]
 pub struct Handle {
+    started: watch::Receiver<Option<Arc<Started>>>,
+    pub(crate) workspace: WorkspaceGlobalId,
+    pub(crate) epoch: Epoch,
+}
+
+#[derive(Debug)]
+struct Started {
     submission_sender: mpsc::Sender<Submission<Rejection>>,
     engine_receiver: watch::Receiver<Arc<Engine>>,
     committed: watch::Sender<Committed>,
-    pub(crate) workspace: WorkspaceGlobalId,
-    pub(crate) epoch: Epoch,
     #[cfg(feature = "apply_before_commit")]
     commit_sender: mpsc::UnboundedSender<(Slot, Commit)>,
 }
@@ -121,6 +127,23 @@ pub fn start(
     workspace: WorkspaceGlobalId,
     id: AssigneeId,
 ) -> (Handle, impl Future<Output = Exit>) {
+    let (started, run) = run(engine, start, settings, store, workspace, id);
+    let handle = Handle {
+        started: watch::channel(Some(started)).1,
+        workspace,
+        epoch: id.epoch,
+    };
+    (handle, run)
+}
+
+fn run(
+    engine: Engine,
+    start: Start,
+    settings: Settings,
+    store: Arc<dyn ObjectStore>,
+    workspace: WorkspaceGlobalId,
+    id: AssigneeId,
+) -> (Arc<Started>, impl Future<Output = Exit>) {
     assert!(
         engine.applied == CommitCount::of(start.request_ids.len()) && engine.slot == start.slot,
         "the engine starts where the change log starts"
@@ -139,15 +162,13 @@ pub fn start(
         busy_after: settings.busy_after,
         committed: committed.clone(),
     };
-    let handle = Handle {
+    let started = Arc::new(Started {
         submission_sender,
         engine_receiver,
         committed: committed.clone(),
-        workspace,
-        epoch: id.epoch,
         #[cfg(feature = "apply_before_commit")]
         commit_sender: commit_sender.clone(),
-    };
+    });
     let request_ids = start.request_ids.clone();
     let workspace = workspace.to_string();
     let run = async move {
@@ -173,7 +194,32 @@ pub fn start(
             }
         }
     };
-    (handle, run)
+    (started, run)
+}
+
+pub fn launch(
+    store: Arc<dyn ObjectStore>,
+    global_id: WorkspaceGlobalId,
+    workspace: Workspace,
+    settings: Settings,
+    id: AssigneeId,
+) -> (Handle, impl Future<Output = Exit>) {
+    let (started_sender, started) = watch::channel(None);
+    let handle = Handle {
+        started,
+        workspace: global_id,
+        epoch: id.epoch,
+    };
+    let launched = async move {
+        let (engine, start_of_log) = match restore(store.as_ref(), global_id, workspace).await {
+            Ok(restored) => restored,
+            Err(error) => return Exit::Calculate(error),
+        };
+        let (started, run) = run(engine, start_of_log, settings, store, global_id, id);
+        started_sender.send_replace(Some(started));
+        run.await
+    };
+    (handle, launched)
 }
 
 async fn apply(
@@ -324,6 +370,55 @@ impl Handle {
         request_id: RequestId,
         edit: &Edit,
     ) -> Result<Sequence, SubmitError> {
+        self.started()
+            .ok_or(SubmitError::Loading)?
+            .submit(request_id, edit)
+            .await
+    }
+
+    pub async fn read(
+        &self,
+        at_least: Option<Sequence>,
+        cells: &[(MeasureGlobalId, Coordinate)],
+    ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
+        self.started()
+            .ok_or(ReadError::Loading)?
+            .read(at_least, cells)
+            .await
+    }
+
+    pub fn lag(&self) -> Result<Lag, Loading> {
+        self.started().ok_or(Loading)?.lag()
+    }
+
+    pub fn definitions(&self) -> Result<Arc<Engine>, Loading> {
+        self.started().ok_or(Loading)?.definitions()
+    }
+
+    pub async fn wait_loaded(&self) -> Result<(), Stopped> {
+        let started = self
+            .started
+            .clone()
+            .wait_for(Option::is_some)
+            .await
+            .map_err(|_| Stopped)?
+            .clone()
+            .expect("wait_for gives a started assignee");
+        started.wait_loaded().await
+    }
+
+    pub fn engine_receiver(&self) -> Option<watch::Receiver<Arc<Engine>>> {
+        self.started()
+            .map(|started| started.engine_receiver.clone())
+    }
+
+    fn started(&self) -> Option<Arc<Started>> {
+        self.started.borrow().clone()
+    }
+}
+
+impl Started {
+    async fn submit(&self, request_id: RequestId, edit: &Edit) -> Result<Sequence, SubmitError> {
         if self.committed().is_err() {
             return Err(if self.submission_sender.is_closed() {
                 SubmitError::Stopped
@@ -358,7 +453,7 @@ impl Handle {
         Ok(sequence)
     }
 
-    pub async fn read(
+    async fn read(
         &self,
         at_least: Option<Sequence>,
         cells: &[(MeasureGlobalId, Coordinate)],
@@ -384,7 +479,7 @@ impl Handle {
         Ok((engine.recalculated(), values(&engine, cells)?))
     }
 
-    pub fn lag(&self) -> Result<Lag, Loading> {
+    fn lag(&self) -> Result<Lag, Loading> {
         // Not the committed count first: a batch that finishes between the two reads would show more recalculated than committed.
         let recalculated = self.engine_receiver.borrow().recalculated();
         Ok(Lag {
@@ -393,7 +488,7 @@ impl Handle {
         })
     }
 
-    pub fn definitions(&self) -> Result<Arc<Engine>, Loading> {
+    fn definitions(&self) -> Result<Arc<Engine>, Loading> {
         self.committed()?;
         Ok(Arc::clone(&self.engine_receiver.borrow()))
     }
@@ -405,17 +500,13 @@ impl Handle {
         }
     }
 
-    pub async fn wait_loaded(&self) -> Result<(), Stopped> {
+    async fn wait_loaded(&self) -> Result<(), Stopped> {
         let mut committed_receiver = self.committed.subscribe();
         tokio::select! {
             biased;
             _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::LogRead(_))) => Ok(()),
             () = self.submission_sender.closed() => Err(Stopped),
         }
-    }
-
-    pub fn engine_receiver(&self) -> watch::Receiver<Arc<Engine>> {
-        self.engine_receiver.clone()
     }
 }
 

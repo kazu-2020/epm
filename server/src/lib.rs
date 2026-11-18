@@ -15,7 +15,7 @@ use measure::{Measure, MeasureGlobalId};
 use workspace::{CalculateError, Calculated, CellError, EditCheck, Edits, Workspace};
 
 pub use crate::assignee::{
-    Calculation, Handle, Lag, Loading, ReadError, Settings, Stopped, SubmitError, start,
+    Calculation, Handle, Lag, Loading, ReadError, Settings, Stopped, SubmitError, launch, start,
 };
 pub use crate::edit::DecodeError;
 pub use crate::restore::restore;
@@ -23,6 +23,7 @@ pub use workspace::Edit;
 
 #[derive(Debug, PartialEq)]
 pub enum Exit {
+    Calculate(CalculateError),
     ChangeLog(change_log::Exit),
     Engine(EngineAlarm),
 }
