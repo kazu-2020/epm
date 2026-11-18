@@ -20,7 +20,7 @@ message SubmitEditRequest {
 }
 
 message SubmitEditResponse {
-  // Not plain uint64: proto3 JSON leaves out a zero, and the first commit has the sequence 0.
+  // Not plain uint64: every other sequence field needs presence, and one form for each sequence keeps the generated types the same.
   optional uint64 sequence = 1;
 }
 
@@ -30,6 +30,7 @@ message AxisMember {
 }
 
 message ReadCellsRequest {
+  // Not plain uint64: the server must tell a left-out at_least from an explicit 0, which no commit has.
   optional uint64 at_least = 1;
   repeated Cell cells = 2;
 }

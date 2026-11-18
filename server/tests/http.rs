@@ -173,11 +173,11 @@ async fn an_edit_changes_the_input_and_the_calculated_measure_that_reads_it() {
             edit("r1", QUANTITY, &app.coordinate, Some(changed))
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": "0" }))
+        (StatusCode::OK, json!({ "sequence": "1" }))
     );
-    let (status, edited) = read(&app, Some(0)).await;
+    let (status, edited) = read(&app, Some(1)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(edited["recalculated"], json!("0"));
+    assert_eq!(edited["recalculated"], json!("1"));
     assert_eq!(edited["values"][0], json!(changed));
     assert_ne!(
         edited["values"][1], before["values"][1],
@@ -195,9 +195,9 @@ async fn a_null_value_clears_the_cell() {
             edit("r1", QUANTITY, &app.coordinate, None)
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": "0" }))
+        (StatusCode::OK, json!({ "sequence": "1" }))
     );
-    let (_, cleared) = read(&app, Some(0)).await;
+    let (_, cleared) = read(&app, Some(1)).await;
     assert_eq!(cleared["values"], json!([null, null]));
 }
 
@@ -206,11 +206,11 @@ async fn a_resend_of_a_request_id_gets_the_same_commit_sequence() {
     let app = app(Settings::default()).await;
     let body = edit("r1", QUANTITY, &app.coordinate, Some(1.0));
     let first = call(&app, "SubmitEdit", body.clone()).await;
-    assert_eq!(first, (StatusCode::OK, json!({ "sequence": "0" })));
+    assert_eq!(first, (StatusCode::OK, json!({ "sequence": "1" })));
     assert_eq!(call(&app, "SubmitEdit", body).await, first);
     assert_eq!(
         call(&app, "GetLag", json!({})).await.1["committed"],
-        json!("0"),
+        json!("1"),
         "the resend took no Commit Sequence"
     );
 }
@@ -311,6 +311,21 @@ async fn each_refusal_has_its_connect_code() {
         refusal(&app, "ReadCells", read_of(5, cell(SALES, &app.coordinate))).await,
         (StatusCode::SERVICE_UNAVAILABLE, json!("unavailable"))
     );
+    assert_eq!(
+        refusal(
+            &app,
+            "ReadCells",
+            json!({ "at_least": u64::MAX.to_string(), "cells": [cell(SALES, &app.coordinate)] })
+        )
+        .await,
+        (StatusCode::SERVICE_UNAVAILABLE, json!("unavailable")),
+        "the largest uint64 is a sequence that is not committed yet"
+    );
+    assert_eq!(
+        refusal(&app, "ReadCells", read_of(0, cell(SALES, &app.coordinate))).await,
+        (StatusCode::BAD_REQUEST, json!("invalid_argument")),
+        "no commit has the sequence 0"
+    );
     let (status, _) = call(
         &app,
         "SubmitEdit",
@@ -367,7 +382,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
             edit("r1", QUANTITY, &first.coordinate, None)
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": "0" }))
+        (StatusCode::OK, json!({ "sequence": "1" }))
     );
     let config = ThrottleConfig {
         wait_list_per_call: Duration::from_secs(3),
@@ -418,7 +433,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         lag["committed"],
-        json!("0"),
+        json!("1"),
         "the commit of the first assignee"
     );
 }
@@ -515,7 +530,7 @@ async fn a_binary_value_that_json_cannot_hold_is_invalid_argument_and_clears_not
         StatusCode::OK,
         "the hand-made bytes are a valid edit"
     );
-    let (_, read) = read(&app, Some(0)).await;
+    let (_, read) = read(&app, Some(1)).await;
     assert_eq!(
         read["values"][0],
         json!(1.0),

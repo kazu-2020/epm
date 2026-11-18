@@ -139,7 +139,7 @@ impl Server {
     fn with_view(phase: ModelPhase, epoch: u64, view: &View) -> Server {
         Server {
             view: view.sequences.keys().map(name).collect(),
-            view_length: view.next_sequence.0,
+            view_length: view.committed.0,
             ..Server::empty(phase, epoch)
         }
     }
@@ -262,7 +262,7 @@ impl Driver for Replay {
                     },
                     AdmitAll,
                 ));
-                self.next_to_pass_on.insert(server, Sequence(0));
+                self.next_to_pass_on.insert(server, Sequence::FIRST);
             },
             crash(server: String) => {
                 self.assignees.remove(&server);
@@ -347,12 +347,10 @@ impl Replay {
                         .log()
                         .get(sequence.index())
                         .map(|commit| &commit.request_id);
-                    let next_to_pass_on = self
-                        .next_to_pass_on
-                        .get(server)
-                        .copied()
-                        .unwrap_or_default();
-                    if logged != Some(&request_id) || sequence >= next_to_pass_on {
+                    let next_to_pass_on = self.next_to_pass_on.get(server).copied();
+                    if logged != Some(&request_id)
+                        || next_to_pass_on.is_none_or(|next| sequence >= next)
+                    {
                         bail!(
                             "{server} acknowledged {request_id:?} as {sequence:?} when {next_to_pass_on:?} was next"
                         );

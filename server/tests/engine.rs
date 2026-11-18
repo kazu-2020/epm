@@ -29,12 +29,16 @@ fn quantity(coordinate: [u32; 5], value: Option<f64>) -> Edit {
     }
 }
 
-fn commit(sequence: u64, edit: &Edit) -> (Slot, Commit) {
+fn sequence(value: u64) -> Sequence {
+    Sequence::new(value).expect("a test sequence is not 0")
+}
+
+fn commit(value: u64, edit: &Edit) -> (Slot, Commit) {
     (
-        Slot(sequence),
+        Slot(value),
         Commit {
-            request_id: RequestId(Bytes::from(format!("r{sequence}"))),
-            sequence: Sequence(sequence),
+            request_id: RequestId(Bytes::from(format!("r{value}"))),
+            sequence: sequence(value),
             payload: server::edit::encode(edit),
         },
     )
@@ -106,30 +110,30 @@ fn commits_apply_once_each_in_sequence_order() {
     let cell_of_sales = [0, 1, 1, 0, 1];
     let set = quantity(cell_of_sales, Some(4.0));
     let clear = quantity(cell_of_sales, None);
-    let engine = applied(&engine, &[commit(0, &set)]);
-    assert_eq!(engine.recalculated(), Some(Sequence(0)));
+    let engine = applied(&engine, &[commit(1, &set)]);
+    assert_eq!(engine.recalculated(), Some(sequence(1)));
     assert_eq!(cell(&engine, QUANTITY, &cell_of_sales), Some(4.0));
     assert!(
         cell(&engine, SALES, &cell_of_sales).is_some(),
         "the sales formula sees the quantity"
     );
     assert_eq!(
-        engine.apply_batch(&[commit(0, &set)]).err(),
+        engine.apply_batch(&[commit(1, &set)]).err(),
         Some(EngineAlarm::OutOfOrder {
-            expected: Sequence(1),
-            found: Sequence(0)
+            expected: sequence(2),
+            found: sequence(1)
         })
     );
     assert_eq!(
         engine
-            .apply_batch(&[commit(1, &clear), commit(3, &set)])
+            .apply_batch(&[commit(2, &clear), commit(4, &set)])
             .err(),
         Some(EngineAlarm::OutOfOrder {
-            expected: Sequence(2),
-            found: Sequence(3)
+            expected: sequence(3),
+            found: sequence(4)
         })
     );
-    let cleared = applied(&engine, &[commit(1, &clear)]);
+    let cleared = applied(&engine, &[commit(2, &clear)]);
     assert_eq!(
         cell(&engine, QUANTITY, &cell_of_sales),
         Some(4.0),
@@ -155,16 +159,16 @@ fn a_batch_gives_the_values_of_its_commits_one_by_one() {
         quantity(first, Some(7.0)),
         quantity(second, None),
     ];
-    let commits: Vec<(Slot, Commit)> = (0..)
+    let commits: Vec<(Slot, Commit)> = (1..)
         .zip(&edits)
-        .map(|(sequence, edit)| commit(sequence, edit))
+        .map(|(value, edit)| commit(value, edit))
         .collect();
     let mut one_by_one = engine();
     for commit in &commits {
         one_by_one = applied(&one_by_one, std::slice::from_ref(commit));
     }
     let batch = applied(&engine(), &commits);
-    assert_eq!(batch.recalculated(), Some(Sequence(4)));
+    assert_eq!(batch.recalculated(), Some(sequence(5)));
     assert_eq!(
         cell(&batch, QUANTITY, &first),
         Some(7.0),
@@ -178,12 +182,12 @@ fn a_batch_gives_the_values_of_its_commits_one_by_one() {
 fn edits_to_one_cell_keep_one_delta_entry_however_many_batches_arrive() {
     let coordinate = [0, 1, 1, 0, 1];
     let mut engine = engine();
-    for sequence in 0..20 {
+    for value in 1..=20 {
         let edit = quantity(
             coordinate,
-            Some(f64::from(u8::try_from(sequence).expect("below 20"))),
+            Some(f64::from(u8::try_from(value).expect("at most 20"))),
         );
-        engine = applied(&engine, &[commit(sequence, &edit)]);
+        engine = applied(&engine, &[commit(value, &edit)]);
     }
     let input = engine
         .measures()
@@ -191,28 +195,28 @@ fn edits_to_one_cell_keep_one_delta_entry_however_many_batches_arrive() {
         .find(|candidate| candidate.global_id() == QUANTITY)
         .expect("the engine holds the measure");
     assert_eq!(input.delta_len(), 1);
-    assert_eq!(cell(&engine, QUANTITY, &coordinate), Some(19.0));
+    assert_eq!(cell(&engine, QUANTITY, &coordinate), Some(20.0));
 }
 
 #[test]
 fn a_commit_that_does_not_pass_the_check_is_an_alarm() {
     let engine = engine();
-    let good = commit(0, &quantity([0, 0, 1, 0, 0], Some(1.0)));
-    let mut garbage = commit(1, &quantity([0, 0, 1, 0, 0], Some(1.0)));
+    let good = commit(1, &quantity([0, 0, 1, 0, 0], Some(1.0)));
+    let mut garbage = commit(2, &quantity([0, 0, 1, 0, 0], Some(1.0)));
     garbage.1.payload = Bytes::from_static(b"\x09");
     assert_eq!(
         engine.apply_batch(&[good.clone(), garbage]).err(),
         Some(EngineAlarm::Invalid {
-            sequence: Sequence(1),
+            sequence: sequence(2),
             invalid: Invalid::Undecodable(DecodeError::Version(9))
         })
     );
     let mut result = quantity([0, 0, 1, 0, 0], Some(1.0));
     result.measure = SALES;
     assert_eq!(
-        engine.apply_batch(&[good, commit(1, &result)]).err(),
+        engine.apply_batch(&[good, commit(2, &result)]).err(),
         Some(EngineAlarm::Invalid {
-            sequence: Sequence(1),
+            sequence: sequence(2),
             invalid: Invalid::NotAnInput(SALES)
         })
     );
@@ -244,7 +248,7 @@ fn a_logged_edit_replays_to_the_same_cell_under_a_definition_that_declares_the_a
         .expect("the cells fit the axes");
     let reversed = Engine::new(Workspace::try_new(unchecked).expect("a valid workspace"))
         .expect("the representative formulas are valid");
-    let logged = commit(0, &quantity([0, 1, 1, 0, 1], Some(4.0)));
+    let logged = commit(1, &quantity([0, 1, 1, 0, 1], Some(4.0)));
 
     let declared = applied(&engine(), std::slice::from_ref(&logged));
     let reversed = applied(&reversed, &[logged]);

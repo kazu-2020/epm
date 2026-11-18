@@ -139,12 +139,16 @@ mod tests {
         )
     }
 
-    fn commit(sequence: u64) -> (Slot, Commit) {
+    fn sequence(value: u64) -> Sequence {
+        Sequence::new(value).expect("a test sequence is not 0")
+    }
+
+    fn commit(value: u64) -> (Slot, Commit) {
         (
-            Slot(sequence),
+            Slot(value),
             Commit {
-                request_id: RequestId(Bytes::from(format!("r{sequence}"))),
-                sequence: Sequence(sequence),
+                request_id: RequestId(Bytes::from(format!("r{value}"))),
+                sequence: sequence(value),
                 payload: Bytes::new(),
             },
         )
@@ -161,7 +165,7 @@ mod tests {
     fn sequences(commits: &[(Slot, Commit)]) -> Vec<u64> {
         commits
             .iter()
-            .map(|(_, commit)| commit.sequence.0)
+            .map(|(_, commit)| commit.sequence.get())
             .collect()
     }
 
@@ -169,14 +173,14 @@ mod tests {
     fn commits_that_arrive_during_a_calculation_form_the_next_batch() {
         let first = engine();
         let mut applier = applier(Arc::clone(&first));
-        let effects = applier.step(committed(0));
+        let effects = applier.step(committed(1));
         let [Effect::Calculate { engine, commits }] = &effects[..] else {
             panic!("{effects:?}")
         };
         assert!(Arc::ptr_eq(engine, &first));
-        assert_eq!(sequences(commits), [0]);
-        assert!(applier.step(committed(1)).is_empty());
+        assert_eq!(sequences(commits), [1]);
         assert!(applier.step(committed(2)).is_empty());
+        assert!(applier.step(committed(3)).is_empty());
 
         let effects = applier.step(Event::Finished(Ok((*first).clone())));
         let [
@@ -187,7 +191,7 @@ mod tests {
             panic!("{effects:?}")
         };
         assert!(Arc::ptr_eq(engine, published), "from the published engine");
-        assert_eq!(sequences(commits), [1, 2]);
+        assert_eq!(sequences(commits), [2, 3]);
         let second = Arc::clone(published);
 
         let effects = applier.step(Event::Finished(Ok((*first).clone())));
@@ -196,7 +200,7 @@ mod tests {
         };
         assert!(!Arc::ptr_eq(published, &second));
         let third = Arc::clone(published);
-        let effects = applier.step(committed(3));
+        let effects = applier.step(committed(4));
         let [Effect::Calculate { engine, commits }] = &effects[..] else {
             panic!("{effects:?}")
         };
@@ -204,17 +208,17 @@ mod tests {
             Arc::ptr_eq(engine, &third),
             "an idle applier starts at once"
         );
-        assert_eq!(sequences(commits), [3]);
+        assert_eq!(sequences(commits), [4]);
     }
 
     #[test]
     fn an_idle_applier_calculates_the_commits_that_arrived_together_in_one_batch() {
         let mut applier = applier(engine());
-        let effects = applier.step(Event::Committed((0..3).map(commit).collect()));
+        let effects = applier.step(Event::Committed((1..=3).map(commit).collect()));
         let [Effect::Calculate { commits, .. }] = &effects[..] else {
             panic!("{effects:?}")
         };
-        assert_eq!(sequences(commits), [0, 1, 2]);
+        assert_eq!(sequences(commits), [1, 2, 3]);
     }
 
     #[test]
@@ -222,7 +226,7 @@ mod tests {
         let mut applier = applier(engine());
         assert!(applier.step(Event::Committed(Vec::new())).is_empty());
         assert_eq!(
-            applier.step(committed(0)).len(),
+            applier.step(committed(1)).len(),
             1,
             "the applier is still idle"
         );
@@ -231,11 +235,11 @@ mod tests {
     #[test]
     fn a_failed_calculation_raises_an_alarm_and_stops() {
         let mut applier = applier(engine());
-        assert_eq!(applier.step(committed(0)).len(), 1);
-        assert!(applier.step(committed(1)).is_empty());
+        assert_eq!(applier.step(committed(1)).len(), 1);
+        assert!(applier.step(committed(2)).is_empty());
         let alarm = EngineAlarm::OutOfOrder {
-            expected: Sequence(0),
-            found: Sequence(1),
+            expected: sequence(1),
+            found: sequence(2),
         };
         let effects = applier.step(Event::Finished(Err(alarm)));
         let [Effect::Alarm(raised)] = &effects[..] else {
@@ -244,12 +248,12 @@ mod tests {
         assert_eq!(
             *raised,
             EngineAlarm::OutOfOrder {
-                expected: Sequence(0),
-                found: Sequence(1),
+                expected: sequence(1),
+                found: sequence(2),
             }
         );
         assert!(
-            applier.step(committed(2)).is_empty(),
+            applier.step(committed(3)).is_empty(),
             "a stopped applier does nothing"
         );
     }
@@ -302,14 +306,14 @@ mod tests {
     fn a_snapshot_is_written_after_a_publish_once_the_slot_moved_far_enough() {
         let first = engine();
         let mut applier = Applier::new(Arc::clone(&first), Vec::new(), 2);
-        assert_eq!(written(&published(&mut applier, &first, 0, 0)), None);
+        assert_eq!(written(&published(&mut applier, &first, 1, 0)), None);
         assert_eq!(
-            written(&published(&mut applier, &first, 1, 2)),
+            written(&published(&mut applier, &first, 2, 2)),
             Some((Slot(2), 2)),
             "two slots after the start"
         );
         assert_eq!(
-            written(&published(&mut applier, &first, 2, 4)),
+            written(&published(&mut applier, &first, 3, 4)),
             None,
             "the write of slot 2 still runs"
         );
@@ -319,14 +323,14 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            written(&published(&mut applier, &first, 3, 5)),
+            written(&published(&mut applier, &first, 4, 5)),
             Some((Slot(5), 4))
         );
         assert!(applier.step(Event::SnapshotWritten(None)).is_empty());
-        let effects = applier.step(Event::Committed(vec![edit(4, 6, &first)]));
+        let effects = applier.step(Event::Committed(vec![edit(5, 6, &first)]));
         assert!(
             applier
-                .step(Event::Committed(vec![edit(5, 7, &first)]))
+                .step(Event::Committed(vec![edit(6, 7, &first)]))
                 .is_empty()
         );
         assert_eq!(
@@ -351,6 +355,6 @@ mod tests {
             .expect("valid formulas"),
         );
         let mut applier = applier(Arc::clone(&restored));
-        assert_eq!(written(&published(&mut applier, &restored, 0, 6)), None);
+        assert_eq!(written(&published(&mut applier, &restored, 1, 6)), None);
     }
 }

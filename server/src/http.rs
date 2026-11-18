@@ -120,7 +120,7 @@ impl Workspace for Handle {
             .await
             .map_err(submit_failure)?;
         Response::ok(SubmitEditResponse {
-            sequence: Some(sequence.0),
+            sequence: Some(sequence.get()),
             ..Default::default()
         })
     }
@@ -136,12 +136,17 @@ impl Workspace for Handle {
             .into_iter()
             .map(|cell| Ok((measure(&cell.measure)?, coordinate(cell.coordinate)?)))
             .collect::<Result<Vec<_>, ConnectError>>()?;
-        let (recalculated, values) = self
-            .read(request.at_least.map(Sequence), &cells)
-            .await
-            .map_err(read_failure)?;
+        let at_least = request
+            .at_least
+            .map(|at_least| {
+                Sequence::new(at_least).ok_or_else(|| {
+                    ConnectError::invalid_argument("at_least must be 1 or more, or omitted")
+                })
+            })
+            .transpose()?;
+        let (recalculated, values) = self.read(at_least, &cells).await.map_err(read_failure)?;
         Response::ok(ReadCellsResponse {
-            recalculated: recalculated.map(|sequence| sequence.0),
+            recalculated: recalculated.map(Sequence::get),
             values: values
                 .into_iter()
                 .map(|value| value.map_or_else(Value::null, Value::from))
@@ -206,8 +211,8 @@ impl Workspace for Handle {
     ) -> ServiceResult<GetLagResponse> {
         let lag = self.lag().map_err(loading_failure)?;
         Response::ok(GetLagResponse {
-            committed: lag.committed.map(|sequence| sequence.0),
-            recalculated: lag.recalculated.map(|sequence| sequence.0),
+            committed: lag.committed.map(Sequence::get),
+            recalculated: lag.recalculated.map(Sequence::get),
             ..Default::default()
         })
     }
@@ -301,7 +306,7 @@ fn read_failure(error: ReadError) -> ConnectError {
         ReadError::Loading => loading_failure(Loading),
         ReadError::NotCommitted(lag) => {
             let committed = match lag.committed {
-                Some(sequence) => format!("the last Commit Sequence is {}", sequence.0),
+                Some(sequence) => format!("the last Commit Sequence is {}", sequence.get()),
                 None => "the log has no commit".to_owned(),
             };
             ConnectError::unavailable(format!(

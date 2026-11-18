@@ -70,6 +70,10 @@ fn id(name: &str) -> RequestId {
     RequestId(Bytes::from(name.to_owned()))
 }
 
+fn sequence(value: u64) -> Sequence {
+    Sequence::new(value).expect("a test sequence is not 0")
+}
+
 fn quantity(value: Option<f64>) -> Edit {
     Edit {
         measure: QUANTITY,
@@ -106,7 +110,7 @@ async fn only_checked_edits_enter_the_log_and_a_newer_assignee_recalculates_them
     let a = start(&store, 1, Settings::default()).await;
     assert_eq!(
         a.handle.submit(id("r1"), &quantity(Some(3.0))).await,
-        Ok(Sequence(0))
+        Ok(sequence(1))
     );
     let mut result = quantity(Some(3.0));
     result.measure = SALES;
@@ -118,25 +122,25 @@ async fn only_checked_edits_enter_the_log_and_a_newer_assignee_recalculates_them
     );
     assert_eq!(
         a.handle.submit(id("r2"), &quantity(None)).await,
-        Ok(Sequence(1)),
+        Ok(sequence(2)),
         "the rejected edit took no Commit Sequence"
     );
     assert_eq!(
-        a.handle.read(Some(Sequence(1)), &cells()).await,
-        Ok((Some(Sequence(1)), vec![None, None]))
+        a.handle.read(Some(sequence(2)), &cells()).await,
+        Ok((Some(sequence(2)), vec![None, None]))
     );
 
     let b = start(&store, 2, Settings::default()).await;
     assert_eq!(
         b.handle.submit(id("r3"), &quantity(Some(5.0))).await,
-        Ok(Sequence(2))
+        Ok(sequence(3))
     );
     let (recalculated, values) = b
         .handle
-        .read(Some(Sequence(2)), &cells())
+        .read(Some(sequence(3)), &cells())
         .await
         .expect("B reads");
-    assert_eq!(recalculated, Some(Sequence(2)));
+    assert_eq!(recalculated, Some(sequence(3)));
     assert_eq!(values[0], Some(5.0));
     assert!(values[1].is_some(), "the sales formula sees the quantity");
     assert_eq!(
@@ -183,10 +187,10 @@ async fn a_busy_assignee_rejects_new_edits_and_still_acknowledges_resends() {
     let assignee = start(&store(), 1, slow(0)).await;
     assert_eq!(
         assignee.handle.submit(id("r1"), &quantity(Some(1.0))).await,
-        Ok(Sequence(0))
+        Ok(sequence(1))
     );
     let behind = Lag {
-        committed: Some(Sequence(0)),
+        committed: Some(sequence(1)),
         recalculated: None,
     };
     assert_eq!(
@@ -196,7 +200,7 @@ async fn a_busy_assignee_rejects_new_edits_and_still_acknowledges_resends() {
     );
     assert_eq!(
         assignee.handle.submit(id("r1"), &quantity(Some(1.0))).await,
-        Ok(Sequence(0)),
+        Ok(sequence(1)),
         "a resend of a committed edit gets its ACK while the assignee is busy"
     );
     assert_eq!(
@@ -204,12 +208,12 @@ async fn a_busy_assignee_rejects_new_edits_and_still_acknowledges_resends() {
         Err(SubmitError::Rejected(Rejection::Busy { behind: 1 }))
     );
     assert_eq!(
-        assignee.handle.read(Some(Sequence(0)), &[]).await,
-        Ok((Some(Sequence(0)), vec![]))
+        assignee.handle.read(Some(sequence(1)), &[]).await,
+        Ok((Some(sequence(1)), vec![]))
     );
     assert_eq!(
         assignee.handle.submit(id("r2"), &quantity(Some(2.0))).await,
-        Ok(Sequence(1)),
+        Ok(sequence(2)),
         "the engine caught up"
     );
 }
@@ -223,7 +227,7 @@ async fn edits_that_arrive_together_are_rejected_one_by_one_when_the_assignee_is
         assignee.handle.submit(id("r2"), &edit),
         assignee.handle.submit(id("r3"), &edit),
     );
-    assert_eq!((r1, r2), (Ok(Sequence(0)), Ok(Sequence(1))));
+    assert_eq!((r1, r2), (Ok(sequence(1)), Ok(sequence(2))));
     assert_eq!(
         r3,
         Err(SubmitError::Rejected(Rejection::Busy { behind: 2 })),
@@ -235,10 +239,10 @@ async fn edits_that_arrive_together_are_rejected_one_by_one_when_the_assignee_is
 async fn a_new_assignee_counts_the_commits_of_an_older_assignee_that_it_did_not_recalculate() {
     let store = store();
     let a = start(&store, 1, Settings::default()).await;
-    for (sequence, name) in (0..).zip(["r1", "r2"]) {
+    for (number, name) in (1..).zip(["r1", "r2"]) {
         assert_eq!(
             a.handle.submit(id(name), &quantity(Some(1.0))).await,
-            Ok(Sequence(sequence))
+            Ok(sequence(number))
         );
     }
     let b = start(&store, 2, slow(1)).await;
@@ -252,32 +256,35 @@ async fn a_new_assignee_counts_the_commits_of_an_older_assignee_that_it_did_not_
 async fn a_loaded_assignee_answers_a_read_of_a_sequence_that_an_older_assignee_committed() {
     let store = store();
     let a = start(&store, 1, Settings::default()).await;
-    for (sequence, name) in (0..).zip(["r1", "r2"]) {
+    for (number, name) in (1..).zip(["r1", "r2"]) {
         assert_eq!(
             a.handle.submit(id(name), &quantity(Some(1.0))).await,
-            Ok(Sequence(sequence))
+            Ok(sequence(number))
         );
     }
     let b = start(&store, 2, Settings::default()).await;
-    let read = b.handle.read(Some(Sequence(1)), &cells()).await;
-    assert!(matches!(read, Ok((Some(Sequence(1)), _))), "{read:?}");
+    let read = b.handle.read(Some(sequence(2)), &cells()).await;
+    assert_eq!(
+        read.map(|(recalculated, _)| recalculated),
+        Ok(Some(sequence(2)))
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_new_assignee_recalculates_the_whole_log_in_one_batch() {
     let store = store();
     let a = start(&store, 1, Settings::default()).await;
-    for (sequence, name) in (0..).zip(["r1", "r2", "r3"]) {
+    for (number, name) in (1..).zip(["r1", "r2", "r3"]) {
         assert_eq!(
             a.handle.submit(id(name), &quantity(Some(1.0))).await,
-            Ok(Sequence(sequence))
+            Ok(sequence(number))
         );
     }
     let started = Instant::now();
     let b = start(&store, 2, slow(1000)).await;
     b.handle
         .engine_receiver()
-        .wait_for(|engine| engine.recalculated() == Some(Sequence(2)))
+        .wait_for(|engine| engine.recalculated() == Some(sequence(3)))
         .await
         .expect("B recalculates the log");
     assert_eq!(started.elapsed(), CALCULATION);
@@ -290,7 +297,7 @@ async fn a_read_without_a_sequence_returns_the_published_values_and_does_not_wai
     assert!(matches!(seeded, Ok((None, _))), "{seeded:?}");
     assert_eq!(
         assignee.handle.submit(id("r1"), &quantity(None)).await,
-        Ok(Sequence(0))
+        Ok(sequence(1))
     );
     let started = Instant::now();
     assert_eq!(
@@ -300,8 +307,8 @@ async fn a_read_without_a_sequence_returns_the_published_values_and_does_not_wai
     );
     assert_eq!(started.elapsed(), Duration::ZERO);
     assert_eq!(
-        assignee.handle.read(Some(Sequence(0)), &cells()).await,
-        Ok((Some(Sequence(0)), vec![None, None]))
+        assignee.handle.read(Some(sequence(1)), &cells()).await,
+        Ok((Some(sequence(1)), vec![None, None]))
     );
     assert_eq!(started.elapsed(), CALCULATION);
 }
@@ -322,7 +329,7 @@ async fn every_call_is_loading_until_the_assignee_has_read_the_log() {
         Err(ReadError::Loading)
     );
     assert_eq!(
-        assignee.handle.read(Some(Sequence(0)), &[]).await,
+        assignee.handle.read(Some(sequence(1)), &[]).await,
         Err(ReadError::Loading)
     );
     assert_eq!(
@@ -338,7 +345,7 @@ async fn every_call_is_loading_until_the_assignee_has_read_the_log() {
     support::loaded(&assignee.handle).await;
     assert_eq!(started.elapsed(), listing);
     assert_eq!(
-        assignee.handle.read(Some(Sequence(0)), &[]).await,
+        assignee.handle.read(Some(sequence(1)), &[]).await,
         Err(ReadError::NotCommitted(Lag {
             committed: None,
             recalculated: None
@@ -368,7 +375,7 @@ async fn an_assignee_that_stops_before_it_has_read_the_log_is_stopped() {
 async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence() {
     let assignee = start(&store(), 1, slow(1000)).await;
     assert_eq!(
-        assignee.handle.read(Some(Sequence(0)), &cells()).await,
+        assignee.handle.read(Some(sequence(1)), &cells()).await,
         Err(ReadError::NotCommitted(Lag {
             committed: None,
             recalculated: None
@@ -376,10 +383,10 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
     );
     let started = Instant::now();
     let edits = [Some(3.0), Some(4.0), None];
-    for (sequence, (name, value)) in (0..).zip(["r1", "r2", "r3"].into_iter().zip(edits)) {
+    for (number, (name, value)) in (1..).zip(["r1", "r2", "r3"].into_iter().zip(edits)) {
         assert_eq!(
             assignee.handle.submit(id(name), &quantity(value)).await,
-            Ok(Sequence(sequence))
+            Ok(sequence(number))
         );
     }
     assert_eq!(
@@ -388,15 +395,15 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
         "no ACK waited for a recalculation"
     );
     assert_eq!(
-        assignee.handle.read(Some(Sequence(3)), &cells()).await,
+        assignee.handle.read(Some(sequence(4)), &cells()).await,
         Err(ReadError::NotCommitted(Lag {
-            committed: Some(Sequence(2)),
+            committed: Some(sequence(3)),
             recalculated: None
         }))
     );
     assert_eq!(
-        assignee.handle.read(Some(Sequence(1)), &cells()).await,
-        Ok((Some(Sequence(2)), vec![None, None])),
+        assignee.handle.read(Some(sequence(2)), &cells()).await,
+        Ok((Some(sequence(3)), vec![None, None])),
         "the values as of r3, a sequence after the one asked for"
     );
     assert_eq!(
@@ -408,7 +415,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
         assignee
             .handle
             .read(
-                Some(Sequence(0)),
+                Some(sequence(1)),
                 &[(SALES, cells()[1].1.iter().take(1).collect())]
             )
             .await,
@@ -422,7 +429,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
         assignee
             .handle
             .read(
-                Some(Sequence(9)),
+                Some(sequence(10)),
                 &[(unknown, std::iter::empty().collect())]
             )
             .await,
@@ -454,7 +461,7 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_assignee() {
     });
     assert_eq!(
         submit_bytes(&submission_sender, "garbage", Bytes::from_static(b"\x09")).await,
-        Some(Sequence(0))
+        Some(sequence(1))
     );
     unchecked.abort();
 
@@ -462,13 +469,13 @@ async fn a_commit_that_the_engine_cannot_apply_stops_the_assignee() {
     assert_eq!(
         b.exit.await.expect("B ends"),
         Exit::Engine(EngineAlarm::Invalid {
-            sequence: Sequence(0),
+            sequence: sequence(1),
             invalid: Invalid::Undecodable(DecodeError::Version(9))
         })
     );
     assert_eq!(b.handle.lag().map(|lag| lag.recalculated), Ok(None));
     assert_eq!(
-        b.handle.read(Some(Sequence(0)), &[]).await,
+        b.handle.read(Some(sequence(1)), &[]).await,
         Err(ReadError::Stopped)
     );
     assert_eq!(
@@ -512,14 +519,14 @@ async fn a_new_assignee_starts_from_the_newest_snapshot_it_can_read() {
         ..slow(u64::MAX)
     };
     let a = start(&store, 1, settings()).await;
-    for (sequence, value) in (0..3).zip([1.0, 2.0, 3.0]) {
-        let name = format!("r{sequence}");
+    for (number, value) in (1..).zip([1.0, 2.0, 3.0]) {
+        let name = format!("r{}", number - 1);
         assert_eq!(
             a.handle.submit(id(&name), &quantity(Some(value))).await,
-            Ok(Sequence(sequence))
+            Ok(sequence(number))
         );
         a.handle
-            .read(Some(Sequence(sequence)), &[])
+            .read(Some(sequence(number)), &[])
             .await
             .expect("A recalculates");
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -548,7 +555,7 @@ async fn a_new_assignee_starts_from_the_newest_snapshot_it_can_read() {
     support::loaded(&handle).await;
     assert_eq!(
         handle
-            .read(Some(Sequence(2)), &cells())
+            .read(Some(sequence(3)), &cells())
             .await
             .map(|(_, values)| values[0]),
         Ok(Some(3.0)),
@@ -556,7 +563,7 @@ async fn a_new_assignee_starts_from_the_newest_snapshot_it_can_read() {
     );
     assert_eq!(
         handle.submit(id("r0"), &quantity(Some(1.0))).await,
-        Ok(Sequence(0)),
+        Ok(sequence(1)),
         "a resend of a commit in the snapshot"
     );
 

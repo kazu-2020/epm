@@ -113,8 +113,8 @@ pub(crate) fn check(outcome: &Outcome) -> Violations {
                 }
                 if !next
                     .iter()
-                    .zip(0..)
-                    .all(|(commit, position)| commit.sequence == Sequence(position))
+                    .enumerate()
+                    .all(|(position, commit)| commit.sequence.index() == position)
                 {
                     violate("commitSequenceIsPosition", format!("record {at}: {key}"));
                 }
@@ -251,8 +251,8 @@ pub(crate) fn check(outcome: &Outcome) -> Violations {
         }
     }
     for (epoch, commits) in passed_on {
-        for ((at_record, commit), expected) in commits.into_iter().zip(0..) {
-            if commit.sequence != Sequence(expected) || at(commit.sequence) != Some(commit) {
+        for (expected, (at_record, commit)) in commits.into_iter().enumerate() {
+            if commit.sequence.index() != expected || at(commit.sequence) != Some(commit) {
                 violate(
                     "passedOnInLogOrder",
                     format!("record {at_record}: epoch {epoch} passed on {commit:?}"),

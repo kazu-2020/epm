@@ -111,10 +111,13 @@ _Avoid_: ジャーナル、WAL
 _Avoid_: client_op_id
 
 **Commit Sequence**:
-変更ログの中のコミットの番号。確定した順に1つずつ増える。
+変更ログの中のコミットの番号。最初のコミットが 1 で、確定した順に1つずつ増える。0 の番号は存在しない。N 件のコミットを持つ変更ログの最後の番号は N である。
+
+**Commit Count**:
+変更ログの先頭からのコミットの件数。0 は空の変更ログを表す。値は最後のコミットの Commit Sequence と等しいが、番号と件数は型で区別する。
 
 **再計算済み番号**:
-Assignee がメジャーに反映し終えた最後のコミットの Commit Sequence。ACK は変更ログに入った時点で返すので、ACK した番号に遅れることがある。新しい Assignee は snapshot の N-1 から始め、なければ変更ログの頭から反映し直す。
+Assignee がメジャーに反映し終えた最後のコミットの Commit Sequence。ACK は変更ログに入った時点で返すので、ACK した番号に遅れることがある。新しい Assignee は snapshot のコミット N の次から反映し、snapshot がなければ変更ログの先頭から反映し直す。
 
 **受理**:
 Assignee が変更の要求を検査し、通ったものを変更ログに入れること。ACK は変更ログに入った時点で返し、反映を待たない。
@@ -143,5 +146,5 @@ Assignee がまとめて確定する変更の塊。S3 では1つのオブジェ�
 _Avoid_: 位置(セグメントの番号の意味で)
 
 **snapshot**:
-変更ログの先頭 N 件を反映した入力メジャーのセル、その N 件の Request ID、コミット N-1 を含む Slot を S3 に一括で置いたもの。キーは `{WorkspaceGlobalId}/snapshot/{N}/`(20桁のゼロ埋め)。変更ログのキャッシュで、正は変更ログのまま。新しい Assignee は最新の snapshot とその後ろのセグメントだけを読む(ADR 0010)。
+変更ログの先頭 N 件を反映した入力メジャーのセル、その N 件の Request ID、コミット N を含む Slot を S3 に一括で置いたもの。キーは `{WorkspaceGlobalId}/snapshot/{N}/`(20桁のゼロ埋め)。変更ログのキャッシュで、正は変更ログのまま。新しい Assignee は最新の snapshot とその後ろのセグメントだけを読む(ADR 0010)。
 _Avoid_: スナップショット、checkpoint

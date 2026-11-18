@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use change_log::{AssigneeId, Commit, Epoch, ProcessId, Request, Sequence, Slot, Start};
+use change_log::{
+    AssigneeId, Commit, CommitCount, Epoch, ProcessId, Request, Sequence, Slot, Start,
+};
 use common::Record;
 use datagen::cases::exact;
 use datagen::representative::{self, Size};
@@ -387,10 +389,10 @@ fn recalculation_witnesses(outcome: &common::Outcome) -> BTreeSet<&'static str> 
             }
             Record::Crashed { server } => crashed.extend(epochs.get(server)),
             Record::Recalculated { epoch, sequence } => {
-                // Not None before the first record: every assignee recalculates from Commit Sequence 0, so its first batch starts there.
+                // Not None before the first record: every assignee recalculates from the first Commit Sequence, so its first batch starts there.
                 let first = recalculated_so_far
                     .insert(*epoch, *sequence)
-                    .map_or(Sequence(0), Sequence::next);
+                    .map_or(Sequence::FIRST, Sequence::next);
                 let acked = acked_so_far.get(epoch).map_or(0, |acked| {
                     acked
                         .range(first..=*sequence)
@@ -469,9 +471,7 @@ fn snapshots_match_log(model: &Model, run: &Run) -> common::Violations {
         {
             violate("the Request IDs are not the start of the log".to_owned());
         }
-        let last = count.checked_sub(1).map(|last| {
-            Sequence(u64::try_from(last).expect("u64 holds every usize on supported targets"))
-        });
+        let last = CommitCount::of(count).last();
         let in_slot = segments.get(&start.slot).is_some_and(|segment| {
             segment
                 .commits()
@@ -495,17 +495,11 @@ fn snapshots_match_log(model: &Model, run: &Run) -> common::Violations {
 }
 
 fn snapshot_witnesses(run: &Run) -> BTreeSet<&'static str> {
-    let counts: BTreeMap<u64, u64> = run
+    let counts: BTreeMap<u64, CommitCount> = run
         .restored
         .iter()
         .filter(|(_, start)| !start.request_ids.is_empty())
-        .map(|(epoch, start)| {
-            (
-                *epoch,
-                u64::try_from(start.request_ids.len())
-                    .expect("u64 holds every usize on supported targets"),
-            )
-        })
+        .map(|(epoch, start)| (*epoch, CommitCount::of(start.request_ids.len())))
         .collect();
     let mut seen = BTreeSet::new();
     if !counts.is_empty() {
@@ -513,7 +507,7 @@ fn snapshot_witnesses(run: &Run) -> BTreeSet<&'static str> {
     }
     let acked_from_snapshot = run.outcome.history.iter().any(|record| {
         matches!(record, Record::Acked { epoch, sequence, .. }
-            if counts.get(epoch).is_some_and(|count| sequence.0 < *count))
+            if counts.get(epoch).is_some_and(|count| CommitCount::from(*sequence) <= *count))
     });
     if acked_from_snapshot {
         seen.insert("resendAckedFromSnapshot");
