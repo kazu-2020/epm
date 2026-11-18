@@ -84,7 +84,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
     }
     let by_division_source = "SUM('売上', BY '部門'.'事業部', '期間')";
     let division_result = fixture.definition("事業部結果");
-    let [periods, departments, _] = fixture.dimensions.iter().collect::<Vec<_>>()[..] else {
+    let [periods, _, departments] = fixture.dimensions.iter().collect::<Vec<_>>()[..] else {
         panic!("the fixture has three dimensions");
     };
     assert_eq!(
@@ -92,7 +92,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &fixture.check(by_division_source, "事業部結果"),
             division_result,
             &measures,
-            &fixture_dimensions_without(departments)
+            &Fixture::dimensions_without(departments.global_id())
         )
         .unwrap_err(),
         EvaluateError::MissingDimension(departments.global_id())
@@ -121,7 +121,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
         &Dimensions::default(),
     )
     .expect("the first period alone is a dimension");
-    let mut with_one_period = fixture_dimensions_without(periods);
+    let mut with_one_period = Fixture::dimensions_without(periods.global_id());
     with_one_period
         .try_push(one_period)
         .expect("the periods were taken out");
@@ -148,10 +148,4 @@ fn a_sum_that_overflows_on_every_cell_leaves_no_cell() {
     .expect("the formula evaluates");
 
     assert_eq!(measure.cells().count(), 0);
-}
-
-fn fixture_dimensions_without(removed: &Dimension) -> Dimensions {
-    let mut kept = Fixture::default().dimensions.into_vec();
-    kept.retain(|dimension| dimension.global_id() != removed.global_id());
-    Dimensions::try_new(kept).expect("the fixture dimensions have distinct ULIDs")
 }

@@ -241,23 +241,16 @@ pub struct Fixture {
 
 impl Default for Fixture {
     fn default() -> Self {
-        let periods = dimension(
-            PERIOD,
-            "期間",
-            &["4月", "5月"],
-            vec![],
-            &[],
-            &Dimensions::default(),
-        );
-        let divisions = dimension(
-            DIVISION,
-            "事業部",
-            &["A事業部", "B事業部"],
-            vec![],
-            &[],
-            &Dimensions::default(),
-        );
-        let targets = Dimensions::try_new(vec![divisions]).expect("one dimension has no duplicate");
+        let mut dimensions = Dimensions::default();
+        for (global_id, name, natural_keys) in [
+            (PERIOD, "期間", &["4月", "5月"]),
+            (DIVISION, "事業部", &["A事業部", "B事業部"]),
+        ] {
+            let dimension = dimension(global_id, name, natural_keys, vec![], &[], &dimensions);
+            dimensions
+                .try_push(dimension)
+                .expect("the fixture dimensions have distinct ULIDs");
+        }
         let departments = dimension(
             DEPARTMENT,
             "部門",
@@ -268,12 +261,11 @@ impl Default for Fixture {
                 kind: AttributeKind::Reference(DIVISION),
             }],
             &[Some(0), Some(0), None],
-            &targets,
+            &dimensions,
         );
-        let mut ordered = vec![periods, departments];
-        ordered.extend(targets.into_vec());
-        let dimensions =
-            Dimensions::try_new(ordered).expect("the fixture dimensions have distinct ULIDs");
+        dimensions
+            .try_push(departments)
+            .expect("the fixture dimensions have distinct ULIDs");
         let input_cells: [(MeasureDefinition, &Cells); 6] = [
             (
                 measure_definition(11, "売上", &[DEPARTMENT, PERIOD]),
@@ -345,6 +337,12 @@ impl Default for Fixture {
 }
 
 impl Fixture {
+    pub fn dimensions_without(removed: DimensionGlobalId) -> Dimensions {
+        let mut kept = Fixture::default().dimensions.into_vec();
+        kept.retain(|dimension| dimension.global_id() != removed);
+        Dimensions::try_new(kept).expect("the fixture dimensions have distinct ULIDs")
+    }
+
     pub fn definition(&self, name: &str) -> &MeasureDefinition {
         self.measure_definitions
             .iter()

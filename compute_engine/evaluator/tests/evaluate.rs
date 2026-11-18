@@ -1,5 +1,5 @@
 use datagen::cases::{self, CASES, Fixture};
-use dimension::{AttributeGlobalId, Dimension, Dimensions};
+use dimension::{AttributeGlobalId, Dimensions};
 use formula::EvaluateError;
 use formula::{CheckedExpression, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
 use measure::{Measure, MeasureDefinition};
@@ -83,7 +83,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
     }
     let by_division_source = "SUM('売上', BY '部門'.'事業部', '期間')";
     let division_result = fixture.definition("事業部結果");
-    let [_, departments, _] = fixture.dimensions.iter().collect::<Vec<_>>()[..] else {
+    let [_, _, departments] = fixture.dimensions.iter().collect::<Vec<_>>()[..] else {
         panic!("the fixture has three dimensions");
     };
     assert_eq!(
@@ -91,7 +91,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &fixture.check(by_division_source, "事業部結果"),
             division_result,
             &measures,
-            &fixture_dimensions_without(departments)
+            &Fixture::dimensions_without(departments.global_id())
         )
         .unwrap_err(),
         EvaluateError::MissingDimension(departments.global_id())
@@ -114,10 +114,4 @@ fn errors_name_what_the_evaluation_could_not_find() {
         .unwrap_err(),
         EvaluateError::MissingAttribute(AttributeGlobalId(Ulid(999)))
     );
-}
-
-fn fixture_dimensions_without(removed: &Dimension) -> Dimensions {
-    let mut kept = Fixture::default().dimensions.into_vec();
-    kept.retain(|dimension| dimension.global_id() != removed.global_id());
-    Dimensions::try_new(kept).expect("the fixture dimensions have distinct ULIDs")
 }

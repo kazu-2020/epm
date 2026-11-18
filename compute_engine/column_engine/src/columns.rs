@@ -979,8 +979,8 @@ mod tests {
         let dimensions = &fixture.dimensions;
         let axis = dimensions
             .iter()
-            .nth(1)
-            .expect("the fixture has three dimensions")
+            .find(|dimension| dimension.name() == "部門")
+            .expect("the fixture has departments")
             .global_id();
         let packing = CoordinatePacking::new(&[3]).expect("2 bits fit in a packed coordinate");
         let sales = Columns::from_packed(vec![axis], packing, vec![0, 1, 2], vec![3.0, 4.0, 5.0]);
