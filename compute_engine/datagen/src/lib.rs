@@ -8,7 +8,7 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
     AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
-    DimensionGlobalId, DimensionKind, MemberIndex,
+    DimensionGlobalId, DimensionKind, Dimensions, MemberIndex,
 };
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
@@ -42,10 +42,12 @@ pub fn generate(configuration: &Configuration) -> UncheckedWorkspace {
         random: StdRng::seed_from_u64(configuration.seed),
         last_ulid: 0,
     };
-    let mut dimensions = Vec::with_capacity(configuration.dimension_count);
+    let mut dimensions = Dimensions::default();
     for index in 0..configuration.dimension_count {
         let dimension = generator.dimension(index, &dimensions);
-        dimensions.push(dimension);
+        dimensions
+            .try_push(dimension)
+            .expect("every generated dimension has its own ULID");
     }
     let inputs: Vec<Measure> = (0..configuration.input_count)
         .map(|index| generator.input(index, &dimensions))
@@ -76,7 +78,7 @@ impl Generator<'_> {
         zipf_member(self.random.sample(zipf))
     }
 
-    fn axes(&mut self, dimensions: &[Dimension]) -> Vec<DimensionGlobalId> {
+    fn axes(&mut self, dimensions: &Dimensions) -> Vec<DimensionGlobalId> {
         let mut axes: Vec<DimensionGlobalId> =
             dimensions.iter().map(Dimension::global_id).collect();
         axes.shuffle(&mut self.random);
@@ -84,13 +86,18 @@ impl Generator<'_> {
         axes
     }
 
-    fn dimension(&mut self, index: usize, earlier: &[Dimension]) -> Dimension {
+    fn dimension(&mut self, index: usize, earlier: &Dimensions) -> Dimension {
         let global_id = DimensionGlobalId(self.ulid());
         let member_count = self
             .random
             .random_range(1..=self.configuration.members_per_dimension);
-        let parent = (!earlier.is_empty() && self.random.random_bool(0.75))
-            .then(|| &earlier[self.random.random_range(0..earlier.len())]);
+        let earlier_count = earlier.iter().len();
+        let parent = (earlier_count > 0 && self.random.random_bool(0.75)).then(|| {
+            earlier
+                .iter()
+                .nth(self.random.random_range(0..earlier_count))
+                .expect("the position is below the count")
+        });
         let natural_key = natural_key_attribute(global_id);
         let natural_key_global_id = natural_key.global_id;
         let attributes: Vec<AttributeDefinition> = std::iter::once(natural_key)
@@ -127,11 +134,11 @@ impl Generator<'_> {
         }
         let members = RecordBatch::try_new(Arc::new(definition.schema()), columns)
             .expect("the columns follow the dimension schema");
-        Dimension::try_new(definition, members, &earlier.iter().collect::<Vec<_>>())
+        Dimension::try_new(definition, members, earlier)
             .expect("generated members are unique and their targets exist")
     }
 
-    fn input(&mut self, index: usize, dimensions: &[Dimension]) -> Measure {
+    fn input(&mut self, index: usize, dimensions: &Dimensions) -> Measure {
         let definition = MeasureDefinition::try_new(
             MeasureGlobalId(self.ulid()),
             format!("入力{index}"),
@@ -141,7 +148,12 @@ impl Generator<'_> {
         let member_counts: Vec<u32> = definition
             .axes()
             .iter()
-            .map(|&axis| dimension(dimensions, axis).len())
+            .map(|&axis| {
+                dimensions
+                    .get(axis)
+                    .expect("generated axes are generated dimensions")
+                    .len()
+            })
             .collect();
         let mut cells = BTreeMap::new();
         for _ in 0..self.configuration.cells_per_input {
@@ -152,12 +164,8 @@ impl Generator<'_> {
             let value = self.value();
             cells.insert(coordinate, value);
         }
-        Measure::from_cells(
-            definition,
-            cells.into_iter().collect(),
-            &dimensions.iter().collect::<Vec<_>>(),
-        )
-        .expect("generated cells are unique and normalized")
+        Measure::from_cells(definition, cells.into_iter().collect(), dimensions)
+            .expect("generated cells are unique and normalized")
     }
 
     fn value(&mut self) -> f64 {
@@ -171,13 +179,6 @@ impl Generator<'_> {
             magnitude
         }
     }
-}
-
-fn dimension(dimensions: &[Dimension], global_id: DimensionGlobalId) -> &Dimension {
-    dimensions
-        .iter()
-        .find(|dimension| dimension.global_id() == global_id)
-        .expect("generated axes are generated dimensions")
 }
 
 // Not a random ULID: drawing one more would change every model that an existing seed generates.
@@ -203,7 +204,7 @@ pub fn numbered_dimension(
     id: u128,
     members: u32,
     kind: DimensionKind,
-    targets: &[&Dimension],
+    targets: &Dimensions,
 ) -> Dimension {
     let global_id = DimensionGlobalId(Ulid(id));
     let natural_key = natural_key_attribute(global_id);

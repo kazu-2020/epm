@@ -3,7 +3,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use dimension::{
-    AttributeGlobalId, Dimension, DimensionGlobalId, InvalidGlobalId, MemberIndex,
+    AttributeGlobalId, Dimension, DimensionGlobalId, Dimensions, InvalidGlobalId, MemberIndex,
     ReferenceAttribute, parse_global_id,
 };
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
@@ -31,21 +31,20 @@ impl fmt::Display for WorkspaceGlobalId {
 
 #[derive(Debug)]
 pub struct UncheckedWorkspace {
-    pub dimensions: Vec<Dimension>,
+    pub dimensions: Dimensions,
     pub inputs: Vec<Measure>,
     pub formulas: Vec<Formula>,
 }
 
 #[derive(Debug)]
 pub struct Workspace {
-    dimensions: Vec<Dimension>,
+    dimensions: Dimensions,
     inputs: Vec<Measure>,
     formulas: Vec<CompiledFormula>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum WorkspaceError {
-    DuplicateDimension(DimensionGlobalId),
     DuplicateMeasure(MeasureGlobalId),
     DuplicateName(String),
     ReferenceOutsideTarget {
@@ -67,19 +66,11 @@ impl Workspace {
             inputs,
             formulas,
         } = unchecked;
-        let references: Vec<&Dimension> = dimensions.iter().collect();
         let definitions: Vec<MeasureDefinition> = inputs
             .iter()
             .map(|input| input.definition().clone())
             .chain(formulas.iter().map(|formula| formula.result.clone()))
             .collect();
-        let mut dimension_ids = HashSet::new();
-        if let Some(duplicate) = dimensions
-            .iter()
-            .find(|dimension| !dimension_ids.insert(dimension.global_id()))
-        {
-            return Err(WorkspaceError::DuplicateDimension(duplicate.global_id()));
-        }
         let mut measure_ids = HashSet::new();
         if let Some(duplicate) = definitions
             .iter()
@@ -101,7 +92,7 @@ impl Workspace {
             // Not trusted from Dimension::try_new: it checked the values against the targets it was given, which can be other dimensions of the same ID.
             if let Some(attribute) = dimension
                 .reference_attributes()
-                .find(|attribute| !inside_target(dimension, *attribute, &references))
+                .find(|attribute| !inside_target(dimension, *attribute, &dimensions))
             {
                 return Err(WorkspaceError::ReferenceOutsideTarget {
                     dimension: dimension.global_id(),
@@ -109,13 +100,13 @@ impl Workspace {
                 });
             }
         }
-        if let Some(input) = inputs.iter().find(|input| !made_from(input, &references)) {
+        if let Some(input) = inputs.iter().find(|input| !made_from(input, &dimensions)) {
             return Err(WorkspaceError::InputOfOtherDimensions(input.global_id()));
         }
         let mut compiled = BTreeMap::new();
         for formula in formulas {
             let result = formula.result.global_id();
-            let formula = CompiledFormula::new(formula, &definitions, &references)
+            let formula = CompiledFormula::new(formula, &definitions, &dimensions)
                 .map_err(|error| WorkspaceError::Formula { result, error })?;
             compiled.insert(result, formula);
         }
@@ -135,7 +126,7 @@ impl Workspace {
         })
     }
 
-    pub fn dimensions(&self) -> &[Dimension] {
+    pub fn dimensions(&self) -> &Dimensions {
         &self.dimensions
     }
 
@@ -154,30 +145,32 @@ impl Workspace {
                 .iter()
                 .position(|declared| declared.global_id() == input.global_id())
         });
-        let references: Vec<&Dimension> = self.dimensions.iter().collect();
         let same_definitions = inputs
             .iter()
             .map(Measure::definition)
             .eq(self.inputs.iter().map(Measure::definition));
-        if !same_definitions || !inputs.iter().all(|input| made_from(input, &references)) {
+        if !same_definitions
+            || !inputs
+                .iter()
+                .all(|input| made_from(input, &self.dimensions))
+        {
             return Err(self);
         }
         Ok(Workspace { inputs, ..self })
     }
 
-    pub(crate) fn into_compiled(self) -> (Vec<Dimension>, Vec<Measure>, Vec<CompiledFormula>) {
+    pub(crate) fn into_compiled(self) -> (Dimensions, Vec<Measure>, Vec<CompiledFormula>) {
         (self.dimensions, self.inputs, self.formulas)
     }
 }
 
-fn made_from(input: &Measure, dimensions: &[&Dimension]) -> bool {
+fn made_from(input: &Measure, dimensions: &Dimensions) -> bool {
     let axes: Option<Vec<&Dimension>> = input
         .axis_member_counts()
         .map(|(axis, member_count)| {
             dimensions
-                .iter()
-                .copied()
-                .find(|dimension| dimension.global_id() == axis && dimension.len() == member_count)
+                .get(axis)
+                .filter(|dimension| dimension.len() == member_count)
         })
         .collect();
     // Not the member counts alone: a dimension of another kind packs at another place, so the packed coordinates would read as other cells (ADR 0005).
@@ -187,14 +180,11 @@ fn made_from(input: &Measure, dimensions: &[&Dimension]) -> bool {
 fn inside_target(
     dimension: &Dimension,
     attribute: ReferenceAttribute<'_>,
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> bool {
-    dimensions
-        .iter()
-        .find(|target| target.global_id() == attribute.target())
-        .is_some_and(|target| {
-            (0..dimension.len())
-                .filter_map(|member| attribute.value(MemberIndex(member)))
-                .all(|value| value.0 < target.len())
-        })
+    dimensions.get(attribute.target()).is_some_and(|target| {
+        (0..dimension.len())
+            .filter_map(|member| attribute.value(MemberIndex(member)))
+            .all(|value| value.0 < target.len())
+    })
 }

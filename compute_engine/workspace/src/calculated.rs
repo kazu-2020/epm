@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use dimension::Dimension;
+use dimension::{DimensionGlobalId, Dimensions};
 use formula::{CheckedExpression, EvaluateError};
 use measure::{DeltaBuilder, Measure, MeasureGlobalId};
 
@@ -32,13 +32,13 @@ pub struct CalculateError {
 #[derive(Clone, Debug)]
 pub struct EditCheck {
     inputs: Arc<BTreeMap<MeasureGlobalId, Input>>,
-    dimensions: Arc<[Dimension]>,
+    dimensions: Arc<Dimensions>,
 }
 
 #[derive(Debug)]
 struct Input {
     empty: DeltaBuilder,
-    axis_positions: Vec<usize>,
+    axes: Vec<DimensionGlobalId>,
 }
 
 #[derive(Debug, Default)]
@@ -48,7 +48,7 @@ pub struct Edits {
 
 #[derive(Clone, Debug)]
 pub struct Calculated {
-    dimensions: Arc<[Dimension]>,
+    dimensions: Arc<Dimensions>,
     formulas: Arc<[CompiledFormula]>,
     measures: Vec<Measure>,
     input_count: usize,
@@ -69,10 +69,11 @@ impl EditCheck {
             .inputs
             .get(&edit.measure)
             .ok_or(EditError::NotAnInput(edit.measure))?;
-        let axes = input
-            .axis_positions
-            .iter()
-            .map(|&position| &self.dimensions[position]);
+        let axes = input.axes.iter().map(|&axis| {
+            self.dimensions
+                .get(axis)
+                .expect("Workspace::try_new checks that every input is made from its dimensions")
+        });
         let coordinate = resolve(axes, &edit.coordinate).map_err(EditError::Cell)?;
         let delta = edits
             .deltas
@@ -92,26 +93,15 @@ impl EditCheck {
 impl Calculated {
     pub fn new(workspace: Workspace) -> Result<Calculated, CalculateError> {
         let (dimensions, inputs, formulas) = workspace.into_compiled();
-        let dimensions: Arc<[Dimension]> = dimensions.into();
-        let references: Vec<&Dimension> = dimensions.iter().collect();
+        let dimensions = Arc::new(dimensions);
         let edit_check = EditCheck {
             inputs: Arc::new(
                 inputs
                     .iter()
                     .map(|input| {
-                        let axis_positions = input
-                            .definition()
-                            .axes()
-                            .iter()
-                            .map(|&axis| {
-                                dimensions
-                                    .iter()
-                                    .position(|dimension| dimension.global_id() == axis)
-                                    .expect("Workspace::try_new checks that every input is made from its dimensions")
-                            })
-                            .collect();
+                        let axes = input.definition().axes().to_vec();
                         let empty = input.delta();
-                        (input.global_id(), Input { empty, axis_positions })
+                        (input.global_id(), Input { empty, axes })
                     })
                     .collect(),
             ),
@@ -125,7 +115,7 @@ impl Calculated {
                 formula.expression(),
                 formula.result(),
                 &sources,
-                &references,
+                &dimensions,
             )
             .map_err(|error| CalculateError {
                 result: formula.result().global_id(),
@@ -142,7 +132,7 @@ impl Calculated {
         })
     }
 
-    pub fn dimensions(&self) -> &[Dimension] {
+    pub fn dimensions(&self) -> &Dimensions {
         &self.dimensions
     }
 
@@ -159,7 +149,6 @@ impl Calculated {
     }
 
     pub fn apply(&self, edits: Edits) -> Result<Calculated, EvaluateError> {
-        let dimensions: Vec<&Dimension> = self.dimensions.iter().collect();
         let formulas: Vec<(MeasureGlobalId, &CheckedExpression)> = self
             .formulas
             .iter()
@@ -172,7 +161,7 @@ impl Calculated {
                 .into_iter()
                 .map(|(measure, delta)| (measure, delta.finish())),
             &formulas,
-            &dimensions,
+            &self.dimensions,
         )?
         .iter()
         .map(Measure::fold_deltas_or_compact)

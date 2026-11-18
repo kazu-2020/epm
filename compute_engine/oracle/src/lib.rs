@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
 
-use dimension::{AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberIndex};
+use dimension::{AttributeGlobalId, DimensionGlobalId, DimensionKind, Dimensions, MemberIndex};
 use duckdb::Connection;
 use formula::{
     CheckedAxis, CheckedExpression, CheckedNode, FilteredAxis, ProductOperator, Sign, Term,
@@ -22,7 +22,7 @@ struct Query {
 }
 
 impl Oracle {
-    pub fn new(dimensions: &[&Dimension], measures: &[&Measure]) -> duckdb::Result<Self> {
+    pub fn new(dimensions: &Dimensions, measures: &[&Measure]) -> duckdb::Result<Self> {
         let connection = Connection::open_in_memory()?;
         for dimension in dimensions {
             connection.execute_batch(&format!(

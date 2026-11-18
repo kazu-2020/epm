@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dimension::{Dimension, DimensionGlobalId, MemberIndex};
+use dimension::{DimensionGlobalId, Dimensions, MemberIndex};
 
 use crate::definition::MeasureDefinition;
 use crate::error::{CoordinateError, MeasureError};
@@ -19,13 +19,12 @@ pub(crate) struct Axes {
 impl Axes {
     pub(crate) fn new(
         definition: &MeasureDefinition,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Arc<Axes>, MeasureError> {
         let mut sorted = Vec::with_capacity(definition.axes().len());
         for &axis in definition.axes() {
             let dimension = dimensions
-                .iter()
-                .find(|dimension| dimension.global_id() == axis)
+                .get(axis)
                 .ok_or(MeasureError::MissingDimension(axis))?;
             sorted.push(dimension);
         }

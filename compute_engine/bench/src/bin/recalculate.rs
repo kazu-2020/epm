@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use datagen::representative::{self, Size};
-use dimension::Dimension;
 use measure::MeasureDefinition;
 
 #[expect(
@@ -25,7 +24,6 @@ fn main() -> std::io::Result<()> {
         _ => panic!("{usage}"),
     };
     let dimensions = representative::dimensions(&Size::FULL, bench::SEED);
-    let dimensions: Vec<&Dimension> = dimensions.iter().collect();
     let mut measures = bench::read_measures(&directory, &dimensions)?;
     let formulas = representative::formulas();
     let definitions: Vec<MeasureDefinition> = measures

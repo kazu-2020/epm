@@ -7,7 +7,7 @@ use arrow_array::{
 use arrow_schema::{Field, Schema};
 use dimension::{
     AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
-    DimensionGlobalId, DimensionKind, MemberIndex,
+    DimensionGlobalId, DimensionKind, Dimensions, MemberIndex,
 };
 use measure::{
     CoordinateError, CoordinatePacking, DefinitionError, Measure, MeasureDefinition, MeasureError,
@@ -44,7 +44,8 @@ fn dimension(global_id: DimensionGlobalId, natural_keys: &[&str]) -> Dimension {
     ];
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns)
         .expect("the test batch matches its schema");
-    Dimension::try_new(definition, batch, &[]).expect("the test dimension is valid")
+    Dimension::try_new(definition, batch, &Dimensions::default())
+        .expect("the test dimension is valid")
 }
 
 fn periods() -> Dimension {
@@ -53,6 +54,14 @@ fn periods() -> Dimension {
 
 fn departments() -> Dimension {
     dimension(DEPARTMENT, &["営業部", "開発部"])
+}
+
+fn dimensions(list: Vec<Dimension>) -> Dimensions {
+    Dimensions::try_new(list).expect("the test dimensions have distinct ULIDs")
+}
+
+fn periods_and_departments() -> Dimensions {
+    dimensions(vec![periods(), departments()])
 }
 
 fn definition(global_id: MeasureGlobalId, axes: Vec<DimensionGlobalId>) -> MeasureDefinition {
@@ -72,7 +81,7 @@ fn try_sales(rows: &[(u32, u32, f64)]) -> Result<Measure, MeasureError> {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(rows))
         .expect("the test batch matches its schema");
-    Measure::try_new(definition, &batch, &[&periods(), &departments()])
+    Measure::try_new(definition, &batch, &periods_and_departments())
 }
 
 fn sales() -> Measure {
@@ -193,7 +202,7 @@ fn axis_without_its_dimension_is_rejected() {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
     assert_eq!(
-        Measure::try_new(definition, &batch, &[&periods()]).unwrap_err(),
+        Measure::try_new(definition, &batch, &dimensions(vec![periods()])).unwrap_err(),
         MeasureError::MissingDimension(DEPARTMENT)
     );
 }
@@ -204,7 +213,7 @@ fn base_not_matching_the_definition_is_rejected() {
     let other = self::definition(SALES, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(other.schema()), columns(&[])).unwrap();
     assert!(matches!(
-        Measure::try_new(definition, &batch, &[&periods(), &departments()]),
+        Measure::try_new(definition, &batch, &periods_and_departments()),
         Err(MeasureError::SchemaMismatch { .. })
     ));
 }
@@ -222,7 +231,7 @@ fn null_in_base_is_rejected() {
     columns[2] = Arc::new(Float64Array::from(vec![None]));
     let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
     assert_eq!(
-        Measure::try_new(definition, &batch, &[&periods(), &departments()]).unwrap_err(),
+        Measure::try_new(definition, &batch, &periods_and_departments()).unwrap_err(),
         MeasureError::NullInColumn("value".into())
     );
 }
@@ -238,8 +247,7 @@ fn base_keeps_the_definition_schema_even_when_given_nullable_columns() {
         .collect();
     let batch =
         RecordBatch::try_new(Arc::new(Schema::new(fields)), columns(&[(0, 0, 1.0)])).unwrap();
-    let measure =
-        Measure::try_new(definition.clone(), &batch, &[&periods(), &departments()]).unwrap();
+    let measure = Measure::try_new(definition.clone(), &batch, &periods_and_departments()).unwrap();
     assert_eq!(
         measure.to_record_batch().schema().as_ref(),
         &definition.schema()
@@ -381,7 +389,7 @@ fn delta_made_against_dimensions_of_another_size_is_rejected() {
     let smaller = Measure::try_new(
         definition,
         &batch,
-        &[&dimension(PERIOD, &["1月", "2月"]), &departments()],
+        &dimensions(vec![dimension(PERIOD, &["1月", "2月"]), departments()]),
     )
     .unwrap();
     let mut delta = larger.delta();
@@ -397,7 +405,7 @@ fn delta_of_another_measure_is_rejected() {
     let measure = sales();
     let definition = definition(COST, vec![PERIOD, DEPARTMENT]);
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns(&[])).unwrap();
-    let cost = Measure::try_new(definition, &batch, &[&periods(), &departments()]).unwrap();
+    let cost = Measure::try_new(definition, &batch, &periods_and_departments()).unwrap();
     assert_eq!(
         measure.apply(cost.delta().finish()).unwrap_err(),
         MeasureError::ForeignDelta(COST)
@@ -428,7 +436,7 @@ fn compaction_folds_deltas_into_a_sorted_base_without_changing_reads() {
     let rebuilt = Measure::try_new(
         definition(SALES, vec![PERIOD, DEPARTMENT]),
         &measure.to_record_batch(),
-        &[&periods(), &departments()],
+        &periods_and_departments(),
     );
     assert!(rebuilt.is_ok());
 }
@@ -551,7 +559,7 @@ fn deltas_over_a_thirty_second_of_the_base_are_compacted_into_it() {
                 (0..2).map(move |department| (coordinate(period, department).to_vec(), 1.0))
             })
             .collect(),
-        &[&dimension(PERIOD, &months), &departments()],
+        &dimensions(vec![dimension(PERIOD, &months), departments()]),
     )
     .unwrap();
     let edited = |measure: &Measure, cells: u32, value: f64| {
@@ -589,7 +597,7 @@ fn cells_given_in_any_order_build_a_sorted_measure() {
     let measure = Measure::from_cells(
         definition(SALES, vec![PERIOD, DEPARTMENT]),
         cells,
-        &[&periods(), &departments()],
+        &periods_and_departments(),
     )
     .unwrap();
     assert_eq!(rows(&measure), rows(&sales()));
@@ -597,7 +605,7 @@ fn cells_given_in_any_order_build_a_sorted_measure() {
 
 #[test]
 fn cells_must_fit_the_measure() {
-    let dimensions = [&periods(), &departments()];
+    let dimensions = periods_and_departments();
     let sales_definition = || definition(SALES, vec![PERIOD, DEPARTMENT]);
     assert_eq!(
         Measure::from_cells(
@@ -696,7 +704,7 @@ fn one_axis_mask_holds_every_member_that_fits() {
 fn packed_coordinates_from_the_engine_are_checked_like_a_base() {
     let definition = definition(SALES, vec![PERIOD, DEPARTMENT]);
     let packing = CoordinatePacking::new(&[3, 2]).unwrap();
-    let dimensions = [&periods(), &departments()];
+    let dimensions = periods_and_departments();
     let from_packed = |packed_coordinates: Vec<u64>| {
         let values = vec![1.0; packed_coordinates.len()];
         Measure::try_from_packed(
@@ -741,7 +749,7 @@ fn values_read_from_part_of_a_larger_buffer_are_copied_out() {
         *column = column.slice(1, 1);
     }
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
-    let measure = Measure::try_new(definition, &batch, &[&periods(), &departments()]).unwrap();
+    let measure = Measure::try_new(definition, &batch, &periods_and_departments()).unwrap();
     assert_eq!(measure.base_values().inner().capacity(), 8);
     assert_eq!(
         measure.cells().collect::<Vec<_>>(),
@@ -756,7 +764,7 @@ fn values_that_fill_their_buffer_are_kept_without_a_copy() {
     let given = columns[2].as_primitive::<Float64Type>().values().clone();
     assert_eq!(given.inner().capacity(), given.inner().len());
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns).unwrap();
-    let measure = Measure::try_new(definition, &batch, &[&periods(), &departments()]).unwrap();
+    let measure = Measure::try_new(definition, &batch, &periods_and_departments()).unwrap();
     assert!(measure.base_values().inner().ptr_eq(given.inner()));
     assert_eq!(measure.base_values().to_vec(), vec![1.0, 3.0]);
 
@@ -765,7 +773,7 @@ fn values_that_fill_their_buffer_are_kept_without_a_copy() {
     let empty = Measure::try_new(
         measure.definition().clone(),
         &batch,
-        &[&periods(), &departments()],
+        &periods_and_departments(),
     )
     .unwrap();
     assert!(empty.base_values().is_empty());
@@ -830,7 +838,7 @@ fn department_first(cells: &[(u32, u32, f64)]) -> Measure {
     Measure::from_cells(
         definition(SALES, vec![DEPARTMENT, PERIOD]),
         cells,
-        &[&periods(), &departments()],
+        &periods_and_departments(),
     )
     .expect("the test cells are valid")
 }
@@ -893,7 +901,7 @@ fn coordinates_are_taken_and_given_in_the_declared_order_of_the_axes() {
 #[test]
 fn a_record_batch_has_its_columns_in_the_declared_order_and_its_rows_in_packing_order() {
     let measure = department_first(&[(1, 0, 1.0), (0, 2, 2.0), (0, 1, 3.0)]);
-    let dimensions = [&periods(), &departments()];
+    let dimensions = periods_and_departments();
 
     let batch = measure.to_record_batch();
 

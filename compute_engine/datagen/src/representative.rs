@@ -7,7 +7,7 @@ use arrow_array::{
 };
 use dimension::{
     AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
-    DimensionGlobalId, DimensionKind, usize_from,
+    DimensionGlobalId, DimensionKind, Dimensions, usize_from,
 };
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::rngs::StdRng;
@@ -192,8 +192,7 @@ pub fn generate(size: &Size, seed: u64) -> UncheckedWorkspace {
         random: StdRng::seed_from_u64(seed),
     };
     let dimensions = generator.dimensions();
-    let references: Vec<&Dimension> = dimensions.iter().collect();
-    let inputs = generator.inputs(&dimensions, &references);
+    let inputs = generator.inputs(&dimensions);
     UncheckedWorkspace {
         dimensions,
         inputs,
@@ -201,7 +200,7 @@ pub fn generate(size: &Size, seed: u64) -> UncheckedWorkspace {
     }
 }
 
-pub fn dimensions(size: &Size, seed: u64) -> Vec<Dimension> {
+pub fn dimensions(size: &Size, seed: u64) -> Dimensions {
     Representative {
         size: *size,
         random: StdRng::seed_from_u64(seed),
@@ -244,13 +243,13 @@ fn attribute(global_id: u128, name: &str, target: DimensionGlobalId) -> Attribut
     }
 }
 
-fn dimension(
+fn push_dimension(
     global_id: DimensionGlobalId,
     name: &str,
     natural_keys: Vec<String>,
     attribute: Option<(AttributeDefinition, Vec<u32>)>,
-    earlier: &[Dimension],
-) -> Dimension {
+    dimensions: &mut Dimensions,
+) {
     let (attributes, targets) = attribute.unzip();
     let definition = DimensionDefinition::try_new(
         global_id,
@@ -280,23 +279,26 @@ fn dimension(
     }
     let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns)
         .expect("the columns follow the dimension schema");
-    Dimension::try_new(definition, batch, &earlier.iter().collect::<Vec<_>>())
-        .expect("the representative dimensions are valid")
+    let dimension = Dimension::try_new(definition, batch, dimensions)
+        .expect("the representative dimensions are valid");
+    dimensions
+        .try_push(dimension)
+        .expect("the representative dimensions have distinct ULIDs");
 }
 
-fn account_dimensions() -> Vec<Dimension> {
-    let mut dimensions: Vec<Dimension> = Vec::new();
+fn account_dimensions() -> Dimensions {
+    let mut dimensions = Dimensions::default();
     let category_names = CATEGORIES
         .iter()
         .map(|(name, _)| name.to_string())
         .collect();
-    dimensions.push(dimension(
+    push_dimension(
         CATEGORY,
         "勘定科目カテゴリ",
         category_names,
         None,
-        &dimensions,
-    ));
+        &mut dimensions,
+    );
     let mut group_names = Vec::new();
     let mut group_categories = Vec::new();
     let mut account_names = Vec::new();
@@ -314,20 +316,20 @@ fn account_dimensions() -> Vec<Dimension> {
                 .push(u32::try_from(category).expect("there are a few account categories"));
         }
     }
-    dimensions.push(dimension(
+    push_dimension(
         GROUP,
         "勘定科目グループ",
         group_names,
         Some((attribute(101, "カテゴリ", CATEGORY), group_categories)),
-        &dimensions,
-    ));
-    dimensions.push(dimension(
+        &mut dimensions,
+    );
+    push_dimension(
         ACCOUNT,
         "勘定科目",
         account_names,
         Some((attribute(102, "グループ", GROUP), account_groups)),
-        &dimensions,
-    ));
+        &mut dimensions,
+    );
     dimensions
 }
 
@@ -352,17 +354,17 @@ impl Representative {
             * u32::try_from(DEPARTMENT_KINDS.len()).expect("there are a few department kinds")
     }
 
-    fn dimensions(&mut self) -> Vec<Dimension> {
+    fn dimensions(&mut self) -> Dimensions {
         let mut dimensions = account_dimensions();
-        dimensions.push(dimension(
+        push_dimension(
             DIVISION,
             "事業部",
             numbered("事業部", DIVISIONS),
             None,
-            &dimensions,
-        ));
+            &mut dimensions,
+        );
         let departments = self.departments();
-        dimensions.push(dimension(
+        push_dimension(
             DEPARTMENT,
             "部門",
             numbered("部門", departments),
@@ -372,20 +374,20 @@ impl Representative {
                     .map(|department| department % DIVISIONS)
                     .collect(),
             )),
-            &dimensions,
-        ));
-        dimensions.push(dimension(
+            &mut dimensions,
+        );
+        push_dimension(
             PRODUCT_CATEGORY,
             "商品カテゴリ",
             numbered("商品カテゴリ", PRODUCT_CATEGORIES),
             None,
-            &dimensions,
-        ));
+            &mut dimensions,
+        );
         let products = self.size.products;
         let product_categories = (0..products)
             .map(|_| self.random.random_range(0..PRODUCT_CATEGORIES))
             .collect();
-        dimensions.push(dimension(
+        push_dimension(
             PRODUCT,
             "商品",
             numbered("商品", products),
@@ -393,35 +395,35 @@ impl Representative {
                 attribute(104, "カテゴリ", PRODUCT_CATEGORY),
                 product_categories,
             )),
-            &dimensions,
-        ));
-        dimensions.push(dimension(
+            &mut dimensions,
+        );
+        push_dimension(
             CUSTOMER,
             "取引先",
             numbered("取引先", self.size.customers),
             None,
-            &dimensions,
-        ));
-        dimensions.push(dimension(
+            &mut dimensions,
+        );
+        push_dimension(
             PERIOD,
             "期間",
             (0..PERIODS)
                 .map(|month| format!("{}年{}月", 2025 + month / 12, month % 12 + 1))
                 .collect(),
             None,
-            &dimensions,
-        ));
-        dimensions.push(dimension(
+            &mut dimensions,
+        );
+        push_dimension(
             VERSION,
             "バージョン",
             VERSIONS.iter().map(ToString::to_string).collect(),
             None,
-            &dimensions,
-        ));
+            &mut dimensions,
+        );
         dimensions
     }
 
-    fn inputs(&mut self, dimensions: &[Dimension], references: &[&Dimension]) -> Vec<Measure> {
+    fn inputs(&mut self, dimensions: &Dimensions) -> Vec<Measure> {
         let product_axes = [PERIOD, VERSION, PRODUCT];
         let prices = self.dense(&product_axes, |random| {
             cents(random.random_range(10_000..=5_000_000))
@@ -434,19 +436,16 @@ impl Representative {
             .collect();
         let yields = self.dense(&product_axes, |random| cents(random.random_range(85..=100)));
         let product_columns = self.dense_columns(&product_axes);
-        let accounts = dimensions
-            .iter()
-            .find(|dimension| dimension.global_id() == ACCOUNT)
-            .expect("the accounts are generated");
+        let accounts = dimensions.get(ACCOUNT).expect("the accounts are generated");
         vec![
-            self.quantities(references),
+            self.quantities(dimensions),
             measure(
                 1,
                 "単価",
                 &product_axes,
                 product_columns.clone(),
                 prices,
-                references,
+                dimensions,
             ),
             measure(
                 2,
@@ -454,7 +453,7 @@ impl Representative {
                 &product_axes,
                 product_columns.clone(),
                 unit_material_costs,
-                references,
+                dimensions,
             ),
             measure(
                 3,
@@ -462,9 +461,9 @@ impl Representative {
                 &product_axes,
                 product_columns,
                 yields,
-                references,
+                dimensions,
             ),
-            self.account_amounts(accounts, dimensions, references),
+            self.account_amounts(accounts, dimensions),
         ]
     }
 
@@ -504,7 +503,7 @@ impl Representative {
         (0..cells).map(|_| value(&mut self.random)).collect()
     }
 
-    fn quantities(&mut self, references: &[&Dimension]) -> Measure {
+    fn quantities(&mut self, dimensions: &Dimensions) -> Measure {
         let axes = [PERIOD, VERSION, DEPARTMENT, PRODUCT, CUSTOMER];
         let member_counts = self.member_counts(&axes);
         let sales_departments = self.size.departments_per_kind;
@@ -579,22 +578,13 @@ impl Representative {
                 .all(|&department| { self.department_kind(department) == DepartmentKind::Sales }),
             "only sales departments have quantities"
         );
-        measure(0, "数量", &axes, columns, values, references)
+        measure(0, "数量", &axes, columns, values, dimensions)
     }
 
-    fn account_amounts(
-        &mut self,
-        accounts: &Dimension,
-        dimensions: &[Dimension],
-        references: &[&Dimension],
-    ) -> Measure {
-        let groups = dimensions
-            .iter()
-            .find(|dimension| dimension.global_id() == GROUP)
-            .expect("the groups are generated");
+    fn account_amounts(&mut self, accounts: &Dimension, dimensions: &Dimensions) -> Measure {
+        let groups = dimensions.get(GROUP).expect("the groups are generated");
         let categories = dimensions
-            .iter()
-            .find(|dimension| dimension.global_id() == CATEGORY)
+            .get(CATEGORY)
             .expect("the categories are generated");
         let group_of = accounts
             .reference_attribute("グループ")
@@ -651,7 +641,7 @@ impl Representative {
                 }
             }
         }
-        measure(4, "科目別金額", &axes, columns, values, references)
+        measure(4, "科目別金額", &axes, columns, values, dimensions)
     }
 }
 
@@ -680,7 +670,7 @@ fn measure(
     axes: &[DimensionGlobalId],
     columns: Vec<Vec<u32>>,
     values: Vec<f64>,
-    references: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Measure {
     let definition = MeasureDefinition::try_new(
         MeasureGlobalId(Ulid(100 + index)),
@@ -695,5 +685,5 @@ fn measure(
     arrays.push(Arc::new(Float64Array::from(values)));
     let base = RecordBatch::try_new(Arc::new(definition.schema()), arrays)
         .expect("the columns follow the measure schema");
-    Measure::try_new(definition, &base, references).expect("the representative cells are valid")
+    Measure::try_new(definition, &base, dimensions).expect("the representative cells are valid")
 }

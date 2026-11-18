@@ -4,7 +4,7 @@ use crate::natural_key_attribute;
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
     AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
-    DimensionGlobalId, DimensionKind, MemberIndex,
+    DimensionGlobalId, DimensionKind, Dimensions, MemberIndex,
 };
 use formula::{CheckedExpression, ResolvedExpression};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
@@ -234,22 +234,30 @@ const REVISED_COORDINATES: &str =
 
 #[derive(Debug)]
 pub struct Fixture {
-    pub dimensions: Vec<Dimension>,
+    pub dimensions: Dimensions,
     pub inputs: Vec<Measure>,
     measure_definitions: Vec<MeasureDefinition>,
 }
 
 impl Default for Fixture {
     fn default() -> Self {
-        let periods = dimension(PERIOD, "期間", &["4月", "5月"], vec![], &[], &[]);
+        let periods = dimension(
+            PERIOD,
+            "期間",
+            &["4月", "5月"],
+            vec![],
+            &[],
+            &Dimensions::default(),
+        );
         let divisions = dimension(
             DIVISION,
             "事業部",
             &["A事業部", "B事業部"],
             vec![],
             &[],
-            &[],
+            &Dimensions::default(),
         );
+        let targets = Dimensions::try_new(vec![divisions]).expect("one dimension has no duplicate");
         let departments = dimension(
             DEPARTMENT,
             "部門",
@@ -260,9 +268,12 @@ impl Default for Fixture {
                 kind: AttributeKind::Reference(DIVISION),
             }],
             &[Some(0), Some(0), None],
-            &[&divisions],
+            &targets,
         );
-        let dimensions = vec![periods, departments, divisions];
+        let mut ordered = vec![periods, departments];
+        ordered.extend(targets.into_vec());
+        let dimensions =
+            Dimensions::try_new(ordered).expect("the fixture dimensions have distinct ULIDs");
         let input_cells: [(MeasureDefinition, &Cells); 6] = [
             (
                 measure_definition(11, "売上", &[DEPARTMENT, PERIOD]),
@@ -299,10 +310,9 @@ impl Default for Fixture {
             measure_definition(34, "事業部結果", &[DIVISION, PERIOD]),
             measure_definition(35, "中間", &[DEPARTMENT, PERIOD]),
         ];
-        let references: Vec<&Dimension> = dimensions.iter().collect();
         let mut inputs: Vec<Measure> = input_cells
             .iter()
-            .map(|(definition, cells)| measure(definition.clone(), cells, &references))
+            .map(|(definition, cells)| measure(definition.clone(), cells, &dimensions))
             .collect();
         let measure_definitions = input_cells
             .into_iter()
@@ -348,7 +358,7 @@ impl Fixture {
         let resolved = formula::resolve(
             &parsed.expression,
             &self.measure_definitions,
-            &self.dimensions.iter().collect::<Vec<_>>(),
+            &self.dimensions,
         );
         assert_eq!(resolved.errors, [], "{source}");
         resolved.expression
@@ -359,7 +369,7 @@ impl Fixture {
             source,
             self.definition(result),
             &self.measure_definitions,
-            &self.dimensions.iter().collect::<Vec<_>>(),
+            &self.dimensions,
         );
         compiled.unwrap_or_else(|error| panic!("{source}: {error:?}"))
     }
@@ -392,7 +402,7 @@ fn dimension(
     natural_keys: &[&str],
     attributes: Vec<AttributeDefinition>,
     attribute_values: &[Option<u32>],
-    targets: &[&Dimension],
+    targets: &Dimensions,
 ) -> Dimension {
     let definition = DimensionDefinition::try_new(
         global_id,
@@ -436,7 +446,7 @@ fn measure_definition(
 fn measure(
     definition: MeasureDefinition,
     cells: &[(&[u32], f64)],
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Measure {
     let cells = cells
         .iter()

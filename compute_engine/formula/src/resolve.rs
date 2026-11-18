@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use dimension::{AttributeKind, Dimension, MemberIndex};
+use dimension::{AttributeKind, Dimension, Dimensions, MemberIndex};
 use measure::MeasureDefinition;
 
 use crate::expression::{Axis, Expression, ExpressionKind, FilteredAxis, QuotedName};
@@ -19,7 +19,7 @@ pub struct Resolved {
 pub fn resolve(
     expression: &Expression,
     measures: &[MeasureDefinition],
-    dimensions: &[&Dimension],
+    dimensions: &Dimensions,
 ) -> Resolved {
     let mut resolver = Resolver {
         measures,
@@ -35,7 +35,7 @@ pub fn resolve(
 
 struct Resolver<'a> {
     measures: &'a [MeasureDefinition],
-    dimensions: &'a [&'a Dimension],
+    dimensions: &'a Dimensions,
     errors: Vec<ResolveError>,
 }
 
@@ -184,7 +184,6 @@ impl<'a> Resolver<'a> {
         self.dimensions
             .iter()
             .find(|dimension| dimension.name() == name)
-            .copied()
     }
 
     fn error(&mut self, kind: ResolveErrorKind, span: &Range<usize>) {

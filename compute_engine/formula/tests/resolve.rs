@@ -79,11 +79,7 @@ fn render_axis(axis: &ResolvedAxis) -> String {
 fn resolve(source: &str) -> (String, Vec<(ResolveErrorKind, Range<usize>)>) {
     let parsed = formula::parse(source);
     let dimensions = common::dimensions_with_members();
-    let resolved = formula::resolve(
-        &parsed.expression,
-        &common::measures(),
-        &dimensions.iter().collect::<Vec<_>>(),
-    );
+    let resolved = formula::resolve(&parsed.expression, &common::measures(), &dimensions);
     let errors = resolved
         .errors
         .into_iter()

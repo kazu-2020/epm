@@ -1,11 +1,11 @@
-use dimension::{Dimension, DimensionGlobalId, MemberIndex, usize_from};
+use dimension::{DimensionGlobalId, Dimensions, MemberIndex, usize_from};
 use formula::BinaryOperator;
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use rand::RngExt;
 use rand::seq::{IndexedRandom, index};
 use workspace::Formula;
 
-use crate::{Generator, dimension};
+use crate::Generator;
 
 const NUMBERS: [&str; 7] = ["0", "1", "2", "3", "10", "0.5", "1.5"];
 
@@ -33,16 +33,12 @@ const NODES: [Node; 6] = [
 
 struct Formulas<'g, 'c, 'd> {
     generator: &'g mut Generator<'c>,
-    dimensions: &'d [Dimension],
+    dimensions: &'d Dimensions,
     references: Vec<Generated>,
 }
 
 impl Generator<'_> {
-    pub(crate) fn formulas(
-        &mut self,
-        dimensions: &[Dimension],
-        inputs: &[Measure],
-    ) -> Vec<Formula> {
+    pub(crate) fn formulas(&mut self, dimensions: &Dimensions, inputs: &[Measure]) -> Vec<Formula> {
         let references = inputs
             .iter()
             .map(|input| Generated {
@@ -164,7 +160,10 @@ impl Formulas<'_, '_, '_> {
 
     fn filter(&mut self, value: Generated) -> Generated {
         let position = self.generator.random.random_range(0..value.axes.len());
-        let filtered = dimension(self.dimensions, value.axes[position]);
+        let filtered = self
+            .dimensions
+            .get(value.axes[position])
+            .expect("generated axes are generated dimensions");
         let count = self
             .generator
             .random
@@ -205,7 +204,10 @@ impl Formulas<'_, '_, '_> {
         let mut outputs: Vec<DimensionGlobalId> = Vec::new();
         let mut by: Vec<String> = Vec::new();
         for &axis in &value.axes {
-            let source = dimension(self.dimensions, axis);
+            let source = self
+                .dimensions
+                .get(axis)
+                .expect("generated axes are generated dimensions");
             let mut options: Vec<(DimensionGlobalId, String)> = Vec::new();
             if allowed.contains(&axis) {
                 options.push((axis, quote(source.name())));

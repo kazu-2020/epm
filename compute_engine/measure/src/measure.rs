@@ -4,7 +4,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, UInt32Type};
 use arrow_array::{Array, ArrayRef, Float64Array, RecordBatch, UInt32Array};
 use arrow_buffer::ScalarBuffer;
-use dimension::{Dimension, DimensionGlobalId, MemberIndex};
+use dimension::{DimensionGlobalId, Dimensions, MemberIndex};
 
 use crate::axes::Axes;
 use crate::definition::{MeasureDefinition, MeasureGlobalId};
@@ -30,7 +30,7 @@ impl Measure {
     pub fn try_new(
         definition: MeasureDefinition,
         base: &RecordBatch,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Self, MeasureError> {
         let axes = Axes::new(&definition, dimensions)?;
         let expected = definition.schema();
@@ -94,7 +94,7 @@ impl Measure {
         definition: MeasureDefinition,
         packed_coordinates: ScalarBuffer<u64>,
         values: ScalarBuffer<f64>,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Self, MeasureError> {
         let axes = Axes::new(&definition, dimensions)?;
         assert_eq!(
@@ -130,7 +130,7 @@ impl Measure {
     pub fn from_cells(
         definition: MeasureDefinition,
         cells: Vec<(Vec<MemberIndex>, f64)>,
-        dimensions: &[&Dimension],
+        dimensions: &Dimensions,
     ) -> Result<Self, MeasureError> {
         let axes = Axes::new(&definition, dimensions)?;
         let mut packed_cells = cells

@@ -1,5 +1,5 @@
 use datagen::numbered_dimension;
-use dimension::{Dimension, DimensionGlobalId, DimensionKind};
+use dimension::{Dimension, DimensionGlobalId, DimensionKind, Dimensions};
 use formula::{CheckedExpression, EvaluateError};
 use measure::{MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
@@ -23,23 +23,23 @@ fn plan(
     text: &str,
     result: &MeasureDefinition,
     measures: &[MeasureDefinition],
-    dimensions: &[Dimension],
+    dimensions: &Dimensions,
 ) -> Result<(), EvaluateError> {
-    let references: Vec<&Dimension> = dimensions.iter().collect();
-    let resolved = formula::resolve(&formula::parse(text).expression, measures, &references);
+    let resolved = formula::resolve(&formula::parse(text).expression, measures, dimensions);
     let checked: CheckedExpression = formula::check_axes(&resolved.expression, result.axes())
         .checked
         .expect("the formula passes the axis check");
-    column_engine::plan(&checked, result, &references)
+    column_engine::plan(&checked, result, dimensions)
 }
 
 fn ordinary(id: u128, members: u32) -> Dimension {
-    numbered_dimension(id, members, DimensionKind::Ordinary, &[])
+    numbered_dimension(id, members, DimensionKind::Ordinary, &Dimensions::default())
 }
 
 #[test]
 fn a_plan_reports_a_product_or_terms_in_the_middle_wider_than_64_bits_without_cells() {
-    let dimensions: Vec<Dimension> = (1..=5).map(|id| ordinary(id, 1 << 13)).collect();
+    let dimensions = Dimensions::try_new((1..=5).map(|id| ordinary(id, 1 << 13)).collect())
+        .expect("each dimension has its own ULID");
     let result = definition(21, "結果", &[3]);
     let measures = [
         definition(11, "左", &[1, 2, 3]),
@@ -100,10 +100,12 @@ fn a_plan_reports_a_product_or_terms_in_the_middle_wider_than_64_bits_without_ce
 
 #[test]
 fn a_plan_reports_a_sum_in_the_middle_wider_than_its_value_without_cells() {
-    let mut dimensions: Vec<Dimension> = (2..=6).map(|id| ordinary(id, 1 << 13)).collect();
-    let targets: Vec<&Dimension> = dimensions.iter().collect();
-    let source = numbered_dimension(1, 4, DimensionKind::Ordinary, &targets);
-    dimensions.push(source);
+    let mut dimensions = Dimensions::try_new((2..=6).map(|id| ordinary(id, 1 << 13)).collect())
+        .expect("each dimension has its own ULID");
+    let source = numbered_dimension(1, 4, DimensionKind::Ordinary, &dimensions);
+    dimensions
+        .try_push(source)
+        .expect("the source has its own ULID");
     let result = definition(21, "結果", &[2]);
     let measures = [definition(11, "値", &[1])];
 

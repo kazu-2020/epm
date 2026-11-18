@@ -19,7 +19,7 @@ fn resolved(source: &str) -> formula::Resolved {
     formula::resolve(
         &formula::parse(source).expression,
         &common::measures(),
-        &dimensions.iter().collect::<Vec<_>>(),
+        &dimensions,
     )
 }
 
