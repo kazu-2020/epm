@@ -1,4 +1,3 @@
-use dimension::Dimension;
 use measure::Measure;
 use oracle::Oracle;
 
@@ -7,10 +6,10 @@ use datagen::cases::{self, CASES, Fixture};
 #[test]
 fn oracle_matches_every_hand_computed_case() {
     let fixture = Fixture::default();
-    let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
+    let dimensions = &fixture.dimensions;
     let inputs: Vec<&Measure> = fixture.inputs.iter().collect();
     for case in CASES {
-        let mut oracle = Oracle::new(&dimensions, &inputs).unwrap();
+        let mut oracle = Oracle::new(dimensions, &inputs).unwrap();
         let mut cells = Vec::new();
         for &(result, source) in case.steps {
             cells = oracle

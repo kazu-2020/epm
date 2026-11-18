@@ -1,5 +1,5 @@
 use datagen::cases::{self, CASES, Fixture};
-use dimension::{AttributeGlobalId, Dimension};
+use dimension::{AttributeGlobalId, Dimension, Dimensions};
 use formula::EvaluateError;
 use formula::{CheckedExpression, ResolvedAxisKind, ResolvedExpression, ResolvedExpressionKind};
 use measure::{Measure, MeasureDefinition};
@@ -8,7 +8,7 @@ use ulid::Ulid;
 #[test]
 fn column_engine_matches_every_hand_computed_case() {
     let fixture = Fixture::default();
-    let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
+    let dimensions = &fixture.dimensions;
     for case in CASES {
         let mut results: Vec<Measure> = Vec::new();
         for &(result, source) in case.steps {
@@ -17,7 +17,7 @@ fn column_engine_matches_every_hand_computed_case() {
                 &fixture.check(source, result),
                 fixture.definition(result),
                 &measures,
-                &dimensions,
+                dimensions,
             )
             .unwrap_or_else(|error| panic!("{}: {error}", case.name));
             results.push(measure);
@@ -41,7 +41,7 @@ fn checked(expression: &ResolvedExpression, result: &MeasureDefinition) -> Check
 #[test]
 fn errors_name_what_the_evaluation_could_not_find() {
     let fixture = Fixture::default();
-    let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
+    let dimensions = &fixture.dimensions;
     let measures: Vec<&Measure> = fixture.inputs.iter().collect();
     let result = fixture.definition("結果");
     let sales = fixture.check("'売上'", "結果");
@@ -50,13 +50,13 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &sales,
             fixture.definition("期間結果"),
             &measures,
-            &dimensions
+            dimensions
         )
         .unwrap_err(),
         EvaluateError::ResultAxesChanged(fixture.definition("期間結果").global_id())
     );
     assert_eq!(
-        column_engine::evaluate(&sales, result, &[], &dimensions).unwrap_err(),
+        column_engine::evaluate(&sales, result, &[], dimensions).unwrap_err(),
         EvaluateError::MissingMeasure(fixture.definition("売上").global_id())
     );
     let mut stale = fixture.resolve("'売上'");
@@ -65,7 +65,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
     };
     axes.reverse();
     assert_eq!(
-        column_engine::evaluate(&checked(&stale, result), result, &measures, &dimensions)
+        column_engine::evaluate(&checked(&stale, result), result, &measures, dimensions)
             .unwrap_err(),
         EvaluateError::MeasureAxesChanged(fixture.definition("売上").global_id())
     );
@@ -75,7 +75,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
                 &fixture.check(needs_broadcast, "結果"),
                 result,
                 &measures,
-                &[]
+                &Dimensions::default()
             )
             .unwrap_err(),
             EvaluateError::MissingDimension(result.axes()[0]),
@@ -84,15 +84,14 @@ fn errors_name_what_the_evaluation_could_not_find() {
     }
     let by_division_source = "SUM('売上', BY '部門'.'事業部', '期間')";
     let division_result = fixture.definition("事業部結果");
-    let [periods, departments, divisions] = &fixture.dimensions[..] else {
-        panic!("the fixture has three dimensions");
-    };
+    let periods = fixture.dimension("期間");
+    let departments = fixture.dimension("部門");
     assert_eq!(
         column_engine::evaluate(
             &fixture.check(by_division_source, "事業部結果"),
             division_result,
             &measures,
-            &[periods, divisions]
+            &Fixture::dimensions_without(departments.global_id())
         )
         .unwrap_err(),
         EvaluateError::MissingDimension(departments.global_id())
@@ -110,7 +109,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
             &checked(&unknown_attribute, division_result),
             division_result,
             &measures,
-            &dimensions
+            dimensions
         )
         .unwrap_err(),
         EvaluateError::MissingAttribute(AttributeGlobalId(Ulid(999)))
@@ -118,17 +117,15 @@ fn errors_name_what_the_evaluation_could_not_find() {
     let one_period = Dimension::try_new(
         periods.definition().clone(),
         periods.batch().slice(0, 1),
-        &[],
+        &Dimensions::default(),
     )
     .expect("the first period alone is a dimension");
+    let mut with_one_period = Fixture::dimensions_without(periods.global_id());
+    with_one_period
+        .try_push(one_period)
+        .expect("the periods were taken out");
     assert_eq!(
-        column_engine::evaluate(
-            &sales,
-            result,
-            &measures,
-            &[&one_period, departments, divisions]
-        )
-        .unwrap_err(),
+        column_engine::evaluate(&sales, result, &measures, &with_one_period).unwrap_err(),
         EvaluateError::MeasurePackingChanged(fixture.definition("売上").global_id())
     );
 }
@@ -136,7 +133,7 @@ fn errors_name_what_the_evaluation_could_not_find() {
 #[test]
 fn a_sum_that_overflows_on_every_cell_leaves_no_cell() {
     let fixture = Fixture::default();
-    let dimensions: Vec<&Dimension> = fixture.dimensions.iter().collect();
+    let dimensions = &fixture.dimensions;
     let measures: Vec<&Measure> = fixture.inputs.iter().collect();
 
     let huge = format!("1{}", "0".repeat(308));
@@ -145,7 +142,7 @@ fn a_sum_that_overflows_on_every_cell_leaves_no_cell() {
         &fixture.check(&format!("'売上' + {huge} + {huge}"), "結果"),
         fixture.definition("結果"),
         &measures,
-        &dimensions,
+        dimensions,
     )
     .expect("the formula evaluates");
 

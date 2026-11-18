@@ -289,11 +289,89 @@ impl fmt::Display for DimensionError {
 
 impl std::error::Error for DimensionError {}
 
+#[derive(Debug, Default)]
+pub struct Dimensions(Vec<Dimension>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuplicateDimension(pub DimensionGlobalId);
+
+impl fmt::Display for DuplicateDimension {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for DuplicateDimension {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MissingDimension(pub DimensionGlobalId);
+
+impl fmt::Display for MissingDimension {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for MissingDimension {}
+
+impl Dimensions {
+    pub fn try_new(dimensions: Vec<Dimension>) -> Result<Self, DuplicateDimension> {
+        let mut collection = Self(Vec::with_capacity(dimensions.len()));
+        for dimension in dimensions {
+            collection.try_push(dimension)?;
+        }
+        Ok(collection)
+    }
+
+    pub fn try_push(&mut self, dimension: Dimension) -> Result<(), DuplicateDimension> {
+        if self.get(dimension.global_id()).is_some() {
+            return Err(DuplicateDimension(dimension.global_id()));
+        }
+        self.0.push(dimension);
+        Ok(())
+    }
+
+    pub fn get(&self, global_id: DimensionGlobalId) -> Option<&Dimension> {
+        self.0
+            .iter()
+            .find(|dimension| dimension.global_id() == global_id)
+    }
+
+    pub fn require(&self, global_id: DimensionGlobalId) -> Result<&Dimension, MissingDimension> {
+        self.get(global_id).ok_or(MissingDimension(global_id))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Dimension> {
+        self.0.iter()
+    }
+
+    pub fn into_vec(self) -> Vec<Dimension> {
+        self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a Dimensions {
+    type Item = &'a Dimension;
+    type IntoIter = std::slice::Iter<'a, Dimension>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl Dimension {
     pub fn try_new(
         definition: DimensionDefinition,
         members: RecordBatch,
-        targets: &[&Dimension],
+        targets: &Dimensions,
     ) -> Result<Self, DimensionError> {
         let rows = u32::try_from(members.num_rows())
             .map_err(|_| DimensionError::TooManyMembers(members.num_rows()))?;
@@ -316,13 +394,13 @@ impl Dimension {
         }
 
         for attribute in reference_attributes(&definition, &members) {
-            let target_dimension = targets
-                .iter()
-                .find(|candidate| candidate.global_id() == attribute.target)
-                .ok_or_else(|| DimensionError::MissingTarget {
-                    attribute: attribute.name().into(),
-                    target: attribute.target,
-                })?;
+            let target_dimension =
+                targets
+                    .get(attribute.target)
+                    .ok_or_else(|| DimensionError::MissingTarget {
+                        attribute: attribute.name().into(),
+                        target: attribute.target,
+                    })?;
             for (row, value) in (0u32..).zip(attribute.values.iter()) {
                 if let Some(value) = value
                     && value >= target_dimension.len()

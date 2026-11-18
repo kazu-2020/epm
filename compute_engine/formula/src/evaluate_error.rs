@@ -1,6 +1,6 @@
 use std::fmt;
 
-use dimension::{AttributeGlobalId, DimensionGlobalId};
+use dimension::{AttributeGlobalId, DimensionGlobalId, MissingDimension};
 use measure::{MeasureError, MeasureGlobalId};
 
 #[derive(Debug, PartialEq)]
@@ -22,3 +22,9 @@ impl fmt::Display for EvaluateError {
 }
 
 impl std::error::Error for EvaluateError {}
+
+impl From<MissingDimension> for EvaluateError {
+    fn from(missing: MissingDimension) -> Self {
+        Self::MissingDimension(missing.0)
+    }
+}

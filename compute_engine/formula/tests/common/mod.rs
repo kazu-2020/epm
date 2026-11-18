@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use dimension::{
     AttributeDefinition, AttributeGlobalId, AttributeKind, Dimension, DimensionDefinition,
-    DimensionGlobalId, DimensionKind,
+    DimensionGlobalId, DimensionKind, Dimensions,
 };
 use measure::{MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
@@ -47,8 +47,8 @@ pub(crate) fn dimensions() -> Vec<DimensionDefinition> {
     ]
 }
 
-pub(crate) fn dimensions_with_members() -> Vec<Dimension> {
-    let mut loaded: Vec<Dimension> = Vec::new();
+pub(crate) fn dimensions_with_members() -> Dimensions {
+    let mut loaded = Dimensions::default();
     for definition in dimensions() {
         let (natural_keys, divisions): (&[&str], &[u32]) = match definition.name() {
             "期間" => (&["1月", "2月"], &[]),
@@ -73,10 +73,11 @@ pub(crate) fn dimensions_with_members() -> Vec<Dimension> {
         }
         let batch = RecordBatch::try_new(Arc::new(definition.schema()), columns)
             .expect("the columns match the dimension schema");
-        let targets: Vec<&Dimension> = loaded.iter().collect();
-        let dimension = Dimension::try_new(definition, batch, &targets)
+        let dimension = Dimension::try_new(definition, batch, &loaded)
             .expect("the fixture defines valid members");
-        loaded.push(dimension);
+        loaded
+            .try_push(dimension)
+            .expect("the fixture dimensions have distinct ULIDs");
     }
     loaded
 }

@@ -1,6 +1,5 @@
 use datagen::Configuration;
 use datagen::cases::exact;
-use dimension::Dimension;
 use measure::{Measure, MeasureDefinition};
 use oracle::Oracle;
 use proptest::prelude::*;
@@ -46,18 +45,18 @@ proptest! {
     #[test]
     fn evaluator_and_column_engine_agree_with_the_oracle(configuration in configurations()) {
         let workspace = datagen::generate(&configuration);
-        let dimensions: Vec<&Dimension> = workspace.dimensions.iter().collect();
+        let dimensions = &workspace.dimensions;
         let measure_definitions: Vec<MeasureDefinition> = workspace
             .inputs
             .iter()
             .map(|input| input.definition().clone())
             .chain(workspace.formulas.iter().map(|formula| formula.result.clone()))
             .collect();
-        let mut oracle = Oracle::new(&dimensions, &workspace.inputs.iter().collect::<Vec<_>>())
+        let mut oracle = Oracle::new(dimensions, &workspace.inputs.iter().collect::<Vec<_>>())
             .expect("the oracle loads the workspace");
         let mut measures: Vec<Measure> = workspace.inputs.clone();
         for Formula { result, text } in &workspace.formulas {
-            let compiled = workspace::compile(text, result, &measure_definitions, &dimensions);
+            let compiled = workspace::compile(text, result, &measure_definitions, dimensions);
             prop_assert!(compiled.is_ok(), "{}: {:?}", text, compiled.err());
             let checked = compiled.expect("the formula compiles");
 
@@ -65,14 +64,14 @@ proptest! {
                 &checked,
                 result,
                 &measures.iter().collect::<Vec<_>>(),
-                &dimensions,
+                dimensions,
             )
             .expect("the evaluator evaluates a checked formula");
             let column = column_engine::evaluate(
                 &checked,
                 result,
                 &measures.iter().collect::<Vec<_>>(),
-                &dimensions,
+                dimensions,
             )
             .expect("the column engine evaluates a checked formula");
             let expected = oracle

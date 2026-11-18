@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use dimension::{Dimension, DimensionGlobalId};
+use dimension::{DimensionGlobalId, Dimensions};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use ulid::Ulid;
 
@@ -30,7 +30,7 @@ pub fn write_measure(directory: &Path, measure: &Measure) -> std::io::Result<()>
     writer.finish().map_err(std::io::Error::other)
 }
 
-pub fn read_measures(directory: &Path, dimensions: &[&Dimension]) -> std::io::Result<Vec<Measure>> {
+pub fn read_measures(directory: &Path, dimensions: &Dimensions) -> std::io::Result<Vec<Measure>> {
     let mut paths: Vec<_> = std::fs::read_dir(directory)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<_, _>>()?;

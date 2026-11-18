@@ -5,7 +5,8 @@ use datagen::cases::exact;
 use datagen::numbered_dimension;
 use datagen::representative::{self, Size};
 use dimension::{
-    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberGlobalId, MemberIndex,
+    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, Dimensions, MemberGlobalId,
+    MemberIndex,
 };
 use formula::{AxisErrorKind, EvaluateError, ResolveErrorKind};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
@@ -79,8 +80,7 @@ static QUANTITY_CELL: LazyLock<Coordinate> = LazyLock::new(|| {
     let axes = input.definition().axes().iter().map(|&axis| {
         unchecked
             .dimensions
-            .iter()
-            .find(|dimension| dimension.global_id() == axis)
+            .get(axis)
             .expect("the axis is a dimension")
     });
     Coordinate::named(axes, &quantity_cell()).expect("the members exist")
@@ -147,14 +147,7 @@ fn formulas_that_read_each_other_in_a_cycle_are_an_error() {
 }
 
 #[test]
-fn two_dimensions_or_two_measures_with_one_id_are_an_error() {
-    assert_eq!(
-        error(|unchecked| {
-            let again = representative::dimensions(&Size::TINY, 7).remove(0);
-            unchecked.dimensions.push(again);
-        }),
-        WorkspaceError::DuplicateDimension(DimensionGlobalId(Ulid(1)))
-    );
+fn two_measures_with_one_id_are_an_error() {
     assert_eq!(
         error(|unchecked| {
             let result = &mut formula(unchecked, COST).result;
@@ -231,20 +224,20 @@ fn renamed(result: &mut MeasureDefinition, name: &str) {
 }
 
 fn dimension(id: u128, members: u32) -> Dimension {
-    numbered_dimension(id, members, DimensionKind::Ordinary, &[])
+    numbered_dimension(id, members, DimensionKind::Ordinary, &Dimensions::default())
 }
 
 #[test]
 fn a_result_in_the_middle_of_a_formula_wider_than_64_bits_is_an_error() {
     let wide = |text: &str| {
-        let dimensions: Vec<Dimension> = (1..=5).map(|id| dimension(id, 1 << 13)).collect();
-        let references: Vec<&Dimension> = dimensions.iter().collect();
+        let dimensions = Dimensions::try_new((1..=5).map(|id| dimension(id, 1 << 13)).collect())
+            .expect("each dimension has its own ULID");
         let axes = |ids: &[u128]| ids.iter().map(|&id| DimensionGlobalId(Ulid(id))).collect();
         let definition = |id: u128, name: &str, ids: &[u128]| {
             MeasureDefinition::try_new(MeasureGlobalId(Ulid(id)), name.into(), axes(ids)).unwrap()
         };
         let input = |id, name, ids: &[u128]| {
-            Measure::from_cells(definition(id, name, ids), Vec::new(), &references)
+            Measure::from_cells(definition(id, name, ids), Vec::new(), &dimensions)
                 .expect("39 bits fit in a packed coordinate")
         };
         let inputs = vec![input(11, "左", &[1, 2, 3]), input(12, "右", &[3, 4, 5])];
@@ -334,7 +327,7 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
 fn an_edit_gives_the_same_cell_under_a_definition_that_declares_the_axes_in_another_order() {
     let mut reversed = generated();
     let original = generated();
-    let dimensions: Vec<&Dimension> = original.dimensions.iter().collect();
+    let dimensions = &original.dimensions;
     let input = &reversed.inputs[0];
     let axes = input.definition().axes().iter().rev().copied().collect();
     let definition = MeasureDefinition::try_new(QUANTITY, input.definition().name().into(), axes)
@@ -346,7 +339,7 @@ fn an_edit_gives_the_same_cell_under_a_definition_that_declares_the_axes_in_anot
             (coordinate, value)
         })
         .collect();
-    reversed.inputs[0] = Measure::from_cells(definition, cells_reversed, &dimensions)
+    reversed.inputs[0] = Measure::from_cells(definition, cells_reversed, dimensions)
         .expect("the cells fit the reversed axes");
     let edited = |calculated: Calculated| {
         let mut edits = Edits::default();
@@ -417,12 +410,7 @@ fn a_workspace_gives_back_what_it_was_made_from() {
     let workspace = Workspace::try_new(generated()).expect("the representative model is valid");
     assert_eq!(workspace.dimensions().len(), generated().dimensions.len());
     assert_eq!(workspace.inputs().len(), generated().inputs.len());
-    assert!(
-        workspace
-            .dimensions()
-            .iter()
-            .any(|dimension| dimension.global_id() == PERIOD)
-    );
+    assert!(workspace.dimensions().get(PERIOD).is_some());
     let formulas: Vec<Formula> = workspace
         .formulas()
         .iter()
@@ -480,22 +468,25 @@ fn a_workspace_takes_only_inputs_of_its_definitions_and_dimensions() {
 
 #[test]
 fn an_input_of_a_dimension_of_another_kind_is_an_error() {
-    let ordinary = [dimension(1, 2), dimension(2, 2)];
+    let ordinary = || {
+        Dimensions::try_new(vec![dimension(1, 2), dimension(2, 2)])
+            .expect("each dimension has its own ULID")
+    };
     let definition = MeasureDefinition::try_new(
         MeasureGlobalId(Ulid(10)),
         "入力".into(),
-        ordinary.iter().map(Dimension::global_id).collect(),
+        ordinary().iter().map(Dimension::global_id).collect(),
     )
     .unwrap();
     let input = || {
         Measure::from_cells(
             definition.clone(),
             vec![([1, 0].map(MemberIndex).to_vec(), 1.0)],
-            &ordinary.iter().collect::<Vec<_>>(),
+            &ordinary(),
         )
         .expect("the cell fits the dimensions")
     };
-    let workspace = |dimensions: Vec<Dimension>, inputs: Vec<Measure>| {
+    let workspace = |dimensions: Dimensions, inputs: Vec<Measure>| {
         Workspace::try_new(UncheckedWorkspace {
             dimensions,
             inputs,
@@ -503,10 +494,11 @@ fn an_input_of_a_dimension_of_another_kind_is_an_error() {
         })
     };
     let calendar = || {
-        vec![
+        Dimensions::try_new(vec![
             dimension(1, 2),
-            numbered_dimension(2, 2, DimensionKind::Calendar, &[]),
-        ]
+            numbered_dimension(2, 2, DimensionKind::Calendar, &Dimensions::default()),
+        ])
+        .expect("each dimension has its own ULID")
     };
 
     assert_eq!(
@@ -515,19 +507,15 @@ fn an_input_of_a_dimension_of_another_kind_is_an_error() {
             definition.global_id()
         ))
     );
-    let made_for_calendar = Measure::from_cells(
-        definition.clone(),
-        Vec::new(),
-        &calendar().iter().collect::<Vec<_>>(),
-    )
-    .expect("an empty measure fits the dimensions");
+    let made_for_calendar = Measure::from_cells(definition.clone(), Vec::new(), &calendar())
+        .expect("an empty measure fits the dimensions");
     let unchanged = workspace(calendar(), vec![made_for_calendar])
         .expect("the input is of the dimensions")
         .with_inputs(vec![input()])
         .expect_err("the input is of dimensions of another kind");
     assert_eq!(unchanged.inputs()[0].cells().count(), 0);
     let same = input();
-    assert!(workspace(Vec::from(ordinary), vec![same]).is_ok());
+    assert!(workspace(ordinary(), vec![same]).is_ok());
 }
 
 #[test]
@@ -537,23 +525,20 @@ fn a_reference_attribute_outside_the_dimension_it_points_at_is_an_error() {
         dimension: DimensionGlobalId(Ulid(5)),
         attribute: AttributeGlobalId(Ulid(103)),
     };
-    let position = |unchecked: &UncheckedWorkspace| {
-        unchecked
-            .dimensions
+    let replace_divisions = |unchecked: &mut UncheckedWorkspace, replacement: Option<Dimension>| {
+        let mut dimensions = std::mem::take(&mut unchecked.dimensions).into_vec();
+        let position = dimensions
             .iter()
             .position(|dimension| dimension.global_id() == division)
-            .expect("the representative model has the divisions")
+            .expect("the representative model has the divisions");
+        dimensions.splice(position..=position, replacement);
+        unchecked.dimensions =
+            Dimensions::try_new(dimensions).expect("the replacement keeps the ULIDs distinct");
     };
 
-    let fewer = error(|unchecked| {
-        let position = position(unchecked);
-        unchecked.dimensions[position] = dimension(4, 2);
-    });
+    let fewer = error(|unchecked| replace_divisions(unchecked, Some(dimension(4, 2))));
     assert_eq!(fewer, expected);
-    let missing = error(|unchecked| {
-        let position = position(unchecked);
-        unchecked.dimensions.remove(position);
-    });
+    let missing = error(|unchecked| replace_divisions(unchecked, None));
     assert_eq!(missing, expected);
 }
 
@@ -567,7 +552,7 @@ fn a_workspace_global_id_is_one_ulid_in_any_case() {
 
 #[test]
 fn a_coordinate_names_a_member_by_its_global_id_in_whatever_row_the_member_is() {
-    let dimension = numbered_dimension(1, 3, DimensionKind::Ordinary, &[]);
+    let dimension = numbered_dimension(1, 3, DimensionKind::Ordinary, &Dimensions::default());
     let member = dimension
         .member(MemberIndex(1))
         .expect("three members")
@@ -575,7 +560,7 @@ fn a_coordinate_names_a_member_by_its_global_id_in_whatever_row_the_member_is() 
     let moved = Dimension::try_new(
         dimension.definition().clone(),
         dimension.batch().slice(1, 2),
-        &[],
+        &Dimensions::default(),
     )
     .expect("a valid dimension");
     let coordinate: Coordinate = [(dimension.global_id(), member)].into_iter().collect();
