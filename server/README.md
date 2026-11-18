@@ -61,7 +61,7 @@ The script uses a new workspace for each run. If a check fails, it exits with co
 
 All calls are `POST` with a JSON body. Each call needs these headers:
 
-- `content-type: application/json`. The server refuses other content types with 415, so a web page cannot send an edit to loopback without a CORS preflight.
+- `content-type: application/json`, or `application/proto` for the binary protobuf form. The server refuses other content types with 415, so a web page cannot send an edit to loopback without a CORS preflight.
 - `epm-workspace`: the WorkspaceGlobalId of the server, as a ULID.
 - `epm-epoch`: the epoch of the server, as a decimal number.
 
@@ -91,14 +91,16 @@ curl -X POST "${headers[@]}" "$api/GetLag" -d '{}'
 
 After a start, the server reads the log and then writes its fence. Until the server writes the fence, the four calls above return `unavailable`. A `GetLag` that is not `unavailable` shows that the server is ready (ADR 0012). After that, a `ReadCells` without `at_least` can still miss the newest commits, because the recalculation can be behind. To read your own edit, send the sequence from `SubmitEdit` as `at_least`.
 
-The errors in this table have the body `{"code": ..., "message": ...}` with a Connect code. Other errors, such as an unknown path (404), a method that is not `POST` (405), or a content type that is not JSON (415), do not have this body.
+The errors in this table have the body `{"code": ..., "message": ...}` with a Connect code. A method that is not `POST` (405) and a content type that the server refuses (415) do not have this body.
 
 | Error | Code | HTTP status |
 | --- | --- | --- |
 | Missing or wrong `epm-workspace` or `epm-epoch` | `failed_precondition` | 400 |
-| Malformed JSON, missing `value`, bad ULID, edit to a calculated measure, coordinate that does not name each axis once, member that is not in its dimension | `invalid_argument` | 400 |
+| Malformed JSON, unknown field, missing `value`, a value that is not a finite number or null, bad ULID, edit to a calculated measure, coordinate that does not name each axis once, member that is not in its dimension | `invalid_argument` | 400 |
 | Unknown measure in a read | `not_found` | 404 |
+| Unknown path | `unimplemented` | 404 |
 | The engine is too far behind, or the body is larger than 4 MB | `resource_exhausted` | 429 |
 | The server is loading the log, or the sequence is not committed yet | `unavailable` | 503 |
+| The request has `connect-timeout-ms`, and the time passed before the answer | `deadline_exceeded` | 504 |
 
-If you get 429 or 503, try again later. If you get `failed_precondition`, find the current process of the workspace and send the request there. When the assignee stops, the process exits and the connection closes.
+If you get 429 or 503, try again later. If a `SubmitEdit` gets `deadline_exceeded`, a timeout on your side, or a closed connection, the edit can still commit. Send it again with the same `request_id`. Then the server gives the same sequence and does not apply the edit two times. If you get `failed_precondition`, find the current process of the workspace and send the request there. When the assignee stops, the process exits and the connection closes.
