@@ -83,7 +83,6 @@ pub async fn serve(
         let _ = signal_receiver.await;
         tokio::time::sleep(deadline).await;
     };
-    // Not the future itself in this select: restore calculates without an await, and the accept loop must answer during it.
     let mut assignee = tokio::spawn(assignee);
     let stopped = tokio::select! {
         exit = &mut assignee => Shutdown::Assignee(

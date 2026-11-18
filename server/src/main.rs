@@ -49,7 +49,6 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Not later: as PID 1 in a container, the process ignores SIGTERM until it has a handler.
     let shutdown = first_signal();
     let listener = match tokio::net::TcpListener::bind(&arguments.listen).await {
         Ok(listener) => listener,
