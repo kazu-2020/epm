@@ -1,7 +1,7 @@
 mod cells;
 
 use dimension::{DimensionGlobalId, Dimensions};
-use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError, required_dimension};
+use formula::{CheckedAxis, CheckedExpression, CheckedNode, EvaluateError};
 use measure::{Measure, MeasureDefinition};
 
 use crate::cells::{ByAxis, Cells};
@@ -16,7 +16,7 @@ pub fn evaluate(
         return Err(EvaluateError::ResultAxesChanged(result.global_id()));
     }
     for &axis in result.axes() {
-        required_dimension(dimensions, axis)?;
+        dimensions.require(axis)?;
     }
     let evaluator = Evaluator {
         measures,
@@ -110,7 +110,8 @@ impl<'a> Evaluator<'a> {
                 output: target,
                 source: position(dimension),
                 attribute: Some(
-                    required_dimension(self.dimensions, dimension)?
+                    self.dimensions
+                        .require(dimension)?
                         .reference_attributes()
                         .find(|candidate| candidate.global_id() == attribute)
                         .ok_or(EvaluateError::MissingAttribute(attribute))?,

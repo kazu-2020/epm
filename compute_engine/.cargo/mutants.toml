@@ -1,7 +1,7 @@
 profile = "mutants"
 exclude_re = [
     "<impl fmt::Display for DimensionError>::fmt",
-    "<impl fmt::Display for DuplicateDimension>::fmt",
+    "<impl fmt::Display for (Duplicate|Missing)Dimension>::fmt",
     "<impl fmt::Display for DefinitionError>::fmt",
     "<impl fmt::Debug for (Text|Reference)Attribute",
     "<impl fmt::Display for MeasureError>::fmt",

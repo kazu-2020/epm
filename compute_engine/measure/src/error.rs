@@ -1,7 +1,7 @@
 use std::fmt;
 
 use arrow_schema::SchemaRef;
-use dimension::{DimensionGlobalId, MemberIndex};
+use dimension::{DimensionGlobalId, MemberIndex, MissingDimension};
 
 use crate::definition::MeasureGlobalId;
 
@@ -51,6 +51,12 @@ pub enum MeasureError {
     DuplicateCoordinate(usize),
     ForeignDelta(MeasureGlobalId),
     DeltaAxesMismatch,
+}
+
+impl From<MissingDimension> for MeasureError {
+    fn from(missing: MissingDimension) -> Self {
+        Self::MissingDimension(missing.0)
+    }
 }
 
 impl From<CoordinateError> for MeasureError {

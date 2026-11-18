@@ -343,6 +343,13 @@ impl Fixture {
         Dimensions::try_new(kept).expect("the fixture dimensions have distinct ULIDs")
     }
 
+    pub fn dimension(&self, name: &str) -> &Dimension {
+        self.dimensions
+            .iter()
+            .find(|dimension| dimension.name() == name)
+            .expect("the fixture defines every dimension a test names")
+    }
+
     pub fn definition(&self, name: &str) -> &MeasureDefinition {
         self.measure_definitions
             .iter()

@@ -84,9 +84,8 @@ fn errors_name_what_the_evaluation_could_not_find() {
     }
     let by_division_source = "SUM('売上', BY '部門'.'事業部', '期間')";
     let division_result = fixture.definition("事業部結果");
-    let [periods, _, departments] = fixture.dimensions.iter().collect::<Vec<_>>()[..] else {
-        panic!("the fixture has three dimensions");
-    };
+    let periods = fixture.dimension("期間");
+    let departments = fixture.dimension("部門");
     assert_eq!(
         column_engine::evaluate(
             &fixture.check(by_division_source, "事業部結果"),

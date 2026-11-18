@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use dimension::{DimensionGlobalId, Dimensions, MemberIndex, ReferenceAttribute};
-use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign, required_dimension};
+use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
 use measure::{Measure, MeasureDefinition, MeasureError, normalize};
 
 pub(crate) struct Cells {
@@ -188,7 +188,7 @@ impl Cells {
         let orders = self
             .axes
             .iter()
-            .map(|&axis| Ok(required_dimension(dimensions, axis)?.packing_order()))
+            .map(|&axis| Ok(dimensions.require(axis)?.packing_order()))
             .collect::<Result<Vec<_>, EvaluateError>>()?;
         let mut order: Vec<usize> = (0..self.axes.len()).collect();
         order.sort_by_key(|&axis| orders[axis]);
@@ -232,7 +232,8 @@ impl Cells {
             .map(
                 |&axis| match self.axes.iter().position(|&own| own == axis) {
                     Some(position) => Ok(Source::Kept(position)),
-                    None => required_dimension(dimensions, axis)
+                    None => dimensions
+                        .require(axis)
                         .map(|dimension| Source::Repeated(dimension.len())),
                 },
             )

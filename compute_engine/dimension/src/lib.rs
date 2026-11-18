@@ -303,6 +303,17 @@ impl fmt::Display for DuplicateDimension {
 
 impl std::error::Error for DuplicateDimension {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MissingDimension(pub DimensionGlobalId);
+
+impl fmt::Display for MissingDimension {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for MissingDimension {}
+
 impl Dimensions {
     pub fn try_new(dimensions: Vec<Dimension>) -> Result<Self, DuplicateDimension> {
         let mut collection = Self(Vec::with_capacity(dimensions.len()));
@@ -324,6 +335,10 @@ impl Dimensions {
         self.0
             .iter()
             .find(|dimension| dimension.global_id() == global_id)
+    }
+
+    pub fn require(&self, global_id: DimensionGlobalId) -> Result<&Dimension, MissingDimension> {
+        self.get(global_id).ok_or(MissingDimension(global_id))
     }
 
     pub fn len(&self) -> usize {

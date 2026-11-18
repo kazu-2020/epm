@@ -3,10 +3,8 @@ use std::iter;
 use std::ops::Range;
 
 use arrow_buffer::ScalarBuffer;
-use dimension::{
-    Dimension, DimensionGlobalId, Dimensions, MemberIndex, ReferenceAttribute, usize_from,
-};
-use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign, required_dimension};
+use dimension::{DimensionGlobalId, Dimensions, MemberIndex, ReferenceAttribute, usize_from};
+use formula::{EvaluateError, FilteredAxis, ProductOperator, Sign};
 use measure::{CoordinatePacking, Measure, MeasureDefinition, MeasureError, normalize};
 use rayon::prelude::*;
 
@@ -47,8 +45,7 @@ pub(crate) fn sort_in_packing_order<T>(
     dimensions: &Dimensions,
 ) -> Result<(), EvaluateError> {
     for item in items.iter() {
-        let global_id = axis(item);
-        required_dimension(dimensions, global_id)?;
+        dimensions.require(axis(item))?;
     }
     items.sort_by_cached_key(|item| {
         dimensions
@@ -64,7 +61,7 @@ fn member_counts(
     axes: &[DimensionGlobalId],
 ) -> Result<Vec<u32>, EvaluateError> {
     axes.iter()
-        .map(|&axis| required_dimension(dimensions, axis).map(Dimension::len))
+        .map(|&axis| Ok(dimensions.require(axis)?.len()))
         .collect()
 }
 
@@ -920,7 +917,7 @@ impl Columns {
             if spread_axes.contains(&axis) {
                 continue;
             }
-            let member_count = required_dimension(dimensions, axis)?.len();
+            let member_count = dimensions.require(axis)?.len();
             let copies = usize_from(member_count);
             for column in &mut members {
                 *column = column
@@ -977,11 +974,7 @@ mod tests {
     fn adding_terms_on_the_same_coordinates_keeps_their_packed_coordinates() {
         let fixture = datagen::cases::Fixture::default();
         let dimensions = &fixture.dimensions;
-        let axis = dimensions
-            .iter()
-            .find(|dimension| dimension.name() == "部門")
-            .expect("the fixture has departments")
-            .global_id();
+        let axis = fixture.dimension("部門").global_id();
         let packing = CoordinatePacking::new(&[3]).expect("2 bits fit in a packed coordinate");
         let sales = Columns::from_packed(vec![axis], packing, vec![0, 1, 2], vec![3.0, 4.0, 5.0]);
         let cost = Columns {

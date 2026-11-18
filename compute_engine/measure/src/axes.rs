@@ -23,10 +23,7 @@ impl Axes {
     ) -> Result<Arc<Axes>, MeasureError> {
         let mut sorted = Vec::with_capacity(definition.axes().len());
         for &axis in definition.axes() {
-            let dimension = dimensions
-                .get(axis)
-                .ok_or(MeasureError::MissingDimension(axis))?;
-            sorted.push(dimension);
+            sorted.push(dimensions.require(axis)?);
         }
         sorted.sort_by_key(|dimension| dimension.packing_order());
         let member_counts: Vec<u32> = sorted.iter().map(|dimension| dimension.len()).collect();
