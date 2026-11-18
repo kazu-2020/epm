@@ -222,10 +222,11 @@ impl Interceptor for Destination {
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
         let header = |name| {
-            request
-                .ctx
-                .header(name)
-                .and_then(|value| value.to_str().ok())
+            let mut values = request.ctx.headers().get_all(name).iter();
+            match (values.next(), values.next()) {
+                (Some(value), None) => value.to_str().ok(),
+                _ => None,
+            }
         };
         let workspace = header(WORKSPACE_HEADER).and_then(|text| text.parse().ok());
         let epoch = header(EPOCH_HEADER).and_then(|text| text.parse().ok().map(Epoch));

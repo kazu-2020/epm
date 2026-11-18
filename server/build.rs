@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use prost::Message;
-use prost_types::FileDescriptorSet;
+use prost_types::{FileDescriptorSet, field_descriptor_proto::Type};
 
 fn main() {
     // Not protoc or buf through connectrpc-build: it needs one of them on PATH, and this container and the CI image have neither.
@@ -50,7 +50,7 @@ fn request_messages(descriptors: &FileDescriptorSet) -> BTreeSet<String> {
     while let Some(name) = pending.pop() {
         let Some((_, message)) = messages.iter().find(|(candidate, _)| *candidate == name) else {
             assert!(
-                name.is_empty() || name.starts_with(".google."),
+                name.starts_with(".google."),
                 "{name} is in a request, and this script does not find it to refuse its unknown fields"
             );
             continue;
@@ -60,6 +60,7 @@ fn request_messages(descriptors: &FileDescriptorSet) -> BTreeSet<String> {
                 message
                     .field
                     .iter()
+                    .filter(|field| field.r#type() == Type::Message)
                     .map(|field| field.type_name().to_owned()),
             );
         }

@@ -523,7 +523,7 @@ async fn a_binary_value_that_json_cannot_hold_is_invalid_argument_and_clears_not
     );
 }
 
-fn wrong_destinations() -> [(&'static str, Vec<(&'static str, String)>); 6] {
+fn wrong_destinations() -> [(&'static str, Vec<(&'static str, String)>); 8] {
     let workspace = support::WORKSPACE.to_string();
     let other_workspace = WorkspaceGlobalId(Ulid(2)).to_string();
     [
@@ -533,6 +533,22 @@ fn wrong_destinations() -> [(&'static str, Vec<(&'static str, String)>); 6] {
         ("older epoch", destination(&workspace, "0")),
         ("workspace not a ULID", destination("workspace~", "1")),
         ("epoch not a number", destination(&workspace, "one")),
+        (
+            "workspace twice",
+            [
+                destination(&workspace, "1"),
+                vec![(WORKSPACE_HEADER, other_workspace.clone())],
+            ]
+            .concat(),
+        ),
+        (
+            "epoch twice",
+            [
+                destination(&workspace, "1"),
+                vec![(EPOCH_HEADER, "0".to_owned())],
+            ]
+            .concat(),
+        ),
     ]
 }
 

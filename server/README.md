@@ -61,7 +61,7 @@ The script uses a new workspace for each run. If a check fails, it exits with co
 
 All calls are `POST` with a JSON body. Each call needs these headers:
 
-- `content-type: application/json`, or `application/proto` for the binary protobuf form. The server refuses other content types with 415, so a web page cannot send an edit to loopback without a CORS preflight.
+- `content-type: application/json`, or `application/proto` for the binary protobuf form. connectrpc also takes the gRPC and gRPC-Web content types (`application/grpc*`), and gives their errors in trailers with status 200. The server refuses other content types with 415, so a web page cannot send an edit to loopback without a CORS preflight.
 - `epm-workspace`: the WorkspaceGlobalId of the server, as a ULID.
 - `epm-epoch`: the epoch of the server, as a decimal number.
 
