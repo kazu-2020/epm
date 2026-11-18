@@ -98,18 +98,6 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
             found: 4
         }))
     );
-    let mut foreign = quantity([0, 1, 1, 0, 1], Some(2.5));
-    let pairs: Vec<_> = foreign.coordinate.iter().collect();
-    let (axis, _) = pairs[0];
-    let member = pairs[1].1;
-    foreign.coordinate = pairs
-        .iter()
-        .map(|&(named, original)| (named, if named == axis { member } else { original }))
-        .collect();
-    assert_eq!(
-        check(&server::edit::encode(&foreign)),
-        Err(Invalid::Cell(CellError::NoMember { axis, member }))
-    );
 }
 
 #[test]

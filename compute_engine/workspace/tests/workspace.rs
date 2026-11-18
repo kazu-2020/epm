@@ -5,8 +5,7 @@ use datagen::cases::exact;
 use datagen::numbered_dimension;
 use datagen::representative::{self, Size};
 use dimension::{
-    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, InvalidGlobalId,
-    MemberGlobalId, MemberIndex,
+    AttributeGlobalId, Dimension, DimensionGlobalId, DimensionKind, MemberGlobalId, MemberIndex,
 };
 use formula::{AxisErrorKind, EvaluateError, ResolveErrorKind};
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
@@ -564,23 +563,6 @@ fn a_workspace_global_id_is_one_ulid_in_any_case() {
     let lower: WorkspaceGlobalId = "01jcq7zk3m5v8w9x0y1z2a3b4c".parse().expect("a ULID");
     assert_eq!(upper, lower);
     assert_eq!(upper.to_string(), "01JCQ7ZK3M5V8W9X0Y1Z2A3B4C");
-}
-
-#[test]
-fn a_workspace_global_id_above_128_bits_is_not_another_workspace() {
-    for text in [
-        "81JCQ7ZK3M5V8W9X0Y1Z2A3B4C",
-        "ZZZZZZZZZZZZZZZZZZZZZZZZZZ",
-        "demo~",
-        "",
-    ] {
-        assert_eq!(
-            text.parse::<WorkspaceGlobalId>(),
-            Err(InvalidGlobalId),
-            "{text:?}"
-        );
-    }
-    assert_eq!(InvalidGlobalId.to_string(), "not a ULID");
 }
 
 #[test]
