@@ -168,7 +168,7 @@ impl common::Server for Assignees {
                 // Not only the changes: an assignee from a snapshot starts with its commits recalculated.
                 let engine_receiver = handle
                     .engine_receiver()
-                    .expect("a started assignee is ready");
+                    .expect("start gives a started assignee");
                 let first = engine_receiver.borrow().recalculated();
                 stream::once(std::future::ready(first)).chain(stream::unfold(
                     engine_receiver,

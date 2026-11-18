@@ -81,13 +81,13 @@ pub enum ReadError {
 
 #[derive(Clone, Debug)]
 pub struct Handle {
-    ready: watch::Receiver<Option<Arc<Ready>>>,
+    started: watch::Receiver<Option<Arc<Started>>>,
     pub(crate) workspace: WorkspaceGlobalId,
     pub(crate) epoch: Epoch,
 }
 
 #[derive(Debug)]
-struct Ready {
+struct Started {
     submission_sender: mpsc::Sender<Submission<Rejection>>,
     engine_receiver: watch::Receiver<Arc<Engine>>,
     committed: watch::Sender<Committed>,
@@ -126,6 +126,23 @@ pub fn start(
     workspace: WorkspaceGlobalId,
     id: AssigneeId,
 ) -> (Handle, impl Future<Output = Exit>) {
+    let (started, run) = run(engine, start, settings, store, workspace, id);
+    let handle = Handle {
+        started: watch::channel(Some(started)).1,
+        workspace,
+        epoch: id.epoch,
+    };
+    (handle, run)
+}
+
+fn run(
+    engine: Engine,
+    start: Start,
+    settings: Settings,
+    store: Arc<dyn ObjectStore>,
+    workspace: WorkspaceGlobalId,
+    id: AssigneeId,
+) -> (Arc<Started>, impl Future<Output = Exit>) {
     assert!(
         engine.next.index() == start.request_ids.len() && engine.slot == start.slot,
         "the engine starts where the change log starts"
@@ -144,18 +161,13 @@ pub fn start(
         busy_after: settings.busy_after,
         committed: committed.clone(),
     };
-    let ready = Ready {
+    let started = Arc::new(Started {
         submission_sender,
         engine_receiver,
         committed: committed.clone(),
         #[cfg(feature = "apply_before_commit")]
         commit_sender: commit_sender.clone(),
-    };
-    let handle = Handle {
-        ready: watch::channel(Some(Arc::new(ready))).1,
-        workspace,
-        epoch: id.epoch,
-    };
+    });
     let request_ids = start.request_ids.clone();
     let workspace = workspace.to_string();
     let run = async move {
@@ -181,40 +193,32 @@ pub fn start(
             }
         }
     };
-    (handle, run)
+    (started, run)
 }
 
 pub fn launch(
     store: Arc<dyn ObjectStore>,
-    workspace_global_id: WorkspaceGlobalId,
+    global_id: WorkspaceGlobalId,
     workspace: Workspace,
     settings: Settings,
     id: AssigneeId,
 ) -> (Handle, impl Future<Output = Exit>) {
-    let (ready_sender, ready) = watch::channel(None);
+    let (started_sender, started) = watch::channel(None);
     let handle = Handle {
-        ready,
-        workspace: workspace_global_id,
+        started,
+        workspace: global_id,
         epoch: id.epoch,
     };
-    let run = async move {
-        let (engine, start_of_log) =
-            match restore(store.as_ref(), workspace_global_id, workspace).await {
-                Ok(restored) => restored,
-                Err(error) => return Exit::Calculate(error),
-            };
-        let (started, run) = start(
-            engine,
-            start_of_log,
-            settings,
-            store,
-            workspace_global_id,
-            id,
-        );
-        ready_sender.send_replace(started.ready.borrow().clone());
+    let launched = async move {
+        let (engine, start_of_log) = match restore(store.as_ref(), global_id, workspace).await {
+            Ok(restored) => restored,
+            Err(error) => return Exit::Calculate(error),
+        };
+        let (started, run) = run(engine, start_of_log, settings, store, global_id, id);
+        started_sender.send_replace(Some(started));
         run.await
     };
-    (handle, run)
+    (handle, launched)
 }
 
 async fn apply(
@@ -365,10 +369,10 @@ impl Handle {
         request_id: RequestId,
         edit: &Edit,
     ) -> Result<Sequence, SubmitError> {
-        match self.ready() {
-            Some(ready) => ready.submit(request_id, edit).await,
-            None => Err(SubmitError::Loading),
-        }
+        self.started()
+            .ok_or(SubmitError::Loading)?
+            .submit(request_id, edit)
+            .await
     }
 
     pub async fn read(
@@ -376,42 +380,43 @@ impl Handle {
         at_least: Option<Sequence>,
         cells: &[(MeasureGlobalId, Coordinate)],
     ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
-        match self.ready() {
-            Some(ready) => ready.read(at_least, cells).await,
-            None => Err(ReadError::Loading),
-        }
+        self.started()
+            .ok_or(ReadError::Loading)?
+            .read(at_least, cells)
+            .await
     }
 
     pub fn lag(&self) -> Result<Lag, Loading> {
-        self.ready().ok_or(Loading)?.lag()
+        self.started().ok_or(Loading)?.lag()
     }
 
     pub fn definitions(&self) -> Result<Arc<Engine>, Loading> {
-        self.ready().ok_or(Loading)?.definitions()
+        self.started().ok_or(Loading)?.definitions()
     }
 
     pub async fn wait_loaded(&self) -> Result<(), Stopped> {
-        let ready = self
-            .ready
+        let started = self
+            .started
             .clone()
             .wait_for(Option::is_some)
             .await
             .map_err(|_| Stopped)?
             .clone()
-            .expect("wait_for gives a ready assignee");
-        ready.wait_loaded().await
+            .expect("wait_for gives a started assignee");
+        started.wait_loaded().await
     }
 
     pub fn engine_receiver(&self) -> Option<watch::Receiver<Arc<Engine>>> {
-        self.ready().map(|ready| ready.engine_receiver.clone())
+        self.started()
+            .map(|started| started.engine_receiver.clone())
     }
 
-    fn ready(&self) -> Option<Arc<Ready>> {
-        self.ready.borrow().clone()
+    fn started(&self) -> Option<Arc<Started>> {
+        self.started.borrow().clone()
     }
 }
 
-impl Ready {
+impl Started {
     async fn submit(&self, request_id: RequestId, edit: &Edit) -> Result<Sequence, SubmitError> {
         if self.next_sequence().is_err() {
             return Err(if self.submission_sender.is_closed() {
