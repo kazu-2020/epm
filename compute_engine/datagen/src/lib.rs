@@ -147,12 +147,7 @@ impl Generator<'_> {
         let member_counts: Vec<u32> = definition
             .axes()
             .iter()
-            .map(|&axis| {
-                dimensions
-                    .get(axis)
-                    .expect("generated axes are generated dimensions")
-                    .len()
-            })
+            .map(|&axis| generated(dimensions, axis).len())
             .collect();
         let mut cells = BTreeMap::new();
         for _ in 0..self.configuration.cells_per_input {
@@ -178,6 +173,12 @@ impl Generator<'_> {
             magnitude
         }
     }
+}
+
+pub(crate) fn generated(dimensions: &Dimensions, axis: DimensionGlobalId) -> &Dimension {
+    dimensions
+        .get(axis)
+        .expect("generated axes are generated dimensions")
 }
 
 // Not a random ULID: drawing one more would change every model that an existing seed generates.

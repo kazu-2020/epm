@@ -5,7 +5,7 @@ use rand::RngExt;
 use rand::seq::{IndexedRandom, index};
 use workspace::Formula;
 
-use crate::Generator;
+use crate::{Generator, generated};
 
 const NUMBERS: [&str; 7] = ["0", "1", "2", "3", "10", "0.5", "1.5"];
 
@@ -160,10 +160,7 @@ impl Formulas<'_, '_, '_> {
 
     fn filter(&mut self, value: Generated) -> Generated {
         let position = self.generator.random.random_range(0..value.axes.len());
-        let filtered = self
-            .dimensions
-            .get(value.axes[position])
-            .expect("generated axes are generated dimensions");
+        let filtered = generated(self.dimensions, value.axes[position]);
         let count = self
             .generator
             .random
@@ -204,10 +201,7 @@ impl Formulas<'_, '_, '_> {
         let mut outputs: Vec<DimensionGlobalId> = Vec::new();
         let mut by: Vec<String> = Vec::new();
         for &axis in &value.axes {
-            let source = self
-                .dimensions
-                .get(axis)
-                .expect("generated axes are generated dimensions");
+            let source = generated(self.dimensions, axis);
             let mut options: Vec<(DimensionGlobalId, String)> = Vec::new();
             if allowed.contains(&axis) {
                 options.push((axis, quote(source.name())));
