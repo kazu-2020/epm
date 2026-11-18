@@ -362,6 +362,11 @@ mod tests {
     }
 
     #[test]
+    fn the_commits_since_an_earlier_count_are_the_difference() {
+        assert_eq!(CommitCount(3).since(CommitCount(1)), 2);
+    }
+
+    #[test]
     fn a_length_past_the_end_is_an_error() {
         let mut huge = b"CLOG\x02\x01\0\0\0\0\0\0\0\0\xff\xff\xff\xff".to_vec();
         assert_eq!(
