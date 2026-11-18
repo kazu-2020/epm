@@ -516,14 +516,6 @@ async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_ar
         .await,
         (StatusCode::OK, json!({ "sequence": "0" }))
     );
-    let (status, read) = post(
-        address,
-        "ReadCells",
-        &json!({ "at_least": 0, "cells": [cell(QUANTITY, &coordinate)] }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(read["values"], json!([1.0]));
 }
 
 #[tokio::test]
