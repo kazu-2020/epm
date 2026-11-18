@@ -20,7 +20,7 @@ use object_store::{
 };
 use serde_json::{Value, json};
 use server::Settings;
-use server::http::Shutdown;
+use server::http::{EPOCH_HEADER, Shutdown, WORKSPACE_HEADER};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, oneshot};
@@ -153,7 +153,8 @@ async fn send_submit_edit(address: SocketAddr) -> TcpStream {
     .to_string();
     // Not HTTP/1.1: the Connect response body is chunked, and this test reads the body as it is.
     let request = format!(
-        "POST /epm.v1.Workspace/SubmitEdit HTTP/1.0\r\nhost: test\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        "POST /epm.v1.Workspace/SubmitEdit HTTP/1.0\r\nhost: test\r\ncontent-type: application/json\r\n{WORKSPACE_HEADER}: {}\r\n{EPOCH_HEADER}: 1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        support::WORKSPACE,
         body.len()
     );
     let mut stream = TcpStream::connect(address).await.expect("a connection");

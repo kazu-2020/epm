@@ -14,9 +14,11 @@ use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use object_store::throttle::{ThrottleConfig, ThrottledStore};
 use serde_json::{Value, json};
+use server::http::{EPOCH_HEADER, WORKSPACE_HEADER};
 use server::{Calculation, Handle, Settings};
 use tower::ServiceExt;
 use ulid::Ulid;
+use workspace::WorkspaceGlobalId;
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
@@ -26,6 +28,7 @@ struct App {
     router: Router,
     coordinate: Vec<Value>,
     quantity: f64,
+    destination: Vec<(&'static str, String)>,
 }
 
 async fn app(settings: Settings) -> App {
@@ -59,16 +62,34 @@ fn app_on(settings: Settings, store: Arc<dyn ObjectStore>, epoch: u64) -> App {
         handle,
         coordinate,
         quantity,
+        destination: destination(&support::WORKSPACE.to_string(), &epoch.to_string()),
     }
 }
 
-async fn call(app: &App, method: &str, body: Value) -> (StatusCode, Value) {
-    call_as(app, method, "application/json", body).await
+fn destination(workspace: &str, epoch: &str) -> Vec<(&'static str, String)> {
+    vec![
+        (WORKSPACE_HEADER, workspace.to_owned()),
+        (EPOCH_HEADER, epoch.to_owned()),
+    ]
 }
 
-async fn call_as(app: &App, method: &str, content_type: &str, body: Value) -> (StatusCode, Value) {
-    let request = Request::post(format!("/epm.v1.Workspace/{method}"))
-        .header(CONTENT_TYPE, content_type)
+async fn call(app: &App, method: &str, body: Value) -> (StatusCode, Value) {
+    call_as(app, method, "application/json", &app.destination, body).await
+}
+
+async fn call_as(
+    app: &App,
+    method: &str,
+    content_type: &str,
+    headers: &[(&str, String)],
+    body: Value,
+) -> (StatusCode, Value) {
+    let mut request =
+        Request::post(format!("/epm.v1.Workspace/{method}")).header(CONTENT_TYPE, content_type);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    let request = request
         .body(Body::from(body.to_string()))
         .expect("a request");
     let response = app
@@ -228,6 +249,7 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
         &app,
         "SubmitEdit",
         "text/plain",
+        &app.destination,
         edit("r6", QUANTITY, &app.coordinate, Some(1.0)),
     )
     .await;
@@ -399,4 +421,87 @@ async fn a_coordinate_names_its_axes_in_any_order() {
     .await;
     assert_eq!(status, StatusCode::OK, "{read}");
     assert_eq!(read["values"][0], json!(app.quantity));
+}
+
+fn wrong_destinations() -> [(&'static str, Vec<(&'static str, String)>); 6] {
+    let workspace = support::WORKSPACE.to_string();
+    let other_workspace = WorkspaceGlobalId(Ulid(2)).to_string();
+    [
+        ("no workspace", vec![(EPOCH_HEADER, "1".to_owned())]),
+        ("no epoch", vec![(WORKSPACE_HEADER, workspace.clone())]),
+        ("other workspace", destination(&other_workspace, "1")),
+        ("older epoch", destination(&workspace, "0")),
+        ("workspace not a ULID", destination("workspace~", "1")),
+        ("epoch not a number", destination(&workspace, "one")),
+    ]
+}
+
+fn every_operation(app: &App) -> [(&'static str, Value); 4] {
+    [
+        (
+            "SubmitEdit",
+            edit("r1", QUANTITY, &app.coordinate, Some(1.0)),
+        ),
+        (
+            "ReadCells",
+            json!({ "cells": [cell(QUANTITY, &app.coordinate)] }),
+        ),
+        ("ListDefinitions", json!({})),
+        ("GetLag", json!({})),
+    ]
+}
+
+#[tokio::test]
+async fn a_call_for_another_workspace_or_epoch_is_failed_precondition_and_commits_nothing() {
+    let app = app(Settings::default()).await;
+    for (method, body) in every_operation(&app) {
+        for (case, headers) in wrong_destinations() {
+            let (status, failure) =
+                call_as(&app, method, "application/json", &headers, body.clone()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{method} with {case}");
+            assert_eq!(
+                failure,
+                json!({
+                    "code": "failed_precondition",
+                    "message": format!("this assignee serves workspace {} at epoch 1", support::WORKSPACE),
+                }),
+                "{method} with {case}"
+            );
+        }
+    }
+    assert_eq!(
+        call(&app, "GetLag", json!({})).await,
+        (StatusCode::OK, json!({})),
+        "no edit entered the log"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_call_for_another_epoch_is_failed_precondition_while_the_change_log_is_loading() {
+    let config = ThrottleConfig {
+        wait_list_per_call: Duration::from_secs(3),
+        ..ThrottleConfig::default()
+    };
+    let store = ThrottledStore::new(InMemory::new(), config);
+    let second = app_on(Settings::default(), Arc::new(store), 2);
+    for (method, body) in every_operation(&second) {
+        let (status, failure) = call_as(
+            &second,
+            method,
+            "application/json",
+            &destination(&support::WORKSPACE.to_string(), "1"),
+            body,
+        )
+        .await;
+        assert_eq!(
+            (status, failure["code"].clone()),
+            (StatusCode::BAD_REQUEST, json!("failed_precondition")),
+            "{method} from the process of epoch 1 is not taken as loading"
+        );
+    }
+    assert_eq!(
+        refusal(&second, "GetLag", json!({})).await,
+        (StatusCode::SERVICE_UNAVAILABLE, json!("unavailable")),
+        "the change log is still loading"
+    );
 }

@@ -6,13 +6,14 @@ use std::time::Duration;
 use axum::Router;
 use buffa_types::google::protobuf::Value;
 use bytes::Bytes;
-use change_log::{RequestId, Sequence};
+use change_log::{Epoch, RequestId, Sequence};
+use connectrpc::interceptor::{Interceptor, Next, UnaryRequest, UnaryResponse};
 use connectrpc::{ConnectError, RequestContext, Response, ServiceRequest, ServiceResult};
 use dimension::{InvalidGlobalId, MemberIndex};
 use measure::MeasureGlobalId;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use workspace::Coordinate;
+use workspace::{Coordinate, WorkspaceGlobalId};
 
 use crate::{Edit, Exit, Handle, Invalid, Loading, ReadError, Rejection, SubmitError};
 
@@ -36,8 +37,16 @@ use proto::epm::v1::{
     SubmitEditRequest, SubmitEditResponse, Workspace,
 };
 
+pub const WORKSPACE_HEADER: &str = "epm-workspace";
+pub const EPOCH_HEADER: &str = "epm-epoch";
+
 // Not only the body limit: the change log keeps every Request ID, and each new assignee reads them all again.
 const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
+
+struct Destination {
+    workspace: WorkspaceGlobalId,
+    epoch: Epoch,
+}
 
 #[derive(Debug)]
 pub enum Shutdown {
@@ -47,9 +56,15 @@ pub enum Shutdown {
 }
 
 pub fn router(handle: Handle) -> Router {
-    connectrpc::Router::new()
+    let destination = Destination {
+        workspace: handle.workspace,
+        epoch: handle.epoch,
+    };
+    let service = connectrpc::Router::new()
         .add_service(Arc::new(handle))
-        .into_axum_router()
+        .into_axum_service()
+        .with_interceptor(destination);
+    Router::new().fallback_service(service)
 }
 
 pub async fn serve(
@@ -195,6 +210,32 @@ impl Workspace for Handle {
             recalculated: lag.recalculated.map(|sequence| sequence.0),
             ..Default::default()
         })
+    }
+}
+
+// Not unavailable for a wrong process that is loading: the App server would wait for it as if it were the right one (ADR 0012).
+#[connectrpc::async_trait]
+impl Interceptor for Destination {
+    async fn intercept_unary(
+        &self,
+        request: UnaryRequest,
+        next: Next<'_>,
+    ) -> Result<UnaryResponse, ConnectError> {
+        let header = |name| {
+            request
+                .ctx
+                .header(name)
+                .and_then(|value| value.to_str().ok())
+        };
+        let workspace = header(WORKSPACE_HEADER).and_then(|text| text.parse().ok());
+        let epoch = header(EPOCH_HEADER).and_then(|text| text.parse().ok().map(Epoch));
+        if (workspace, epoch) != (Some(self.workspace), Some(self.epoch)) {
+            return Err(ConnectError::failed_precondition(format!(
+                "this assignee serves workspace {} at epoch {}",
+                self.workspace, self.epoch.0
+            )));
+        }
+        next.run(request).await
     }
 }
 
