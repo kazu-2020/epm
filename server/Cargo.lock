@@ -2527,6 +2527,7 @@ dependencies = [
  "object_store",
  "oracle",
  "prost",
+ "prost-types",
  "protox",
  "rayon",
  "serde",

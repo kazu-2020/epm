@@ -230,11 +230,17 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
     bad_global_id["measure"] = json!("not a ULID");
     let mut global_id_above_128_bits = edit("r7", QUANTITY, &app.coordinate, Some(1.0));
     global_id_above_128_bits["measure"] = json!(format!("8{}", &QUANTITY.to_string()[1..]));
+    let mut unknown_field = edit("r4", QUANTITY, &app.coordinate, Some(1.0));
+    unknown_field["note"] = json!("x");
+    let mut unknown_field_in_coordinate = edit("r8", QUANTITY, &app.coordinate, Some(1.0));
+    unknown_field_in_coordinate["coordinate"][0]["note"] = json!("x");
     let long_request_id = "r".repeat(129);
     for body in [
         no_value,
         bad_global_id,
         global_id_above_128_bits,
+        unknown_field,
+        unknown_field_in_coordinate,
         edit("", QUANTITY, &app.coordinate, Some(1.0)),
         edit(&long_request_id, QUANTITY, &app.coordinate, Some(1.0)),
         edit("r5", QUANTITY, &app.coordinate[1..], Some(1.0)),
@@ -421,6 +427,23 @@ async fn a_coordinate_names_its_axes_in_any_order() {
     .await;
     assert_eq!(status, StatusCode::OK, "{read}");
     assert_eq!(read["values"][0], json!(app.quantity));
+}
+
+#[tokio::test]
+async fn a_misspelled_field_is_invalid_argument_and_not_a_read_without_freshness() {
+    let app = app(Settings::default()).await;
+    let cells = [cell(QUANTITY, &app.coordinate)];
+    for (method, body) in [
+        ("ReadCells", json!({ "at_lest": 0, "cells": cells })),
+        ("GetLag", json!({ "note": "x" })),
+        ("ListDefinitions", json!({ "note": "x" })),
+    ] {
+        assert_eq!(
+            refusal(&app, method, body).await,
+            (StatusCode::BAD_REQUEST, json!("invalid_argument")),
+            "{method}"
+        );
+    }
 }
 
 fn wrong_destinations() -> [(&'static str, Vec<(&'static str, String)>); 6] {

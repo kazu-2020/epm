@@ -87,7 +87,7 @@ curl -X POST "${headers[@]}" "$api/GetLag" -d '{}'
 - `GetLag` returns the last committed and the last recalculated sequence.
 - The responses follow the JSON form of protobuf. A sequence is a string, because a JSON number cannot hold each 64-bit value. A request can send a sequence as a number or a string.
 - A response leaves out a field that has no value. For example, `recalculated` and `committed` are not in the response until the first commit is recalculated or committed, and `GetLag` returns `{}` before the first commit.
-- The server ignores unknown fields in a request. Thus a misspelled `at_least` reads the values that are published now.
+- The server refuses an unknown field in a JSON request with `invalid_argument`. Thus a misspelled `at_least` does not read old values.
 
 After a start, the server reads the log and then writes its fence. Until the fence is written, the four calls above return `unavailable`. A `GetLag` that is not `unavailable` shows that the server is ready (ADR 0012). After that, a `ReadCells` without `at_least` can still miss the newest commits, because the recalculation can be behind. To read your own edit, send the sequence from `SubmitEdit` as `at_least`.
 
