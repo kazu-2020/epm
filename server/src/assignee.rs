@@ -12,10 +12,11 @@ use measure::MeasureGlobalId;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode};
 use tokio::sync::{mpsc, oneshot, watch};
-use workspace::{CellError, Coordinate, EditCheck, WorkspaceGlobalId, resolve};
+use workspace::{CellError, Coordinate, EditCheck, Workspace, WorkspaceGlobalId, resolve};
 
 use crate::apply::{Applier, Effect, Event};
 use crate::edit;
+use crate::restore::restore;
 use crate::snapshot::{self, Snapshot};
 use crate::{Edit, Engine, EngineAlarm, Exit, Rejection};
 
@@ -80,11 +81,16 @@ pub enum ReadError {
 
 #[derive(Clone, Debug)]
 pub struct Handle {
+    ready: watch::Receiver<Option<Arc<Ready>>>,
+    pub(crate) workspace: WorkspaceGlobalId,
+    pub(crate) epoch: Epoch,
+}
+
+#[derive(Debug)]
+struct Ready {
     submission_sender: mpsc::Sender<Submission<Rejection>>,
     engine_receiver: watch::Receiver<Arc<Engine>>,
     committed: watch::Sender<Committed>,
-    pub(crate) workspace: WorkspaceGlobalId,
-    pub(crate) epoch: Epoch,
     #[cfg(feature = "apply_before_commit")]
     commit_sender: mpsc::UnboundedSender<(Slot, Commit)>,
 }
@@ -138,14 +144,17 @@ pub fn start(
         busy_after: settings.busy_after,
         committed: committed.clone(),
     };
-    let handle = Handle {
+    let ready = Ready {
         submission_sender,
         engine_receiver,
         committed: committed.clone(),
-        workspace,
-        epoch: id.epoch,
         #[cfg(feature = "apply_before_commit")]
         commit_sender: commit_sender.clone(),
+    };
+    let handle = Handle {
+        ready: watch::channel(Some(Arc::new(ready))).1,
+        workspace,
+        epoch: id.epoch,
     };
     let request_ids = start.request_ids.clone();
     let workspace = workspace.to_string();
@@ -171,6 +180,39 @@ pub fn start(
                 Exit::Engine(alarm)
             }
         }
+    };
+    (handle, run)
+}
+
+pub fn launch(
+    store: Arc<dyn ObjectStore>,
+    workspace_global_id: WorkspaceGlobalId,
+    workspace: Workspace,
+    settings: Settings,
+    id: AssigneeId,
+) -> (Handle, impl Future<Output = Exit>) {
+    let (ready_sender, ready) = watch::channel(None);
+    let handle = Handle {
+        ready,
+        workspace: workspace_global_id,
+        epoch: id.epoch,
+    };
+    let run = async move {
+        let (engine, start_of_log) =
+            match restore(store.as_ref(), workspace_global_id, workspace).await {
+                Ok(restored) => restored,
+                Err(error) => return Exit::Calculate(error),
+            };
+        let (started, run) = start(
+            engine,
+            start_of_log,
+            settings,
+            store,
+            workspace_global_id,
+            id,
+        );
+        ready_sender.send_replace(started.ready.borrow().clone());
+        run.await
     };
     (handle, run)
 }
@@ -323,6 +365,60 @@ impl Handle {
         request_id: RequestId,
         edit: &Edit,
     ) -> Result<Sequence, SubmitError> {
+        match self.ready() {
+            Some(ready) => ready.submit(request_id, edit).await,
+            None if self.stopped() => Err(SubmitError::Stopped),
+            None => Err(SubmitError::Loading),
+        }
+    }
+
+    pub async fn read(
+        &self,
+        at_least: Option<Sequence>,
+        cells: &[(MeasureGlobalId, Coordinate)],
+    ) -> Result<(Option<Sequence>, Vec<Option<f64>>), ReadError> {
+        match self.ready() {
+            Some(ready) => ready.read(at_least, cells).await,
+            None if self.stopped() => Err(ReadError::Stopped),
+            None => Err(ReadError::Loading),
+        }
+    }
+
+    pub fn lag(&self) -> Result<Lag, Loading> {
+        self.ready().ok_or(Loading)?.lag()
+    }
+
+    pub fn definitions(&self) -> Result<Arc<Engine>, Loading> {
+        self.ready().ok_or(Loading)?.definitions()
+    }
+
+    pub async fn wait_loaded(&self) -> Result<(), Stopped> {
+        let ready = self
+            .ready
+            .clone()
+            .wait_for(Option::is_some)
+            .await
+            .map_err(|_| Stopped)?
+            .clone()
+            .expect("wait_for gives a ready assignee");
+        ready.wait_loaded().await
+    }
+
+    pub fn engine_receiver(&self) -> Option<watch::Receiver<Arc<Engine>>> {
+        self.ready().map(|ready| ready.engine_receiver.clone())
+    }
+
+    fn ready(&self) -> Option<Arc<Ready>> {
+        self.ready.borrow().clone()
+    }
+
+    fn stopped(&self) -> bool {
+        self.ready.has_changed().is_err()
+    }
+}
+
+impl Ready {
+    async fn submit(&self, request_id: RequestId, edit: &Edit) -> Result<Sequence, SubmitError> {
         if self.next_sequence().is_err() {
             return Err(if self.submission_sender.is_closed() {
                 SubmitError::Stopped
@@ -357,7 +453,7 @@ impl Handle {
         Ok(sequence)
     }
 
-    pub async fn read(
+    async fn read(
         &self,
         at_least: Option<Sequence>,
         cells: &[(MeasureGlobalId, Coordinate)],
@@ -383,7 +479,7 @@ impl Handle {
         Ok((engine.recalculated(), values(&engine, cells)?))
     }
 
-    pub fn lag(&self) -> Result<Lag, Loading> {
+    fn lag(&self) -> Result<Lag, Loading> {
         // Not the committed count first: a batch that finishes between the two reads would show more recalculated than committed.
         let recalculated = self.engine_receiver.borrow().recalculated();
         let next = self.next_sequence()?;
@@ -393,7 +489,7 @@ impl Handle {
         })
     }
 
-    pub fn definitions(&self) -> Result<Arc<Engine>, Loading> {
+    fn definitions(&self) -> Result<Arc<Engine>, Loading> {
         self.next_sequence()?;
         Ok(Arc::clone(&self.engine_receiver.borrow()))
     }
@@ -405,17 +501,13 @@ impl Handle {
         }
     }
 
-    pub async fn wait_loaded(&self) -> Result<(), Stopped> {
+    async fn wait_loaded(&self) -> Result<(), Stopped> {
         let mut committed_receiver = self.committed.subscribe();
         tokio::select! {
             biased;
             _ = committed_receiver.wait_for(|committed| matches!(committed, Committed::Next(_))) => Ok(()),
             () = self.submission_sender.closed() => Err(Stopped),
         }
-    }
-
-    pub fn engine_receiver(&self) -> watch::Receiver<Arc<Engine>> {
-        self.engine_receiver.clone()
     }
 }
 

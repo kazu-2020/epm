@@ -49,37 +49,13 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Not after the restore: as PID 1 in a container, the process ignores SIGTERM until it has a handler.
-    let mut shutdown = Box::pin(first_signal());
-    let starting = async {
-        let started = Instant::now();
-        let (engine, start) = server::restore(
-            store.as_ref(),
-            arguments.workspace,
-            Workspace::try_new(representative::generate(&SIZE, SEED)).expect("a valid workspace"),
-        )
-        .await
-        .expect("valid formulas");
-        info!(
-            elapsed_ms = started.elapsed().as_millis(),
-            commit_sequence = start.request_ids.len(),
-            "engine ready"
-        );
-        tokio::net::TcpListener::bind(&arguments.listen)
-            .await
-            .map(|listener| (engine, start, listener))
-    };
-    let (engine, start, listener) = tokio::select! {
-        started = starting => match started {
-            Ok(started) => started,
-            Err(error) => {
-                error!(listen = %arguments.listen, %error, "could not listen");
-                return ExitCode::FAILURE;
-            }
-        },
-        () = &mut shutdown => {
-            info!("stopped by a signal during the start");
-            return ExitCode::SUCCESS;
+    // Not later: as PID 1 in a container, the process ignores SIGTERM until it has a handler.
+    let shutdown = first_signal();
+    let listener = match tokio::net::TcpListener::bind(&arguments.listen).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            error!(listen = %arguments.listen, %error, "could not listen");
+            return ExitCode::FAILURE;
         }
     };
     info!(
@@ -88,17 +64,17 @@ async fn main() -> ExitCode {
         listen = %arguments.listen,
         "listening"
     );
-    let (handle, assignee) = server::start(
-        engine,
-        start,
-        Settings::default(),
+    let (handle, assignee) = server::launch(
         store,
         arguments.workspace,
+        Workspace::try_new(representative::generate(&SIZE, SEED)).expect("a valid workspace"),
+        Settings::default(),
         AssigneeId {
             epoch: arguments.epoch,
             process: ProcessId(Ulid::generate().0),
         },
     );
+    tokio::spawn(log_ready(handle.clone()));
     match server::http::serve(listener, handle, assignee, shutdown, SHUTDOWN_DEADLINE).await {
         Shutdown::Drained => ExitCode::SUCCESS,
         Shutdown::Deadline => {
@@ -133,6 +109,13 @@ fn initialize_log() {
         )
         .with_writer(std::io::stderr)
         .init();
+}
+
+async fn log_ready(handle: server::Handle) {
+    let started = Instant::now();
+    if handle.wait_loaded().await.is_ok() {
+        info!(elapsed_ms = started.elapsed().as_millis(), "ready");
+    }
 }
 
 fn first_signal() -> impl Future<Output = ()> {

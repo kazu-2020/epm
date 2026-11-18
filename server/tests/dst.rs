@@ -159,15 +159,19 @@ impl common::Server for Assignees {
             match assignee.await {
                 Exit::ChangeLog(exit) => Ok(exit),
                 Exit::Engine(alarm) => Err(format!("{alarm:?}")),
+                Exit::Calculate(error) => Err(format!("{error:?}")),
             }
         };
         let recalculated = stream::once(handle.clone())
             .filter_map(std::future::ready)
             .flat_map(|handle| {
                 // Not only the changes: an assignee from a snapshot starts with its commits recalculated.
-                let first = handle.engine_receiver().borrow().recalculated();
+                let engine_receiver = handle
+                    .engine_receiver()
+                    .expect("a started assignee is ready");
+                let first = engine_receiver.borrow().recalculated();
                 stream::once(std::future::ready(first)).chain(stream::unfold(
-                    handle.engine_receiver(),
+                    engine_receiver,
                     |mut engine_receiver| async move {
                         engine_receiver.changed().await.ok()?;
                         let sequence = engine_receiver.borrow_and_update().recalculated();

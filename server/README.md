@@ -90,7 +90,7 @@ curl -X POST "${headers[@]}" "$api/GetLag" -d '{}'
 - A response leaves out a field that has no value. For example, `GetLag` returns `{}` before the first commit. `committed` appears after the first commit, and `recalculated` appears after the server recalculates it.
 - The server refuses an unknown field in a JSON request with `invalid_argument`. Thus a misspelled `at_least` does not read old values.
 
-After a start, the server reads the log and then writes its fence. Until the server writes the fence, the four calls above return `unavailable`. A `GetLag` that is not `unavailable` shows that the server is ready (ADR 0012). After that, a `ReadCells` without `at_least` can still miss the newest commits, because the recalculation can be behind. To read your own edit, send the sequence from `SubmitEdit` as `at_least`.
+After a start, the server listens at once. Then it reads the newest snapshot, reads the log after it, and writes its fence. Until the server writes the fence, the four calls above return `unavailable`. A `GetLag` that is not `unavailable` shows that the server is ready (ADR 0012). After that, a `ReadCells` without `at_least` can still miss the newest commits, because the recalculation can be behind. To read your own edit, send the sequence from `SubmitEdit` as `at_least`.
 
 The errors in this table have the body `{"code": ..., "message": ...}` with a Connect code. A method that is not `POST` (405) and a content type that the server refuses (415) do not have this body.
 

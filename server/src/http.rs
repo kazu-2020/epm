@@ -276,7 +276,7 @@ fn global_id<T: FromStr<Err = InvalidGlobalId>>(name: &str, text: &str) -> Resul
 
 // Not a loaded flag in each answer: the App server records an Assignee only after a GetLag that is not unavailable (ADR 0012).
 fn loading_failure(Loading: Loading) -> ConnectError {
-    ConnectError::unavailable("the assignee is loading the change log, retry later")
+    ConnectError::unavailable("the assignee is loading, retry later")
 }
 
 fn submit_failure(error: SubmitError) -> ConnectError {
