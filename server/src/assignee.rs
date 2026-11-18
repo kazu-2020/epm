@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use change_log::{
-    Admit, AssigneeId, Commit, Request, RequestId, Sequence, Slot, Start, Submission,
+    Admit, AssigneeId, Commit, Epoch, Request, RequestId, Sequence, Slot, Start, Submission,
 };
 use measure::MeasureGlobalId;
 use object_store::path::Path;
@@ -83,6 +83,8 @@ pub struct Handle {
     submission_sender: mpsc::Sender<Submission<Rejection>>,
     engine_receiver: watch::Receiver<Arc<Engine>>,
     committed: watch::Sender<Committed>,
+    pub(crate) workspace: WorkspaceGlobalId,
+    pub(crate) epoch: Epoch,
     #[cfg(feature = "apply_before_commit")]
     commit_sender: mpsc::UnboundedSender<(Slot, Commit)>,
 }
@@ -140,6 +142,8 @@ pub fn start(
         submission_sender,
         engine_receiver,
         committed: committed.clone(),
+        workspace,
+        epoch: id.epoch,
         #[cfg(feature = "apply_before_commit")]
         commit_sender: commit_sender.clone(),
     };

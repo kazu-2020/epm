@@ -14,9 +14,11 @@ use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use object_store::throttle::{ThrottleConfig, ThrottledStore};
 use serde_json::{Value, json};
+use server::http::{EPOCH_HEADER, WORKSPACE_HEADER};
 use server::{Calculation, Handle, Settings};
 use tower::ServiceExt;
 use ulid::Ulid;
+use workspace::WorkspaceGlobalId;
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const SALES: MeasureGlobalId = MeasureGlobalId(Ulid(200));
@@ -26,6 +28,7 @@ struct App {
     router: Router,
     coordinate: Vec<Value>,
     quantity: f64,
+    destination: Vec<(&'static str, String)>,
 }
 
 async fn app(settings: Settings) -> App {
@@ -59,18 +62,41 @@ fn app_on(settings: Settings, store: Arc<dyn ObjectStore>, epoch: u64) -> App {
         handle,
         coordinate,
         quantity,
+        destination: destination(&support::WORKSPACE.to_string(), &epoch.to_string()),
     }
 }
 
-async fn call(app: &App, method: &str, body: Value) -> (StatusCode, Value) {
-    call_as(app, method, "application/json", body).await
+fn destination(workspace: &str, epoch: &str) -> Vec<(&'static str, String)> {
+    vec![
+        (WORKSPACE_HEADER, workspace.to_owned()),
+        (EPOCH_HEADER, epoch.to_owned()),
+    ]
 }
 
-async fn call_as(app: &App, method: &str, content_type: &str, body: Value) -> (StatusCode, Value) {
-    let request = Request::post(format!("/epm.v1.Workspace/{method}"))
-        .header(CONTENT_TYPE, content_type)
-        .body(Body::from(body.to_string()))
-        .expect("a request");
+async fn call(app: &App, method: &str, body: Value) -> (StatusCode, Value) {
+    call_as(
+        app,
+        method,
+        "application/json",
+        &app.destination,
+        body.to_string(),
+    )
+    .await
+}
+
+async fn call_as(
+    app: &App,
+    method: &str,
+    content_type: &str,
+    headers: &[(&str, String)],
+    body: impl Into<Body>,
+) -> (StatusCode, Value) {
+    let mut request =
+        Request::post(format!("/epm.v1.Workspace/{method}")).header(CONTENT_TYPE, content_type);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    let request = request.body(body.into()).expect("a request");
     let response = app
         .router
         .clone()
@@ -78,10 +104,19 @@ async fn call_as(app: &App, method: &str, content_type: &str, body: Value) -> (S
         .await
         .expect("a response");
     let status = response.status();
+    let json = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .is_some_and(|value| value == "application/json");
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("a body");
-    (status, serde_json::from_slice(&bytes).expect("a JSON body"))
+    let body = if json {
+        serde_json::from_slice(&bytes).expect("a JSON body")
+    } else {
+        Value::Null
+    };
+    (status, body)
 }
 
 fn edit(
@@ -138,11 +173,11 @@ async fn an_edit_changes_the_input_and_the_calculated_measure_that_reads_it() {
             edit("r1", QUANTITY, &app.coordinate, Some(changed))
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": 0 }))
+        (StatusCode::OK, json!({ "sequence": "0" }))
     );
     let (status, edited) = read(&app, Some(0)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(edited["recalculated"], json!(0));
+    assert_eq!(edited["recalculated"], json!("0"));
     assert_eq!(edited["values"][0], json!(changed));
     assert_ne!(
         edited["values"][1], before["values"][1],
@@ -160,7 +195,7 @@ async fn a_null_value_clears_the_cell() {
             edit("r1", QUANTITY, &app.coordinate, None)
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": 0 }))
+        (StatusCode::OK, json!({ "sequence": "0" }))
     );
     let (_, cleared) = read(&app, Some(0)).await;
     assert_eq!(cleared["values"], json!([null, null]));
@@ -171,11 +206,11 @@ async fn a_resend_of_a_request_id_gets_the_same_commit_sequence() {
     let app = app(Settings::default()).await;
     let body = edit("r1", QUANTITY, &app.coordinate, Some(1.0));
     let first = call(&app, "SubmitEdit", body.clone()).await;
-    assert_eq!(first, (StatusCode::OK, json!({ "sequence": 0 })));
+    assert_eq!(first, (StatusCode::OK, json!({ "sequence": "0" })));
     assert_eq!(call(&app, "SubmitEdit", body).await, first);
     assert_eq!(
         call(&app, "GetLag", json!({})).await.1["committed"],
-        json!(0),
+        json!("0"),
         "the resend took no Commit Sequence"
     );
 }
@@ -206,12 +241,15 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
     global_id_above_128_bits["measure"] = json!(format!("8{}", &QUANTITY.to_string()[1..]));
     let mut unknown_field = edit("r4", QUANTITY, &app.coordinate, Some(1.0));
     unknown_field["note"] = json!("x");
+    let mut unknown_field_in_coordinate = edit("r8", QUANTITY, &app.coordinate, Some(1.0));
+    unknown_field_in_coordinate["coordinate"][0]["note"] = json!("x");
     let long_request_id = "r".repeat(129);
     for body in [
         no_value,
         bad_global_id,
         global_id_above_128_bits,
         unknown_field,
+        unknown_field_in_coordinate,
         edit("", QUANTITY, &app.coordinate, Some(1.0)),
         edit(&long_request_id, QUANTITY, &app.coordinate, Some(1.0)),
         edit("r5", QUANTITY, &app.coordinate[1..], Some(1.0)),
@@ -226,17 +264,14 @@ async fn an_edit_that_the_server_cannot_take_is_invalid_argument() {
         &app,
         "SubmitEdit",
         "text/plain",
-        edit("r6", QUANTITY, &app.coordinate, Some(1.0)),
+        &app.destination,
+        edit("r6", QUANTITY, &app.coordinate, Some(1.0)).to_string(),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{failure}");
-    assert_eq!(failure["code"], "invalid_argument");
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{failure}");
     assert_eq!(
         call(&app, "GetLag", json!({})).await,
-        (
-            StatusCode::OK,
-            json!({ "committed": null, "recalculated": null })
-        ),
+        (StatusCode::OK, json!({})),
         "no edit entered the log"
     );
 }
@@ -307,8 +342,8 @@ async fn the_definitions_list_the_measures_and_the_members_of_their_dimensions()
             .find(|measure| measure["ulid"] == global_id.to_string())
             .map(|measure| measure["kind"].clone())
     };
-    assert_eq!(kind(QUANTITY), Some(json!("input")));
-    assert_eq!(kind(SALES), Some(json!("calculated")));
+    assert_eq!(kind(QUANTITY), Some(json!("MEASURE_KIND_INPUT")));
+    assert_eq!(kind(SALES), Some(json!("MEASURE_KIND_CALCULATED")));
     let first_axis = &measures[0]["axes"][0];
     let dimension = definitions["dimensions"]
         .as_array()
@@ -332,7 +367,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
             edit("r1", QUANTITY, &first.coordinate, None)
         )
         .await,
-        (StatusCode::OK, json!({ "sequence": 0 }))
+        (StatusCode::OK, json!({ "sequence": "0" }))
     );
     let config = ThrottleConfig {
         wait_list_per_call: Duration::from_secs(3),
@@ -367,6 +402,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
         let request = Request::builder()
             .method(method)
             .uri(path)
+            .header(CONTENT_TYPE, "application/json")
             .body(Body::empty())
             .expect("a request");
         let response = second
@@ -382,7 +418,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         lag["committed"],
-        json!(0),
+        json!("0"),
         "the commit of the first assignee"
     );
 }
@@ -400,4 +436,188 @@ async fn a_coordinate_names_its_axes_in_any_order() {
     .await;
     assert_eq!(status, StatusCode::OK, "{read}");
     assert_eq!(read["values"][0], json!(app.quantity));
+}
+
+#[tokio::test]
+async fn a_misspelled_field_is_invalid_argument_and_not_a_read_without_freshness() {
+    let app = app(Settings::default()).await;
+    let cells = [cell(QUANTITY, &app.coordinate)];
+    for (method, body) in [
+        ("ReadCells", json!({ "at_lest": 0, "cells": cells })),
+        ("GetLag", json!({ "note": "x" })),
+        ("ListDefinitions", json!({ "note": "x" })),
+    ] {
+        assert_eq!(
+            refusal(&app, method, body).await,
+            (StatusCode::BAD_REQUEST, json!("invalid_argument")),
+            "{method}"
+        );
+    }
+}
+
+fn length_delimited(field: u8, bytes: &[u8]) -> Vec<u8> {
+    let length = u8::try_from(bytes.len()).expect("a field shorter than 128 bytes");
+    assert!(length < 0x80, "the length fits in one varint byte");
+    [&[field << 3 | 2, length][..], bytes].concat()
+}
+
+fn binary_edit(app: &App, value: &[u8]) -> Vec<u8> {
+    let mut edit = [
+        length_delimited(1, b"r1"),
+        length_delimited(2, QUANTITY.to_string().as_bytes()),
+    ]
+    .concat();
+    for axis in &app.coordinate {
+        let member = [
+            length_delimited(1, axis["dimension"].as_str().expect("a ULID").as_bytes()),
+            length_delimited(2, axis["member"].as_str().expect("a ULID").as_bytes()),
+        ]
+        .concat();
+        edit.extend(length_delimited(3, &member));
+    }
+    edit.extend(length_delimited(4, value));
+    edit
+}
+
+#[tokio::test]
+async fn a_binary_value_that_json_cannot_hold_is_invalid_argument_and_clears_nothing() {
+    let app = app(Settings::default()).await;
+    let number_value = |number: f64| [&[2 << 3 | 1][..], &number.to_le_bytes()].concat();
+    for (case, value) in [
+        ("a value with no kind", Vec::new()),
+        ("NaN", number_value(f64::NAN)),
+        ("infinity", number_value(f64::INFINITY)),
+    ] {
+        let (status, failure) = call_as(
+            &app,
+            "SubmitEdit",
+            "application/proto",
+            &app.destination,
+            binary_edit(&app, &value),
+        )
+        .await;
+        assert_eq!(
+            (status, failure["code"].clone()),
+            (StatusCode::BAD_REQUEST, json!("invalid_argument")),
+            "{case}"
+        );
+    }
+    let (status, _) = call_as(
+        &app,
+        "SubmitEdit",
+        "application/proto",
+        &app.destination,
+        binary_edit(&app, &number_value(1.0)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the hand-made bytes are a valid edit"
+    );
+    let (_, read) = read(&app, Some(0)).await;
+    assert_eq!(
+        read["values"][0],
+        json!(1.0),
+        "only the valid edit committed"
+    );
+}
+
+fn wrong_destinations() -> [(&'static str, Vec<(&'static str, String)>); 8] {
+    let workspace = support::WORKSPACE.to_string();
+    let other_workspace = WorkspaceGlobalId(Ulid(2)).to_string();
+    [
+        ("no workspace", vec![(EPOCH_HEADER, "1".to_owned())]),
+        ("no epoch", vec![(WORKSPACE_HEADER, workspace.clone())]),
+        ("other workspace", destination(&other_workspace, "1")),
+        ("older epoch", destination(&workspace, "0")),
+        ("workspace not a ULID", destination("workspace~", "1")),
+        ("epoch not a number", destination(&workspace, "one")),
+        (
+            "workspace twice",
+            [
+                destination(&workspace, "1"),
+                vec![(WORKSPACE_HEADER, other_workspace.clone())],
+            ]
+            .concat(),
+        ),
+        (
+            "epoch twice",
+            [
+                destination(&workspace, "1"),
+                vec![(EPOCH_HEADER, "0".to_owned())],
+            ]
+            .concat(),
+        ),
+    ]
+}
+
+fn every_operation(app: &App) -> [(&'static str, Value); 4] {
+    [
+        (
+            "SubmitEdit",
+            edit("r1", QUANTITY, &app.coordinate, Some(1.0)),
+        ),
+        (
+            "ReadCells",
+            json!({ "cells": [cell(QUANTITY, &app.coordinate)] }),
+        ),
+        ("ListDefinitions", json!({})),
+        ("GetLag", json!({})),
+    ]
+}
+
+#[tokio::test]
+async fn a_call_for_another_workspace_or_epoch_is_failed_precondition_and_commits_nothing() {
+    let app = app(Settings::default()).await;
+    for (method, body) in every_operation(&app) {
+        for (case, headers) in wrong_destinations() {
+            let (status, failure) =
+                call_as(&app, method, "application/json", &headers, body.to_string()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{method} with {case}");
+            assert_eq!(
+                failure,
+                json!({
+                    "code": "failed_precondition",
+                    "message": format!("this assignee serves workspace {} at epoch 1", support::WORKSPACE),
+                }),
+                "{method} with {case}"
+            );
+        }
+    }
+    assert_eq!(
+        call(&app, "GetLag", json!({})).await,
+        (StatusCode::OK, json!({})),
+        "no edit entered the log"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_call_for_another_epoch_is_failed_precondition_while_the_change_log_is_loading() {
+    let config = ThrottleConfig {
+        wait_list_per_call: Duration::from_secs(3),
+        ..ThrottleConfig::default()
+    };
+    let store = ThrottledStore::new(InMemory::new(), config);
+    let second = app_on(Settings::default(), Arc::new(store), 2);
+    for (method, body) in every_operation(&second) {
+        let (status, failure) = call_as(
+            &second,
+            method,
+            "application/json",
+            &destination(&support::WORKSPACE.to_string(), "1"),
+            body.to_string(),
+        )
+        .await;
+        assert_eq!(
+            (status, failure["code"].clone()),
+            (StatusCode::BAD_REQUEST, json!("failed_precondition")),
+            "{method} from the process of epoch 1 is not taken as loading"
+        );
+    }
+    assert_eq!(
+        refusal(&second, "GetLag", json!({})).await,
+        (StatusCode::SERVICE_UNAVAILABLE, json!("unavailable")),
+        "the change log is still loading"
+    );
 }
