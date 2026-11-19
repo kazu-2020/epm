@@ -76,7 +76,7 @@ cell='[{"dimension":"<dimension ULID>","member":"<member ULID>"}]'
 curl -X POST "${headers[@]}" "$api/SubmitEdit" \
   -d '{"request_id":"r1","measure":"00000000000000000000000034","coordinate":'"$cell"',"value":3}'
 curl -X POST "${headers[@]}" "$api/ReadCells" \
-  -d '{"at_least":0,"cells":[{"measure":"00000000000000000000000068","coordinate":'"$cell"'}]}'
+  -d '{"cells":[{"measure":"00000000000000000000000068","coordinate":'"$cell"'}]}'
 curl -X POST "${headers[@]}" "$api/GetLag" -d '{}'
 ```
 
