@@ -170,7 +170,8 @@ async fn a_rejected_edit_returns_its_reason() {
         )))
     );
     let mut short = quantity(Some(1.0));
-    short.coordinate = short.coordinate.iter().skip(1).collect();
+    short.coordinate =
+        Coordinate::try_new(short.coordinate.iter().skip(1)).expect("a part of a coordinate");
     assert_eq!(
         assignee.handle.submit(id("short"), &short).await,
         Err(SubmitError::Rejected(Rejection::Invalid(Invalid::Cell(
@@ -417,7 +418,11 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
             .handle
             .read(
                 Some(sequence(1)),
-                &[(SALES, cells()[1].1.iter().take(1).collect())]
+                &[(
+                    SALES,
+                    Coordinate::try_new(cells()[1].1.iter().take(1))
+                        .expect("a part of a coordinate")
+                )]
             )
             .await,
         Err(ReadError::Cell(CellError::Length {
@@ -431,7 +436,7 @@ async fn a_read_waits_for_the_recalculation_and_refuses_an_uncommitted_sequence(
             .handle
             .read(
                 Some(sequence(10)),
-                &[(unknown, std::iter::empty().collect())]
+                &[(unknown, Coordinate::try_new([]).expect("no axis"))]
             )
             .await,
         Err(ReadError::NoMeasure(unknown)),

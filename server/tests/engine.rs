@@ -8,7 +8,7 @@ use dimension::MemberIndex;
 use measure::{Measure, MeasureDefinition, MeasureGlobalId};
 use server::{DecodeError, Edit, Engine, EngineAlarm, Invalid};
 use ulid::Ulid;
-use workspace::{CellError, Workspace};
+use workspace::{CellError, Coordinate, Workspace};
 
 const QUANTITY: MeasureGlobalId = MeasureGlobalId(Ulid(100));
 const PRICE: MeasureGlobalId = MeasureGlobalId(Ulid(101));
@@ -93,7 +93,8 @@ fn only_a_cell_of_an_input_measure_passes_the_check() {
         Err(Invalid::NotAnInput(SALES))
     );
     let mut short = quantity([0, 1, 1, 0, 1], Some(2.5));
-    short.coordinate = short.coordinate.iter().skip(1).collect();
+    short.coordinate =
+        Coordinate::try_new(short.coordinate.iter().skip(1)).expect("a part of a coordinate");
     assert_eq!(
         check(&server::edit::encode(&short)),
         Err(Invalid::Cell(CellError::Length {
