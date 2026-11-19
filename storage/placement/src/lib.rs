@@ -168,7 +168,6 @@ async fn issue_with(
     wait: Duration,
     replacement: Replacement,
 ) -> Result<Option<Epoch>, Error> {
-    // Not an error of this crate: PostgreSQL rejects i64::MAX milliseconds as an interval out of range.
     let wait_milliseconds = i64::try_from(wait.as_millis()).unwrap_or(i64::MAX);
     let issued = client
         .query_typed_opt(

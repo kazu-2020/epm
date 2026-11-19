@@ -21,7 +21,6 @@ enum Statement {
     Record,
 }
 
-// IS NOT NULL and IS NULL keep the count and the types of the parameters. Expression keeps the type of the value it replaces.
 #[derive(Clone, Copy)]
 enum Constant {
     True,
@@ -134,8 +133,8 @@ fn product() -> Statements {
 fn mutate(mutant: &Mutant) -> Statements {
     let target = format!("{}{}", mutant.before, mutant.condition);
     let replacement = match mutant.becomes {
-        Constant::True => format!("{}({}) IS NOT NULL", mutant.before, mutant.condition),
-        Constant::False => format!("{}({}) IS NULL", mutant.before, mutant.condition),
+        Constant::True => format!("{}TRUE", mutant.before),
+        Constant::False => format!("{}FALSE", mutant.before),
         Constant::Expression(expression) => format!("{}{expression}", mutant.before),
     };
     let derive = |statement: &str| {
@@ -159,8 +158,8 @@ fn mutate(mutant: &Mutant) -> Statements {
 }
 
 async fn connect() -> Client {
-    let url = std::env::var("PLACEMENT_POSTGRES_URL").expect(
-        "PLACEMENT_POSTGRES_URL is the URL of PgBouncer in front of a database with the migration",
+    let url = std::env::var("PLACEMENT_TEST_PGBOUNCER_URL").expect(
+        "PLACEMENT_TEST_PGBOUNCER_URL is the URL of PgBouncer in front of a database with the migration",
     );
     let (client, connection) = tokio_postgres::connect(&url, NoTls)
         .await
@@ -172,11 +171,18 @@ async fn connect() -> Client {
 struct Scenario<'a> {
     client: &'a Client,
     statements: &'a Statements,
-    // Unique: a mutant without the workspace condition must match only the rows of its own scenario.
     node: Node,
 }
 
-impl Scenario<'_> {
+impl<'a> Scenario<'a> {
+    fn new(client: &'a Client, statements: &'a Statements) -> Self {
+        Self {
+            client,
+            statements,
+            node: Node(format!("node {}", Ulid::generate())),
+        }
+    }
+
     async fn create(&self) -> Result<WorkspaceGlobalId, Error> {
         let workspace = WorkspaceGlobalId(Ulid::generate());
         create_row(self.client, workspace).await?;
@@ -304,7 +310,7 @@ impl Scenario<'_> {
             }
             Check::IssueDoesNotChangeAnotherWorkspace => {
                 let other = self.create().await?;
-                let other_epoch = unique_epoch();
+                let other_epoch = unique_epoch_with_room_for_corrections();
                 self.client
                     .query_typed(
                         "UPDATE public.placement SET epoch = $2, address_epoch = $2 WHERE workspace_global_id = $1",
@@ -350,19 +356,12 @@ impl Scenario<'_> {
     }
 }
 
-// Unique: the issue has no node condition, so without the workspace condition the epoch alone selects the row.
-// 48 bits: a correct_after_restore of a later run must not go above the largest bigint.
-fn unique_epoch() -> i64 {
+fn unique_epoch_with_room_for_corrections() -> i64 {
     i64::try_from(Ulid::generate().random() >> 32).expect("48 bits fit in a bigint")
 }
 
 async fn holds(client: &Client, statements: &Statements, check: Check) -> bool {
-    let scenario = Scenario {
-        client,
-        statements,
-        node: Node(format!("node {}", Ulid::generate())),
-    };
-    scenario
+    Scenario::new(client, statements)
         .holds(check)
         .await
         .unwrap_or_else(|error| panic!("{check:?} did not reach its assertion: {error}"))

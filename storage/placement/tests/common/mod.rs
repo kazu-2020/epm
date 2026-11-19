@@ -7,8 +7,8 @@ use tokio_postgres::{Client, NoTls};
 use ulid::Ulid;
 
 pub(crate) async fn connect() -> Client {
-    let url = std::env::var("PLACEMENT_POSTGRES_URL").expect(
-        "PLACEMENT_POSTGRES_URL is the URL of PgBouncer in front of a database with the migration",
+    let url = std::env::var("PLACEMENT_TEST_PGBOUNCER_URL").expect(
+        "PLACEMENT_TEST_PGBOUNCER_URL is the URL of PgBouncer in front of a database with the migration",
     );
     let (client, connection) = tokio_postgres::connect(&url, NoTls)
         .await

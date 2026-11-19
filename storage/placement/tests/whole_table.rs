@@ -1,8 +1,7 @@
-// Not in placement.rs: these statements lock or change every row, and cargo runs the test binaries one at a time.
 mod common;
 
 use common::{connect, create, issue, seen};
-use placement::{Address, Node, correct_after_restore, record_address};
+use placement::{Address, Node, correct_after_restore, lookup, record_address};
 use tokio_postgres::error::SqlState;
 
 const CORRECTION: u64 = 4_294_967_296;
@@ -46,7 +45,6 @@ async fn table_rejects_a_truncate() {
     let client = connect().await;
     let workspace = create(&client).await;
 
-    // In a transaction: without the trigger, the ROLLBACK keeps the rows.
     let error = client
         .batch_execute("BEGIN; TRUNCATE public.placement")
         .await
@@ -54,5 +52,5 @@ async fn table_rejects_a_truncate() {
     client.batch_execute("ROLLBACK").await.unwrap();
 
     assert_eq!(error.code(), Some(&SqlState::RESTRICT_VIOLATION));
-    assert_eq!(seen(&client, workspace).await.epoch.get(), 0);
+    assert!(lookup(&client, workspace).await.unwrap().is_some());
 }

@@ -27,7 +27,6 @@ CREATE TRIGGER placement_epoch_never_decreases
     FOR EACH ROW WHEN (NEW.epoch < OLD.epoch)
     EXECUTE FUNCTION public.placement_reject_epoch_loss();
 
--- A deleted row can be created again, and its epoch then starts again from 0.
 CREATE TRIGGER placement_row_is_never_deleted
     BEFORE DELETE ON public.placement
     FOR EACH ROW

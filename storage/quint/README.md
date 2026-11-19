@@ -37,7 +37,7 @@ uv run --with boto3 storage/rustfs/conditional_write.py
 ```sh
 docker compose -f storage/postgres/compose.yaml up -d --wait
 psql -v ON_ERROR_STOP=1 -f storage/placement/migrations/0001_placement.sql postgres://postgres@127.0.0.1:55433/epm
-(cd storage/placement && PLACEMENT_POSTGRES_URL=postgres://postgres@127.0.0.1:56433/epm cargo test)
+(cd storage/placement && PLACEMENT_TEST_PGBOUNCER_URL=postgres://postgres@127.0.0.1:56433/epm cargo test)
 ```
 
 `seqlog_replay.qnt` のトレースは、Rust の `Assignee::step` で再生する。再生の試験は `storage/change_log/src/assignee/replay.rs` にある。`cargo test` で実行し、PATH に `quint` が必要である。失敗した場合は、表示される `QUINT_SEED=<値>` を指定して再実行する。

@@ -385,10 +385,32 @@ async fn replacement_10_minutes_after_the_record_resets_the_failure_count() {
 }
 
 #[tokio::test]
+async fn wait_beyond_an_interval_is_an_error_of_postgresql() {
+    let client = connect().await;
+    let workspace = create(&client).await;
+    let stopped = seen(&client, workspace).await;
+
+    let issued = issue_epoch(
+        &client,
+        workspace,
+        &stopped,
+        &node("n1"),
+        Duration::MAX,
+        Replacement::Unplanned,
+    )
+    .await;
+
+    let Err(Error::Postgres(error)) = issued else {
+        panic!("a wait beyond an interval is an error");
+    };
+    assert_eq!(error.code(), Some(&SqlState::DATETIME_FIELD_OVERFLOW));
+    assert_eq!(seen(&client, workspace).await, stopped);
+}
+
+#[tokio::test]
 async fn issue_at_the_largest_bigint_is_an_error_and_the_epoch_does_not_wrap() {
     let client = connect().await;
     let workspace = create(&client).await;
-    // ROLLBACK, not COMMIT: a row at the largest bigint stays forever and fails every later correct_after_restore.
     client
         .batch_execute(&format!(
             "BEGIN; UPDATE public.placement SET epoch = {}, address_epoch = {} WHERE workspace_global_id = '{}'",
@@ -605,12 +627,7 @@ async fn issue_that_waits_for_a_rolled_back_issue_succeeds_on_the_original_row()
     );
 }
 
-#[tokio::test]
-async fn epoch_issued_again_after_a_rewind_is_recorded_only_from_the_node_of_the_row() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    let first = issue(&client, workspace, &node("n1")).await;
-    // Stands in for a PostgreSQL failover that loses the issued epoch: the replica role skips the trigger.
+async fn lose_the_last_epoch_as_a_failover_does(client: &Client, workspace: WorkspaceGlobalId) {
     client
         .batch_execute(&format!(
             "BEGIN; SET LOCAL session_replication_role = replica; \
@@ -618,7 +635,15 @@ async fn epoch_issued_again_after_a_rewind_is_recorded_only_from_the_node_of_the
             text(workspace)
         ))
         .await
-        .unwrap();
+        .expect("rewind the epoch without the trigger");
+}
+
+#[tokio::test]
+async fn epoch_issued_again_after_a_rewind_is_recorded_only_from_the_node_of_the_row() {
+    let client = connect().await;
+    let workspace = create(&client).await;
+    let first = issue(&client, workspace, &node("n1")).await;
+    lose_the_last_epoch_as_a_failover_does(&client, workspace).await;
 
     assert_eq!(issue(&client, workspace, &node("n2")).await, first);
 

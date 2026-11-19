@@ -20,8 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # PgBouncer, not PostgreSQL: the app server connects only through the transaction mode.
-      PLACEMENT_POSTGRES_URL: postgres://postgres@127.0.0.1:56433/epm
+      PLACEMENT_TEST_PGBOUNCER_URL: postgres://postgres@127.0.0.1:56433/epm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -32,8 +31,4 @@ jobs:
       - run: docker compose -f ../postgres/compose.yaml up -d --wait
       - name: Apply the migration
         run: psql -v ON_ERROR_STOP=1 -f migrations/0001_placement.sql postgres://postgres@127.0.0.1:55433/epm
-      # Not left to --wait: PgBouncer has no healthcheck.
-      - name: Wait for PgBouncer
-        timeout-minutes: 2
-        run: until psql -c 'SELECT 1' "$PLACEMENT_POSTGRES_URL"; do sleep 1; done
       - run: cargo test --locked
