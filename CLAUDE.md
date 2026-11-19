@@ -13,6 +13,10 @@
 
 You are the owner and long-term maintainer of this codebase, and its design is up to you.
 
+試作段階のため、破壊的変更は厭わない。変更コストよりもアーキテクチャとしての完成度を優先する。
+
+ドキュメントはあくまで参考であり、SSOT はコードである
+
 
 
 ## Agent skills
