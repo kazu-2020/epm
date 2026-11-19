@@ -210,8 +210,22 @@ pub fn launch(
         workspace: global_id,
         epoch: id.epoch,
     };
+    let (restored_sender, restored) = oneshot::channel();
+    let restoring = Arc::clone(&store);
+    let runtime = tokio::runtime::Handle::current();
+    // Not spawn_blocking: the runtime waits for blocking tasks when it stops, so a shutdown signal would wait for the whole recalculation.
+    std::thread::spawn(move || {
+        let _ = restored_sender.send(runtime.block_on(restore(
+            restoring.as_ref(),
+            global_id,
+            workspace,
+        )));
+    });
     let launched = async move {
-        let (engine, start_of_log) = match restore(store.as_ref(), global_id, workspace).await {
+        let (engine, start_of_log) = match restored
+            .await
+            .expect("the restore thread sends its result unless it panics")
+        {
             Ok(restored) => restored,
             Err(error) => return Exit::Calculate(error),
         };

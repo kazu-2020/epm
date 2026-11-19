@@ -1,21 +1,28 @@
 mod coordinate;
 mod support;
 
+use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
 use change_log::{AssigneeId, Epoch, ProcessId, Start};
 use datagen::representative::{self, Size};
+use futures_util::stream::BoxStream;
 use measure::MeasureGlobalId;
-use object_store::ObjectStore;
 use object_store::memory::InMemory;
+use object_store::path::Path;
 use object_store::throttle::{ThrottleConfig, ThrottledStore};
+use object_store::{
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult,
+};
 use serde_json::{Value, json};
 use server::http::{EPOCH_HEADER, Shutdown, WORKSPACE_HEADER};
 use server::{Calculation, Engine, Exit, Handle, Settings};
@@ -451,13 +458,83 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
     );
 }
 
-fn launch(list_latency: Duration) -> (Handle, impl Future<Output = Exit> + use<>) {
-    let config = ThrottleConfig {
-        wait_list_with_delimiter_per_call: list_latency,
-        ..ThrottleConfig::default()
-    };
-    server::launch(
-        Arc::new(ThrottledStore::new(InMemory::new(), config)),
+#[derive(Debug)]
+struct Blocked {
+    inner: InMemory,
+    released: Mutex<mpsc::Receiver<()>>,
+}
+
+impl fmt::Display for Blocked {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "Blocked")
+    }
+}
+
+#[async_trait]
+impl ObjectStore for Blocked {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        options: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, options).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        options: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    // Not an async wait: the snapshot decode and the recalculation run without an await, and only a thread that blocks shows whether they hold a worker.
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        let _ = self
+            .released
+            .lock()
+            .expect("no panic holds the lock")
+            .recv();
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+fn launch() -> (Handle, impl Future<Output = Exit> + use<>, mpsc::Sender<()>) {
+    let (release, released) = mpsc::channel();
+    let (handle, assignee) = server::launch(
+        Arc::new(Blocked {
+            inner: InMemory::new(),
+            released: Mutex::new(released),
+        }),
         support::WORKSPACE,
         Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
         Settings::default(),
@@ -465,7 +542,8 @@ fn launch(list_latency: Duration) -> (Handle, impl Future<Output = Exit> + use<>
             epoch: Epoch(1),
             process: ProcessId(1),
         },
-    )
+    );
+    (handle, assignee, release)
 }
 
 async fn post(address: SocketAddr, method: &str, body: &Value) -> (StatusCode, Value) {
@@ -499,7 +577,7 @@ async fn post(address: SocketAddr, method: &str, body: &Value) -> (StatusCode, V
 
 #[tokio::test]
 async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_are_read() {
-    let (handle, assignee) = launch(Duration::from_secs(2));
+    let (handle, assignee, release) = launch();
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let address = listener.local_addr().expect("an address");
     tokio::spawn(server::http::serve(
@@ -524,6 +602,7 @@ async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_ar
             "{method} while the snapshots are read"
         );
     }
+    release.send(()).expect("the restore waits for the release");
     support::loaded(&handle).await;
     assert_eq!(
         post(
@@ -538,7 +617,7 @@ async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_ar
 
 #[tokio::test]
 async fn a_shutdown_while_the_snapshots_are_read_stops_with_success_at_once() {
-    let (handle, assignee) = launch(Duration::from_mins(1));
+    let (handle, assignee, _release) = launch();
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let stopped = tokio::time::timeout(
         Duration::from_secs(5),
