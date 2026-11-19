@@ -32,12 +32,12 @@ AWS_SECRET_ACCESS_KEY=demo-secret AWS_REGION=us-east-1 \
 uv run --with boto3 storage/rustfs/conditional_write.py
 ```
 
-配置表の前提である条件付きの UPDATE は、PostgreSQL と PgBouncer で以下のとおり実測する。
+配置表の前提である条件付きの UPDATE は、`storage/placement` の統合テストが PostgreSQL と PgBouncer で検査する。
 
 ```sh
 docker compose -f storage/postgres/compose.yaml up -d --wait
-uv run --with 'psycopg[binary]' storage/postgres/epoch_race.py
-uv run --with 'psycopg[binary]' storage/postgres/claim_rules.py
+psql -v ON_ERROR_STOP=1 -f storage/placement/migrations/0001_placement.sql postgres://postgres@127.0.0.1:55433/epm
+(cd storage/placement && PLACEMENT_TEST_PGBOUNCER_URL=postgres://postgres@127.0.0.1:56433/epm cargo test)
 ```
 
 `seqlog_replay.qnt` のトレースは、Rust の `Assignee::step` で再生する。再生の試験は `storage/change_log/src/assignee/replay.rs` にある。`cargo test` で実行し、PATH に `quint` が必要である。失敗した場合は、表示される `QUINT_SEED=<値>` を指定して再実行する。
