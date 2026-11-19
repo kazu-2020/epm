@@ -34,35 +34,24 @@ App server、配置表、Assignee を以下の構成で接続する。期限と�
   - 昇格の対象を同期の standby に限定する。非同期のレプリカは、手動でも昇格させない。
 - **ワークスペースの ID は `WorkspaceGlobalId`(ULID)とし、App server がワークスペースの作成時に発行する(#139)**。 【未検証】S3 のキーの先頭は WorkspaceGlobalId で、名前は表示専用とする。`--workspace` が ULID でない場合、Assignee は起動を中止する。【実測】
 
-配置表の中心になる更新は以下の1文である。`$seen` は直前に読み取ったエポックである。`$wait` は、同時に読み取った行から App server が計算した待機時間である。起動中の行では起動期限と backoff の長い方、起動中でない行では backoff、計画的な入れ替えでは 0 である。起動中の行でも、プロセスの終了を確認した場合は backoff だけである。時刻の比較は PostgreSQL が実行する。更新が0行の場合は、ほかの App server が先行しているか、待機時間の経過前である。計画的な入れ替えは、起動中でない行だけを対象にする。起動中の Assignee をフェンスで停止させないためである。
+配置表を更新する SQL の正は [`storage/placement/src/lib.rs`](../../storage/placement/src/lib.rs) である。表の定義は [`0001_placement.sql`](../../storage/placement/migrations/0001_placement.sql) である。この ADR は SQL を転記しない。以下は各条件の理由である。
 
-```sql
-UPDATE placement
-SET epoch = epoch + 1, node = $node, claimed_at = now(),
-    consecutive_failures = CASE
-      WHEN $planned THEN consecutive_failures
-      WHEN address_epoch = epoch
-        AND (recorded_at IS NULL OR recorded_at <= now() - interval '10 minutes') THEN 0
-      ELSE consecutive_failures + 1
-    END
-WHERE workspace_global_id = $workspace AND epoch = $seen
-  AND (claimed_at IS NULL OR claimed_at + $wait <= now())
-  AND (NOT $planned OR address_epoch = epoch)
-RETURNING epoch;
-```
+エポックの発行は、以下の条件をすべて充足する場合だけ、行のエポックを1増加させる。`$seen` と `$seen_address_epoch` は、直前に読み取った行のエポックとアドレスのエポックである。`$wait` は、同時に読み取った行から App server が計算した待機時間である。起動中の行では起動期限と backoff の長い方、起動中でない行では backoff、計画的な入れ替えでは 0 である。起動中の行でも、プロセスの終了を確認した場合は backoff だけである。時刻の比較は PostgreSQL が実行する。
 
-この UPDATE は autocommit の READ COMMITTED で実行する。REPEATABLE READ 以上では、競合が0行でなく serialization failure(40001)になる。その場合も0行と同様に処理する。
+- **エポックが `$seen` と一致する**。 同一の観測に基づく発行の成功を高々1回にする。`SET epoch = epoch + 1` は行の更新の直列化によって、この条件がなくても異なる番号を発行する。この条件がないと、古い観測から不要な交代が連続し、新規の起動を妨げる。
+- **アドレスのエポックが `$seen_address_epoch` と一致する**。 参照と発行の間に記録が成立した場合、起動期限の超過を理由にした発行が、記録直後の Assignee を交代させ、失敗に計数する。この条件はその経路を防止する。
+- **発行時刻から `$wait` が経過している**。 `now()` はトランザクションの開始時刻で固定され、行ロックの待機後も変化しない。条件が開始時に偽なら、期限まで待機せず0行になる。
+- **計画的な入れ替えは、起動中でない行だけを対象にする**。 起動中の Assignee をフェンスで停止させないためである。計画的な入れ替えは連続失敗回数を変更しない。
 
-アドレスの記録は以下の1文である。`$epoch` と `$node` は `Start` に指定したエポックと送信先のノードである。更新が0行の場合は、ほかの App server が新規のエポックを発行済みか、行のノードが相違している。ノードの条件は、PostgreSQL の切り替えで同一のエポックが再発行された場合に、記録の対象を行のノードのプロセスに限定する(「運用者の復旧手順」の節)。
+更新が0行の場合は、ほかの App server が先行しているか、記録が成立したか、待機時間の経過前である。App server は0行の理由を区別せず、配置表を再度参照する。
 
-```sql
-UPDATE placement
-SET address = $address, address_epoch = $epoch, recorded_at = now(),
-    boot_duration = now() - claimed_at
-WHERE workspace_global_id = $workspace AND epoch = $epoch AND node = $node;
-```
+発行と記録は autocommit の READ COMMITTED の1文で実行し、呼び出し側のトランザクションに含めない。トランザクション内で実行すると、`now()` が BEGIN の時刻になり、COMMIT の前にエポックを使用する経路と、ROLLBACK による再発行の経路が生じる。RETURNING の行は COMMIT の前にクライアントへ到達するので、App server は ReadyForQuery まで読み取ってから、発行したエポックを使用する。この推論は、主キーで指定した1行への UPDATE を前提にする。条件を JOIN、subquery、別の表に移す場合は、競合した UPDATE の再評価の挙動が異なるので再検討する。
 
-計数、待機時間、計画的な入れ替えの条件は、`storage/postgres/claim_rules.py` が1個の接続で確認する【実測】。同時実行の試験(`epoch_race.py`)が実行する部分は、`epoch = $seen` の条件だけである。
+アドレスの記録は、エポックとノードが行と一致する場合だけ成功する。`$epoch` と `$node` は `Start` に指定したエポックと送信先のノードである。更新が0行の場合は、ほかの App server が新規のエポックを発行済みか、行のノードが相違している。ノードの条件は、PostgreSQL の切り替えで同一のエポックが再発行された場合に、記録の対象を行のノードのプロセスに限定する(「運用者の復旧手順」の節)。同一のエポックの2回目の記録も成功するが、記録時刻と起動時間は最初の値を保持する。記録の応答を喪失して再送した場合に、次回の起動期限と「記録から10分以内の交代」の起点が後退しないためである。2回目を0行にすると、上記の規則で呼び出し側が正常な Assignee に `Stop` を送信する。
+
+エポックの減少、行の削除、表の TRUNCATE は、表の trigger が拒否する。「運用者の復旧手順」の節で禁止する「行のエポックを減少させる」操作と、行の再作成による 0 からの再開を、手動の SQL に対しても防止する。
+
+各条件は、`storage/placement` の統合テストが PgBouncer 経由の実 PostgreSQL で確認する。条件を1個ずつ外した変異で、対応する試験が失敗することも確認する【実測】。
 
 停止中のワークスペースへの最初の要求は、以下の順序で処理する。
 
@@ -197,7 +186,7 @@ App server は状態を保持しないので、1台ずつ入れ替える。以�
 
 | 除外した規則 | 違反した性質 | 確認の方法 |
 | --- | --- | --- |
-| UPDATE の条件(`epoch = $seen`) | エポックの一意性、エポックの単調性 | ランダムシミュレーション |
+| UPDATE の条件(`epoch = $seen`) | エポックの一意性、エポックの単調性 | ランダムシミュレーション。モデルの発行は `$seen + 1` を書き込むので、この除外は製品の SQL から条件だけを外した変異と一致しない(「PostgreSQL の並行試験」の節) |
 | `Start` を再送しない | エポックの一意性 | ランダムシミュレーション。識別子の比較も除外した場合は、読み取りの鮮度に違反する(固定の手順) |
 | WorkspaceGlobalId の照合 | ワークスペースの分離 | ランダムシミュレーション |
 | エポックの照合 | 読み取りの鮮度 | 固定の手順 |
@@ -229,12 +218,14 @@ PostgreSQL の切り替えは、複製が遅延するレプリカと、行をレ
 
 ### PostgreSQL の並行試験
 
-`storage/postgres/epoch_race.py` は、8個の接続が同時にエポックを取得する試験を50回反復する。接続は PgBouncer 1.25.2 の transaction mode を経由し、prepared statement を使用しない。PostgreSQL は 18 である。
+commit e99e23c 以前の `storage/postgres/epoch_race.py` は、8個の接続が同時にエポックを取得する試験を50回反復した。接続は PgBouncer 1.25.2 の transaction mode を経由し、名前付きの prepared statement を保持しない。PostgreSQL は 18 である。
 
 | UPDATE の形式 | 発行されたエポック | 同一エポックの最大発行回数 |
 | --- | --- | --- |
 | 条件付き(`WHERE epoch = $seen`) | 1〜50 の各値 | 1回 |
 | 条件なし(`SET epoch = $seen + 1`) | 1〜50 の各値 | 8回 |
+
+条件なしの形式は、WHERE の条件に加えて SET の計算元も `$seen` に変更している。製品の SQL から `epoch = $seen` だけを外した場合、`epoch + 1` は行の更新の直列化によって8個の異なる番号を発行する。したがって、この条件が保証する性質は番号の重複の防止でなく、同一の観測に基づく発行の成功を高々1回にすることである。この試験は `storage/placement` の統合テストと変異の試験に置き換えた。
 
 ### 最初の応答までの時間
 
@@ -242,7 +233,7 @@ PostgreSQL の切り替えは、複製が遅延するレプリカと、行をレ
 
 | 手順 | 時間 | 根拠 |
 | --- | --- | --- |
-| 配置表の参照 | p50 0.18〜0.33 ms、p99 0.51〜0.75 ms | 【実測】同一ホストの PgBouncer 経由、2,000回を2度。ネットワークの遅延を含まない |
+| 配置表の参照 | p50 0.18〜0.33 ms、p99 0.51〜0.75 ms | 【実測】同一ホストの PgBouncer 経由、2,000回を2度。ネットワークの遅延を含まない。計測は commit e99e23c 以前の `epoch_race.py` |
 | エポックの発行とアドレスの記録 | 各 1 ms 前後 | 【推定】参照と同等の単一行の操作 |
 | プロセスの起動から listen まで | 14〜16 ms | 【実測】クラウド環境 4コア、5回、最小のワークスペース |
 | 最小のワークスペースで起動から最初の ACK まで | 25〜28 ms | 【実測】同上。S3 は同一ホストの RustFS |
@@ -274,13 +265,9 @@ PostgreSQL の復元と切り替えでは、発行済みのエポックが行か
   - フェンスの完了前: 双方が同一の Slot にフェンスを書き込む。フェンスはプロセスの識別子を保持するので、Slot に存在しない側のプロセスは alarm を出力して停止する(ADR 0006)。準備を完了するプロセスは1個だけである。【検査】記録の UPDATE のノードの条件と、重複した `Start` の拒否は、不要なプロセスの起動と記録を防止する。記録されないプロセスは要求を受領せず、`Stop` かアイドルの期限で終了する。
 
   N個のエポックが消失した行は、最大 N回の失敗の後に起動する。遅延の合計は backoff の合計で、2^(N − 1) − 1 秒である(N = 1 は 0秒、N = 3 は 3秒)。【推定】失敗する起動は、変更ログの一覧の取得で終了する。N は、複製の遅延の期間に1個のワークスペースで発行されたエポックの個数で、通常は 1 である。
-- **バックアップからの復元**: 消失するエポックが多数になるので、App server を停止し、以下の UPDATE を実行してから再開する。UPDATE の後の最初の発行が失敗に計数されないことは、`claim_rules.py` で確認した。加算する値は、消失した期間に発行されたエポックの個数より大きければよい。エポックは 64 ビットである。この UPDATE の後は全行が停止中になり、次回の要求が新規のエポックを発行する。
+- **バックアップからの復元**: 消失するエポックが多数になるので、App server を停止し、以下の UPDATE を実行してから再開する。UPDATE の後の最初の発行が失敗に計数されないことは、`storage/placement` の統合テストで確認する。加算する値は、消失した期間に発行されたエポックの個数より大きければよい。エポックは 64 ビットである。この UPDATE の後は全行が停止中になり、次回の要求が新規のエポックを発行する。
 
-```sql
-UPDATE placement
-SET epoch = epoch + 4294967296, address_epoch = epoch + 4294967296,
-    address = NULL, recorded_at = NULL, claimed_at = NULL;
-```
+補正の UPDATE は [`storage/placement/src/lib.rs`](../../storage/placement/src/lib.rs) の `correct_after_restore` である。全行のエポックとアドレスのエポックに 2^32 を加算し、アドレス、記録時刻、発行時刻を空にする。
 
 非同期の切り替えで残存する経路は、行が以前の Assignee のアドレスに復帰する場合である。稼働中の交代の後に `Stop` が到達せず、古い Assignee が残存していると、行はフェンス済みの Assignee を指示する。その Assignee は、最初の書き込みで停止するまで、交代後のコミットを含まない読み取りに応答する(`failoverReturnsToFencedAssigneeTest`)。【検査】変更ログは破損しない。読み取りだけのワークスペースでは書き込みが発生せず、読み取りの継続中はアイドルの期限も到来しない。したがって、この状態の期間には上限がない。補正の UPDATE は全行を停止中にするので、この経路を解消する。この経路は、フェンスの識別子では排除できない。確定済みの更新が消失しない構成を必須とする理由は、この経路である。
 
