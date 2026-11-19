@@ -22,4 +22,6 @@ services:
       AUTH_TYPE: trust
       POOL_MODE: transaction
       MAX_PREPARED_STATEMENTS: "0"
+      # Not only the two settings above: without DISCARD ALL after each transaction, a named prepared statement works when the same server connection comes back.
+      SERVER_RESET_QUERY_ALWAYS: "1"
     ports: ["127.0.0.1:56433:5432"]
