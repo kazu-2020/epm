@@ -70,7 +70,7 @@ pub fn router(handle: Handle) -> Router {
 pub async fn serve(
     listener: TcpListener,
     handle: Handle,
-    assignee: impl Future<Output = Exit> + Send + 'static,
+    assignee: impl Future<Output = Exit>,
     shutdown: impl Future<Output = ()> + Send + 'static,
     deadline: Duration,
 ) -> Shutdown {
@@ -83,19 +83,14 @@ pub async fn serve(
         let _ = signal_receiver.await;
         tokio::time::sleep(deadline).await;
     };
-    let mut assignee = tokio::spawn(assignee);
-    let stopped = tokio::select! {
-        exit = &mut assignee => Shutdown::Assignee(
-            exit.unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic())),
-        ),
+    tokio::select! {
+        exit = assignee => Shutdown::Assignee(exit),
         served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => {
             served.expect("the graceful serve of axum 0.8 returns only Ok");
             Shutdown::Drained
         }
         () = deadline_passed => Shutdown::Deadline,
-    };
-    assignee.abort();
-    stopped
+    }
 }
 
 #[expect(
