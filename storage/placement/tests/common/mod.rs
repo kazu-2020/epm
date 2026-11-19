@@ -6,7 +6,7 @@ use placement::{
 use tokio_postgres::{Client, NoTls};
 use ulid::Ulid;
 
-pub async fn connect() -> Client {
+pub(crate) async fn connect() -> Client {
     let url = std::env::var("PLACEMENT_POSTGRES_URL").expect(
         "PLACEMENT_POSTGRES_URL is the URL of PgBouncer in front of a database with the migration",
     );
@@ -17,20 +17,20 @@ pub async fn connect() -> Client {
     client
 }
 
-pub async fn create(client: &Client) -> WorkspaceGlobalId {
+pub(crate) async fn create(client: &Client) -> WorkspaceGlobalId {
     let workspace = WorkspaceGlobalId(Ulid::generate());
     create_row(client, workspace).await.expect("create the row");
     workspace
 }
 
-pub async fn seen(client: &Client, workspace: WorkspaceGlobalId) -> Row {
+pub(crate) async fn seen(client: &Client, workspace: WorkspaceGlobalId) -> Row {
     lookup(client, workspace)
         .await
         .expect("look up the row")
         .expect("the row exists")
 }
 
-pub async fn issue(client: &Client, workspace: WorkspaceGlobalId, node: &Node) -> Epoch {
+pub(crate) async fn issue(client: &Client, workspace: WorkspaceGlobalId, node: &Node) -> Epoch {
     let seen = seen(client, workspace).await;
     issue_epoch(
         client,

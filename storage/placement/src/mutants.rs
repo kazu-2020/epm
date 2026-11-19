@@ -7,7 +7,7 @@ use ulid::Ulid;
 
 use super::{
     Address, Epoch, Error, ISSUE, Node, RECORD, Replacement, Row, WorkspaceGlobalId, create_row,
-    issue_with, lookup, record_with,
+    issue_with, lookup, record_with, text,
 };
 
 struct Statements {
@@ -234,6 +234,10 @@ impl Scenario<'_> {
         .await
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm for each check keeps a mutant next to its scenario"
+    )]
     async fn holds(&self, check: Check) -> Result<bool, Error> {
         let workspace = self.create().await?;
         Ok(match check {
@@ -262,7 +266,7 @@ impl Scenario<'_> {
                 self.issue_from(
                     workspace,
                     &booting,
-                    Duration::from_secs(3600),
+                    Duration::from_hours(1),
                     Replacement::Unplanned,
                 )
                 .await?
@@ -304,7 +308,7 @@ impl Scenario<'_> {
                 self.client
                     .query_typed(
                         "UPDATE public.placement SET epoch = $2, address_epoch = $2 WHERE workspace_global_id = $1",
-                        &[(&other.0.to_string(), Type::TEXT), (&other_epoch, Type::INT8)],
+                        &[(&text(other), Type::TEXT), (&other_epoch, Type::INT8)],
                     )
                     .await?;
                 let other_seen = self.seen(other).await?;
@@ -329,7 +333,7 @@ impl Scenario<'_> {
                 self.client
                     .query_typed(
                         "UPDATE public.placement SET issued_at = now() + interval '1 hour' WHERE workspace_global_id = $1",
-                        &[(&workspace.0.to_string(), Type::TEXT)],
+                        &[(&text(workspace), Type::TEXT)],
                     )
                     .await?;
                 match self.record(workspace, epoch, &self.node).await {

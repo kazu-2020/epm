@@ -9,7 +9,13 @@ use ulid::Ulid;
 mod mutants;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Epoch(pub u64);
+pub struct Epoch(u64);
+
+impl Epoch {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WorkspaceGlobalId(pub Ulid);
@@ -39,21 +45,13 @@ pub struct Row {
 #[derive(Debug)]
 pub enum Error {
     Postgres(tokio_postgres::Error),
-    EpochAboveBigint(Epoch),
     NegativeColumn { column: &'static str, value: i64 },
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Postgres(error) => write!(formatter, "placement: {error}"),
-            Self::EpochAboveBigint(epoch) => {
-                write!(
-                    formatter,
-                    "placement: epoch {} does not fit in a bigint",
-                    epoch.0
-                )
-            }
+            Self::Postgres(_) => formatter.write_str("placement: PostgreSQL request failed"),
             Self::NegativeColumn { column, value } => {
                 write!(
                     formatter,
@@ -68,7 +66,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Postgres(error) => Some(error),
-            Self::EpochAboveBigint(_) | Self::NegativeColumn { .. } => None,
+            Self::NegativeColumn { .. } => None,
         }
     }
 }
@@ -79,12 +77,12 @@ impl From<tokio_postgres::Error> for Error {
     }
 }
 
-fn bigint(epoch: Epoch) -> Result<i64, Error> {
-    i64::try_from(epoch.0).map_err(|_| Error::EpochAboveBigint(epoch))
+fn bigint(epoch: Epoch) -> i64 {
+    i64::try_from(epoch.0).expect("an epoch comes from a bigint column")
 }
 
-fn non_negative(column: &'static str, value: i64) -> Result<u64, Error> {
-    u64::try_from(value).map_err(|_| Error::NegativeColumn { column, value })
+fn non_negative<T: TryFrom<i64>>(column: &'static str, value: i64) -> Result<T, Error> {
+    T::try_from(value).map_err(|_| Error::NegativeColumn { column, value })
 }
 
 fn text(workspace: WorkspaceGlobalId) -> String {
@@ -119,7 +117,6 @@ pub async fn lookup(
         return Ok(None);
     };
     let boot_milliseconds: Option<i64> = columns.try_get(4)?;
-    let consecutive_failures: i32 = columns.try_get(5)?;
     Ok(Some(Row {
         epoch: Epoch(non_negative("epoch", columns.try_get(0)?)?),
         address_epoch: Epoch(non_negative("address_epoch", columns.try_get(1)?)?),
@@ -130,12 +127,10 @@ pub async fn lookup(
                 non_negative("boot_duration", milliseconds).map(Duration::from_millis)
             })
             .transpose()?,
-        consecutive_failures: u32::try_from(consecutive_failures).map_err(|_| {
-            Error::NegativeColumn {
-                column: "consecutive_failures",
-                value: i64::from(consecutive_failures),
-            }
-        })?,
+        consecutive_failures: non_negative(
+            "consecutive_failures",
+            i64::from(columns.try_get::<_, i32>(5)?),
+        )?,
     }))
 }
 
@@ -181,8 +176,8 @@ async fn issue_with(
             &[
                 (&text(workspace), Type::TEXT),
                 (&node.0, Type::TEXT),
-                (&bigint(seen.epoch)?, Type::INT8),
-                (&bigint(seen.address_epoch)?, Type::INT8),
+                (&bigint(seen.epoch), Type::INT8),
+                (&bigint(seen.address_epoch), Type::INT8),
                 (&wait_milliseconds, Type::INT8),
                 (&(replacement == Replacement::Planned), Type::BOOL),
             ],
@@ -225,7 +220,7 @@ async fn record_with(
             &[
                 (&text(workspace), Type::TEXT),
                 (&node.0, Type::TEXT),
-                (&bigint(epoch)?, Type::INT8),
+                (&bigint(epoch), Type::INT8),
                 (&address.0, Type::TEXT),
             ],
         )
