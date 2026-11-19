@@ -210,18 +210,24 @@ pub fn launch(
         workspace: global_id,
         epoch: id.epoch,
     };
-    let (restored_sender, restored) = oneshot::channel();
-    let restoring = Arc::clone(&store);
-    let runtime = tokio::runtime::Handle::current();
-    // Not spawn_blocking: the runtime waits for blocking tasks when it stops, so a shutdown signal would wait for the whole recalculation.
-    std::thread::spawn(move || {
-        let _ = restored_sender.send(runtime.block_on(restore(
-            restoring.as_ref(),
-            global_id,
-            workspace,
-        )));
-    });
     let launched = async move {
+        let (mut restored_sender, restored) = oneshot::channel();
+        let restoring = Arc::clone(&store);
+        let runtime = tokio::runtime::Handle::current();
+        // Not spawn_blocking: the runtime waits for blocking tasks when it stops, so a shutdown signal would wait for the whole recalculation.
+        std::thread::spawn(move || {
+            runtime.block_on(async {
+                tokio::select! {
+                    biased;
+                    // Not polled after the assignee is dropped: the runtime stops next, and a timer on a stopped runtime panics.
+                    () = restored_sender.closed() => {}
+                    restored = restore(restoring.as_ref(), global_id, workspace) => {
+                        // Not an error: the assignee stopped and does not read the restored engine.
+                        let _ = restored_sender.send(restored);
+                    }
+                }
+            });
+        });
         let (engine, start_of_log) = match restored
             .await
             .expect("the restore thread sends its result unless it panics")

@@ -617,7 +617,7 @@ async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_ar
 
 #[tokio::test]
 async fn a_shutdown_while_the_snapshots_are_read_stops_with_success_at_once() {
-    let (handle, assignee, _release) = launch();
+    let (handle, assignee, release) = launch();
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let stopped = tokio::time::timeout(
         Duration::from_secs(5),
@@ -632,6 +632,8 @@ async fn a_shutdown_while_the_snapshots_are_read_stops_with_success_at_once() {
     .await
     .expect("serve does not wait for the snapshot read");
     assert!(matches!(stopped, Shutdown::Drained), "{stopped:?}");
+    // Not dropped before the assert: a released restore could finish first, and the test would not stop during the read.
+    drop(release);
 }
 
 #[tokio::test]
