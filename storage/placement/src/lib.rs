@@ -5,6 +5,9 @@ use tokio_postgres::types::Type;
 use tokio_postgres::{Client, GenericClient};
 use ulid::Ulid;
 
+#[cfg(test)]
+mod mutants;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Epoch(pub u64);
 
