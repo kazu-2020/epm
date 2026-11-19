@@ -40,7 +40,6 @@ pub struct Row {
 pub enum Error {
     Postgres(tokio_postgres::Error),
     EpochAboveBigint(Epoch),
-    WaitAboveBigint(Duration),
     NegativeColumn { column: &'static str, value: i64 },
 }
 
@@ -53,12 +52,6 @@ impl fmt::Display for Error {
                     formatter,
                     "placement: epoch {} does not fit in a bigint",
                     epoch.0
-                )
-            }
-            Self::WaitAboveBigint(wait) => {
-                write!(
-                    formatter,
-                    "placement: wait {wait:?} does not fit in a bigint of milliseconds"
                 )
             }
             Self::NegativeColumn { column, value } => {
@@ -75,9 +68,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Postgres(error) => Some(error),
-            Self::EpochAboveBigint(_) | Self::WaitAboveBigint(_) | Self::NegativeColumn { .. } => {
-                None
-            }
+            Self::EpochAboveBigint(_) | Self::NegativeColumn { .. } => None,
         }
     }
 }
@@ -182,8 +173,8 @@ async fn issue_with(
     wait: Duration,
     replacement: Replacement,
 ) -> Result<Option<Epoch>, Error> {
-    let wait_milliseconds =
-        i64::try_from(wait.as_millis()).map_err(|_| Error::WaitAboveBigint(wait))?;
+    // Not an error of this crate: PostgreSQL rejects i64::MAX milliseconds as an interval out of range.
+    let wait_milliseconds = i64::try_from(wait.as_millis()).unwrap_or(i64::MAX);
     let issued = client
         .query_typed_opt(
             statement,
