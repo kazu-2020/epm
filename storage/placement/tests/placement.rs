@@ -274,6 +274,28 @@ async fn second_record_of_an_epoch_succeeds_and_keeps_the_first_times() {
 }
 
 #[tokio::test]
+async fn record_after_the_clock_moves_back_stores_a_zero_boot_duration() {
+    let client = connect().await;
+    let workspace = create(&client).await;
+    issue(&client, workspace, &node("n1")).await;
+    client
+        .batch_execute(&format!(
+            "UPDATE public.placement SET issued_at = now() + interval '1 hour' WHERE workspace_global_id = '{}'",
+            workspace.0
+        ))
+        .await
+        .unwrap();
+
+    let recorded = record(&client, workspace, Epoch(1), &node("n1")).await;
+
+    assert_eq!(recorded, Some(Duration::ZERO));
+    assert_eq!(
+        seen(&client, workspace).await.boot_duration,
+        Some(Duration::ZERO)
+    );
+}
+
+#[tokio::test]
 async fn issue_from_a_lookup_before_the_record_is_refused() {
     let client = connect().await;
     let workspace = create(&client).await;
@@ -473,6 +495,7 @@ async fn table_rejects_counters_out_of_range() {
         "address_epoch = epoch + 1",
         "address_epoch = -1",
         "consecutive_failures = -1",
+        "boot_duration = interval '-1 second'",
     ] {
         let error = client
             .batch_execute(&format!(

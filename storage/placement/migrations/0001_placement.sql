@@ -10,7 +10,8 @@ CREATE TABLE public.placement (
     boot_duration interval,
     consecutive_failures integer NOT NULL DEFAULT 0,
     CONSTRAINT placement_counters_in_range
-        CHECK (0 <= address_epoch AND address_epoch <= epoch AND consecutive_failures >= 0)
+        CHECK (0 <= address_epoch AND address_epoch <= epoch AND consecutive_failures >= 0),
+    CONSTRAINT placement_boot_duration_is_not_negative CHECK (boot_duration >= interval '0')
 );
 
 CREATE FUNCTION public.placement_reject_epoch_loss() RETURNS trigger

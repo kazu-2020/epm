@@ -197,7 +197,7 @@ async fn issue_with(
 const RECORD: &str = "UPDATE public.placement
 SET address = $4, address_epoch = $3,
     recorded_at = CASE WHEN address_epoch = $3 THEN recorded_at ELSE now() END,
-    boot_duration = CASE WHEN address_epoch = $3 THEN boot_duration ELSE now() - issued_at END
+    boot_duration = CASE WHEN address_epoch = $3 THEN boot_duration ELSE GREATEST(now() - issued_at, interval '0') END
 WHERE workspace_global_id = $1 AND epoch = $3 AND node = $2
 RETURNING (extract(epoch FROM boot_duration) * 1000)::bigint";
 

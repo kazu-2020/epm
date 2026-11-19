@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use tokio_postgres::error::SqlState;
 use tokio_postgres::types::Type;
 use tokio_postgres::{Client, NoTls};
 use ulid::Ulid;
@@ -20,11 +21,12 @@ enum Statement {
     Record,
 }
 
-// IS NOT NULL and IS NULL keep the count and the types of the parameters.
+// IS NOT NULL and IS NULL keep the count and the types of the parameters. Expression keeps the type of the value it replaces.
 #[derive(Clone, Copy)]
 enum Constant {
     True,
     False,
+    Expression(&'static str),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -38,6 +40,7 @@ enum Check {
     OtherNodeOfTheSameEpochIsNotRecorded,
     IssueDoesNotChangeAnotherWorkspace,
     RecordDoesNotChangeAnotherWorkspace,
+    RecordAfterTheClockMovesBackSucceeds,
 }
 
 struct Mutant {
@@ -48,7 +51,7 @@ struct Mutant {
     fails: Check,
 }
 
-const MUTANTS: [Mutant; 9] = [
+const MUTANTS: [Mutant; 10] = [
     Mutant {
         statement: Statement::Issue,
         before: "AND ",
@@ -112,6 +115,13 @@ const MUTANTS: [Mutant; 9] = [
         becomes: Constant::True,
         fails: Check::RecordDoesNotChangeAnotherWorkspace,
     },
+    Mutant {
+        statement: Statement::Record,
+        before: "ELSE ",
+        condition: "GREATEST(now() - issued_at, interval '0')",
+        becomes: Constant::Expression("now() - issued_at"),
+        fails: Check::RecordAfterTheClockMovesBackSucceeds,
+    },
 ];
 
 fn product() -> Statements {
@@ -123,11 +133,11 @@ fn product() -> Statements {
 
 fn mutate(mutant: &Mutant) -> Statements {
     let target = format!("{}{}", mutant.before, mutant.condition);
-    let constant = match mutant.becomes {
-        Constant::True => "IS NOT NULL",
-        Constant::False => "IS NULL",
+    let replacement = match mutant.becomes {
+        Constant::True => format!("{}({}) IS NOT NULL", mutant.before, mutant.condition),
+        Constant::False => format!("{}({}) IS NULL", mutant.before, mutant.condition),
+        Constant::Expression(expression) => format!("{}{expression}", mutant.before),
     };
-    let replacement = format!("{}({}) {constant}", mutant.before, mutant.condition);
     let derive = |statement: &str| {
         assert_eq!(
             statement.matches(&target).count(),
@@ -313,6 +323,24 @@ impl Scenario<'_> {
                 let other_seen = self.seen(other).await?;
                 self.record(workspace, other_epoch, &self.node).await?;
                 self.seen(other).await? == other_seen
+            }
+            Check::RecordAfterTheClockMovesBackSucceeds => {
+                let epoch = self.issue(workspace).await?;
+                self.client
+                    .query_typed(
+                        "UPDATE public.placement SET issued_at = now() + interval '1 hour' WHERE workspace_global_id = $1",
+                        &[(&workspace.0.to_string(), Type::TEXT)],
+                    )
+                    .await?;
+                match self.record(workspace, epoch, &self.node).await {
+                    Ok(recorded) => recorded == Some(Duration::ZERO),
+                    Err(Error::Postgres(error))
+                        if error.code() == Some(&SqlState::CHECK_VIOLATION) =>
+                    {
+                        false
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         })
     }
