@@ -28,6 +28,7 @@ use server::http::{EPOCH_HEADER, Shutdown, WORKSPACE_HEADER};
 use server::{Calculation, Engine, Exit, Handle, Settings};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Notify, oneshot};
 use tower::ServiceExt;
 use ulid::Ulid;
 use workspace::{Workspace, WorkspaceGlobalId};
@@ -461,6 +462,7 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
 #[derive(Debug)]
 struct ThreadBlockingStore {
     inner: InMemory,
+    reading: Notify,
     released: Mutex<mpsc::Receiver<()>>,
 }
 
@@ -509,6 +511,7 @@ impl ObjectStore for ThreadBlockingStore {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.reading.notify_one();
         let _ = self
             .released
             .lock()
@@ -527,13 +530,20 @@ impl ObjectStore for ThreadBlockingStore {
     }
 }
 
-fn launch() -> (Handle, impl Future<Output = Exit> + use<>, mpsc::Sender<()>) {
+fn launch() -> (
+    Handle,
+    impl Future<Output = Exit> + use<>,
+    Arc<ThreadBlockingStore>,
+    mpsc::Sender<()>,
+) {
     let (release, released) = mpsc::channel();
+    let store = Arc::new(ThreadBlockingStore {
+        inner: InMemory::new(),
+        reading: Notify::new(),
+        released: Mutex::new(released),
+    });
     let (handle, assignee) = server::launch(
-        Arc::new(ThreadBlockingStore {
-            inner: InMemory::new(),
-            released: Mutex::new(released),
-        }),
+        Arc::<ThreadBlockingStore>::clone(&store),
         support::WORKSPACE,
         Workspace::try_new(representative::generate(&Size::TINY, 7)).expect("a valid workspace"),
         Settings::default(),
@@ -542,7 +552,7 @@ fn launch() -> (Handle, impl Future<Output = Exit> + use<>, mpsc::Sender<()>) {
             process: ProcessId(1),
         },
     );
-    (handle, assignee, release)
+    (handle, assignee, store, release)
 }
 
 async fn post(address: SocketAddr, method: &str, body: &Value) -> (StatusCode, Value) {
@@ -576,7 +586,7 @@ async fn post(address: SocketAddr, method: &str, body: &Value) -> (StatusCode, V
 
 #[tokio::test]
 async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_are_read() {
-    let (handle, assignee, release) = launch();
+    let (handle, assignee, _, release) = launch();
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let address = listener.local_addr().expect("an address");
     tokio::spawn(server::http::serve(
@@ -616,20 +626,24 @@ async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_ar
 
 #[tokio::test]
 async fn a_shutdown_while_the_snapshots_are_read_stops_with_success_at_once() {
-    let (handle, assignee, _restore_held) = launch();
+    let (handle, assignee, store, _restore_held) = launch();
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
-    let stopped = tokio::time::timeout(
-        Duration::from_secs(5),
-        server::http::serve(
-            listener,
-            handle,
-            assignee,
-            std::future::ready(()),
-            Duration::from_secs(30),
-        ),
-    )
-    .await
-    .expect("serve does not wait for the snapshot read");
+    let (shutdown, signal) = oneshot::channel::<()>();
+    let stopped = tokio::spawn(server::http::serve(
+        listener,
+        handle,
+        assignee,
+        async move {
+            let _ = signal.await;
+        },
+        Duration::from_secs(30),
+    ));
+    store.reading.notified().await;
+    shutdown.send(()).expect("the server waits for the signal");
+    let stopped = tokio::time::timeout(Duration::from_secs(5), stopped)
+        .await
+        .expect("serve does not wait for the snapshot read")
+        .expect("serve does not panic");
     assert!(matches!(stopped, Shutdown::Drained), "{stopped:?}");
 }
 
