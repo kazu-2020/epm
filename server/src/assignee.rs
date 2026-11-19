@@ -222,7 +222,6 @@ pub fn launch(
                     // Not polled after the assignee is dropped: the runtime stops next, and a timer on a stopped runtime panics.
                     () = restored_sender.closed() => {}
                     restored = restore(restoring.as_ref(), global_id, workspace) => {
-                        // Not an error: the assignee stopped and does not read the restored engine.
                         let _ = restored_sender.send(restored);
                     }
                 }

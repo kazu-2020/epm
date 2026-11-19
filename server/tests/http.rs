@@ -459,19 +459,19 @@ async fn every_call_is_unavailable_until_the_change_log_is_loaded() {
 }
 
 #[derive(Debug)]
-struct Blocked {
+struct ThreadBlockingStore {
     inner: InMemory,
     released: Mutex<mpsc::Receiver<()>>,
 }
 
-impl fmt::Display for Blocked {
+impl fmt::Display for ThreadBlockingStore {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Blocked")
+        write!(formatter, "ThreadBlockingStore")
     }
 }
 
 #[async_trait]
-impl ObjectStore for Blocked {
+impl ObjectStore for ThreadBlockingStore {
     async fn put_opts(
         &self,
         location: &Path,
@@ -508,7 +508,6 @@ impl ObjectStore for Blocked {
         self.inner.list(prefix)
     }
 
-    // Not an async wait: the snapshot decode and the recalculation run without an await, and only a thread that blocks shows whether they hold a worker.
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
         let _ = self
             .released
@@ -531,7 +530,7 @@ impl ObjectStore for Blocked {
 fn launch() -> (Handle, impl Future<Output = Exit> + use<>, mpsc::Sender<()>) {
     let (release, released) = mpsc::channel();
     let (handle, assignee) = server::launch(
-        Arc::new(Blocked {
+        Arc::new(ThreadBlockingStore {
             inner: InMemory::new(),
             released: Mutex::new(released),
         }),
@@ -617,7 +616,7 @@ async fn the_server_listens_and_every_call_is_unavailable_while_the_snapshots_ar
 
 #[tokio::test]
 async fn a_shutdown_while_the_snapshots_are_read_stops_with_success_at_once() {
-    let (handle, assignee, release) = launch();
+    let (handle, assignee, _restore_held) = launch();
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let stopped = tokio::time::timeout(
         Duration::from_secs(5),
@@ -632,8 +631,6 @@ async fn a_shutdown_while_the_snapshots_are_read_stops_with_success_at_once() {
     .await
     .expect("serve does not wait for the snapshot read");
     assert!(matches!(stopped, Shutdown::Drained), "{stopped:?}");
-    // Not dropped before the assert: a released restore could finish first, and the test would not stop during the read.
-    drop(release);
 }
 
 #[tokio::test]

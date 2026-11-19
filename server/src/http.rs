@@ -83,7 +83,6 @@ pub async fn serve(
         let _ = signal_receiver.await;
         tokio::time::sleep(deadline).await;
     };
-    // Not a spawned task: with one worker, the synchronous steps of the assignee would hold the only worker and stall every request, and here they delay only new accepts.
     tokio::select! {
         exit = assignee => Shutdown::Assignee(exit),
         served = axum::serve(listener, router(handle)).with_graceful_shutdown(shutdown) => {
