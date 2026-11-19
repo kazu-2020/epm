@@ -1,0 +1,19 @@
+[package]
+name = "placement"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lints.clippy]
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+
+[dependencies]
+tokio-postgres = "0.7.18"
+ulid = "3.0.0"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt", "sync", "time"] }
