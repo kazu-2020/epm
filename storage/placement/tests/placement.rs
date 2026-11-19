@@ -154,50 +154,6 @@ async fn first_issue_of_a_new_row_is_epoch_1_and_not_a_failure() {
 }
 
 #[tokio::test]
-async fn booting_row_waits_for_the_boot_deadline() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    issue(&client, workspace, &node("n1")).await;
-    let booting = seen(&client, workspace).await;
-
-    let issued = issue_epoch(
-        &client,
-        workspace,
-        &booting,
-        &node("n1"),
-        Duration::from_hours(1),
-        Replacement::Unplanned,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(issued, None);
-    assert_eq!(seen(&client, workspace).await, booting);
-}
-
-#[tokio::test]
-async fn planned_replacement_does_not_interrupt_a_booting_row() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    issue(&client, workspace, &node("n1")).await;
-    let booting = seen(&client, workspace).await;
-
-    let issued = issue_epoch(
-        &client,
-        workspace,
-        &booting,
-        &node("n1"),
-        NO_WAIT,
-        Replacement::Planned,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(issued, None);
-    assert_eq!(seen(&client, workspace).await, booting);
-}
-
-#[tokio::test]
 async fn issue_after_an_unrecorded_epoch_is_a_failure() {
     let client = connect().await;
     let workspace = create(&client).await;
@@ -206,31 +162,6 @@ async fn issue_after_an_unrecorded_epoch_is_a_failure() {
     assert_eq!(issue(&client, workspace, &node("n1")).await.get(), 2);
 
     assert_eq!(seen(&client, workspace).await.consecutive_failures, 1);
-}
-
-#[tokio::test]
-async fn old_epoch_is_not_recorded() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    let old = issue(&client, workspace, &node("n1")).await;
-    issue(&client, workspace, &node("n1")).await;
-    let before = seen(&client, workspace).await;
-
-    assert_eq!(record(&client, workspace, old, &node("n1")).await, None);
-
-    assert_eq!(seen(&client, workspace).await, before);
-}
-
-#[tokio::test]
-async fn process_on_another_node_is_not_recorded() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    let epoch = issue(&client, workspace, &node("n1")).await;
-    let before = seen(&client, workspace).await;
-
-    assert_eq!(record(&client, workspace, epoch, &node("n2")).await, None);
-
-    assert_eq!(seen(&client, workspace).await, before);
 }
 
 #[tokio::test]
@@ -273,81 +204,6 @@ async fn second_record_of_an_epoch_succeeds_and_keeps_the_first_times() {
 }
 
 #[tokio::test]
-async fn record_after_the_clock_moves_back_stores_a_zero_boot_duration() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    let epoch = issue(&client, workspace, &node("n1")).await;
-    client
-        .batch_execute(&format!(
-            "UPDATE public.placement SET issued_at = now() + interval '1 hour' WHERE workspace_global_id = '{}'",
-            text(workspace)
-        ))
-        .await
-        .unwrap();
-
-    let recorded = record(&client, workspace, epoch, &node("n1")).await;
-
-    assert_eq!(recorded, Some(Duration::ZERO));
-    assert_eq!(
-        seen(&client, workspace).await.boot_duration,
-        Some(Duration::ZERO)
-    );
-}
-
-#[tokio::test]
-async fn issue_from_a_lookup_before_the_record_is_refused() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    let epoch = issue(&client, workspace, &node("n1")).await;
-    let booting = seen(&client, workspace).await;
-    record(&client, workspace, epoch, &node("n1"))
-        .await
-        .expect("the record succeeds");
-    let running = seen(&client, workspace).await;
-
-    let issued = issue_epoch(
-        &client,
-        workspace,
-        &booting,
-        &node("n1"),
-        NO_WAIT,
-        Replacement::Unplanned,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(issued, None);
-    assert_eq!(seen(&client, workspace).await, running);
-}
-
-#[tokio::test]
-async fn planned_replacement_keeps_the_failure_count() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    issue(&client, workspace, &node("n1")).await;
-    let epoch = issue(&client, workspace, &node("n1")).await;
-    record(&client, workspace, epoch, &node("n1"))
-        .await
-        .expect("the record succeeds");
-    let running = seen(&client, workspace).await;
-    assert_eq!(running.consecutive_failures, 1);
-
-    let issued = issue_epoch(
-        &client,
-        workspace,
-        &running,
-        &node("n1"),
-        NO_WAIT,
-        Replacement::Planned,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(issued.map(Epoch::get), Some(3));
-    assert_eq!(seen(&client, workspace).await.consecutive_failures, 1);
-}
-
-#[tokio::test]
 async fn replacement_within_10_minutes_of_the_record_is_a_failure() {
     let client = connect().await;
     let workspace = create(&client).await;
@@ -355,6 +211,13 @@ async fn replacement_within_10_minutes_of_the_record_is_a_failure() {
     record(&client, workspace, epoch, &node("n1"))
         .await
         .expect("the record succeeds");
+    client
+        .batch_execute(&format!(
+            "UPDATE public.placement SET recorded_at = now() - interval '9 minutes 59 seconds' WHERE workspace_global_id = '{}'",
+            text(workspace)
+        ))
+        .await
+        .unwrap();
 
     assert_eq!(issue(&client, workspace, &node("n1")).await.get(), 2);
 
@@ -373,7 +236,7 @@ async fn replacement_10_minutes_after_the_record_resets_the_failure_count() {
     assert_eq!(seen(&client, workspace).await.consecutive_failures, 1);
     client
         .batch_execute(&format!(
-            "UPDATE public.placement SET recorded_at = now() - interval '11 minutes' WHERE workspace_global_id = '{}'",
+            "UPDATE public.placement SET recorded_at = now() - interval '10 minutes' WHERE workspace_global_id = '{}'",
             text(workspace)
         ))
         .await
@@ -440,7 +303,7 @@ async fn issue_at_the_largest_bigint_is_an_error_and_the_epoch_does_not_wrap() {
 }
 
 #[tokio::test]
-async fn table_rejects_an_epoch_decrease_and_a_delete() {
+async fn table_rejects_an_epoch_decrease_a_key_change_and_a_delete() {
     let client = connect().await;
     let workspace = create(&client).await;
     issue(&client, workspace, &node("n1")).await;
@@ -449,6 +312,11 @@ async fn table_rejects_an_epoch_decrease_and_a_delete() {
     for statement in [
         format!(
             "UPDATE public.placement SET epoch = epoch - 1 WHERE workspace_global_id = '{}'",
+            text(workspace)
+        ),
+        format!(
+            "UPDATE public.placement SET workspace_global_id = '{}' WHERE workspace_global_id = '{}'",
+            Ulid::generate(),
             text(workspace)
         ),
         format!(

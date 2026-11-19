@@ -25,7 +25,7 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: cargo
-    directories: [/server, /compute_engine/formula/fuzz]
+    directories: [/server, /compute_engine/formula/fuzz, /storage/placement]
     schedule:
       interval: weekly
     groups:

@@ -1,7 +1,11 @@
 mod common;
 
 use common::{connect, create, issue, seen};
-use placement::{Address, Node, correct_after_restore, lookup, record_address};
+use std::time::Duration;
+
+use placement::{
+    Address, Epoch, Node, Replacement, correct_after_restore, issue_epoch, lookup, record_address,
+};
 use tokio_postgres::error::SqlState;
 
 const CORRECTION: u64 = 4_294_967_296;
@@ -28,14 +32,21 @@ async fn correction_stops_every_row_and_the_next_issue_is_not_a_failure() {
             (
                 corrected.epoch.get(),
                 corrected.address_epoch.get(),
-                corrected.address
+                corrected.address.clone()
             ),
             (epoch_before + CORRECTION, epoch_before + CORRECTION, None)
         );
-        assert_eq!(
-            issue(&client, workspace, &node).await.get(),
-            epoch_before + CORRECTION + 1
-        );
+        let issued = issue_epoch(
+            &client,
+            workspace,
+            &corrected,
+            &node,
+            Duration::from_hours(1),
+            Replacement::Unplanned,
+        )
+        .await
+        .unwrap();
+        assert_eq!(issued.map(Epoch::get), Some(epoch_before + CORRECTION + 1));
         assert_eq!(seen(&client, workspace).await.consecutive_failures, 0);
     }
 }

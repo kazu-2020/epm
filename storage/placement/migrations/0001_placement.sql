@@ -27,6 +27,11 @@ CREATE TRIGGER placement_epoch_never_decreases
     FOR EACH ROW WHEN (NEW.epoch < OLD.epoch)
     EXECUTE FUNCTION public.placement_reject_epoch_loss();
 
+CREATE TRIGGER placement_key_never_changes
+    BEFORE UPDATE OF workspace_global_id ON public.placement
+    FOR EACH ROW WHEN (NEW.workspace_global_id IS DISTINCT FROM OLD.workspace_global_id)
+    EXECUTE FUNCTION public.placement_reject_epoch_loss();
+
 CREATE TRIGGER placement_row_is_never_deleted
     BEFORE DELETE ON public.placement
     FOR EACH ROW
