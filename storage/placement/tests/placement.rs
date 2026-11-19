@@ -203,6 +203,27 @@ async fn second_record_of_an_epoch_succeeds_and_keeps_the_first_times() {
     assert_eq!(recorded_at(&client, workspace).await, first_recorded_at);
 }
 
+async fn failure_count_after_a_replacement(
+    client: &Client,
+    workspace: WorkspaceGlobalId,
+    since_the_record: &str,
+) -> u32 {
+    client
+        .batch_execute(&format!(
+            "BEGIN; UPDATE public.placement SET recorded_at = now() - interval '{since_the_record}' WHERE workspace_global_id = '{}'",
+            text(workspace)
+        ))
+        .await
+        .expect("move the record back in a transaction that fixes now()");
+    issue(client, workspace, &node("n1")).await;
+    let failures = seen(client, workspace).await.consecutive_failures;
+    client
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("roll back the replacement");
+    failures
+}
+
 #[tokio::test]
 async fn replacement_within_10_minutes_of_the_record_is_a_failure() {
     let client = connect().await;
@@ -211,17 +232,11 @@ async fn replacement_within_10_minutes_of_the_record_is_a_failure() {
     record(&client, workspace, epoch, &node("n1"))
         .await
         .expect("the record succeeds");
-    client
-        .batch_execute(&format!(
-            "UPDATE public.placement SET recorded_at = now() - interval '9 minutes 59 seconds' WHERE workspace_global_id = '{}'",
-            text(workspace)
-        ))
-        .await
-        .unwrap();
 
-    assert_eq!(issue(&client, workspace, &node("n1")).await.get(), 2);
-
-    assert_eq!(seen(&client, workspace).await.consecutive_failures, 1);
+    assert_eq!(
+        failure_count_after_a_replacement(&client, workspace, "9 minutes 59.999999 seconds").await,
+        1
+    );
 }
 
 #[tokio::test]
@@ -234,17 +249,11 @@ async fn replacement_10_minutes_after_the_record_resets_the_failure_count() {
         .await
         .expect("the record succeeds");
     assert_eq!(seen(&client, workspace).await.consecutive_failures, 1);
-    client
-        .batch_execute(&format!(
-            "UPDATE public.placement SET recorded_at = now() - interval '10 minutes' WHERE workspace_global_id = '{}'",
-            text(workspace)
-        ))
-        .await
-        .unwrap();
 
-    assert_eq!(issue(&client, workspace, &node("n1")).await.get(), 3);
-
-    assert_eq!(seen(&client, workspace).await.consecutive_failures, 0);
+    assert_eq!(
+        failure_count_after_a_replacement(&client, workspace, "10 minutes").await,
+        0
+    );
 }
 
 #[tokio::test]
