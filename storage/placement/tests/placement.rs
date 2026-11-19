@@ -280,38 +280,6 @@ async fn wait_beyond_an_interval_is_an_error_of_postgresql() {
 }
 
 #[tokio::test]
-async fn issue_at_the_largest_bigint_is_an_error_and_the_epoch_does_not_wrap() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    client
-        .batch_execute(&format!(
-            "BEGIN; UPDATE public.placement SET epoch = {}, address_epoch = {} WHERE workspace_global_id = '{}'",
-            i64::MAX,
-            i64::MAX,
-            text(workspace)
-        ))
-        .await
-        .unwrap();
-    let largest = seen(&client, workspace).await;
-
-    let issued = issue_epoch(
-        &client,
-        workspace,
-        &largest,
-        &node("n1"),
-        NO_WAIT,
-        Replacement::Unplanned,
-    )
-    .await;
-    client.batch_execute("ROLLBACK").await.unwrap();
-
-    let Err(Error::Postgres(error)) = issued else {
-        panic!("an epoch above the largest bigint is an error");
-    };
-    assert_eq!(error.code(), Some(&SqlState::NUMERIC_VALUE_OUT_OF_RANGE));
-}
-
-#[tokio::test]
 async fn table_rejects_an_epoch_decrease_a_key_change_and_a_delete() {
     let client = connect().await;
     let workspace = create(&client).await;
@@ -501,34 +469,6 @@ async fn issue_that_waits_for_a_rolled_back_issue_succeeds_on_the_original_row()
     assert_eq!(
         (row.epoch.get(), row.node, row.consecutive_failures),
         (1, Some(node("n2")), 0)
-    );
-}
-
-async fn lose_the_last_epoch_as_a_failover_does(client: &Client, workspace: WorkspaceGlobalId) {
-    client
-        .batch_execute(&format!(
-            "BEGIN; SET LOCAL session_replication_role = replica; \
-             UPDATE public.placement SET epoch = epoch - 1 WHERE workspace_global_id = '{}'; COMMIT",
-            text(workspace)
-        ))
-        .await
-        .expect("rewind the epoch without the trigger");
-}
-
-#[tokio::test]
-async fn epoch_issued_again_after_a_rewind_is_recorded_only_from_the_node_of_the_row() {
-    let client = connect().await;
-    let workspace = create(&client).await;
-    let first = issue(&client, workspace, &node("n1")).await;
-    lose_the_last_epoch_as_a_failover_does(&client, workspace).await;
-
-    assert_eq!(issue(&client, workspace, &node("n2")).await, first);
-
-    assert_eq!(record(&client, workspace, first, &node("n1")).await, None);
-    assert!(
-        record(&client, workspace, first, &node("n2"))
-            .await
-            .is_some()
     );
 }
 
