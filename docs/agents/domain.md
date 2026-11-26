@@ -48,6 +48,6 @@ If the concept you need isn't in the glossary yet, that's a signal: either you'r
 
 An ADR records why a decision was made at that time. It is not a constraint while the project is a prototype. If the code and an ADR disagree, the code wins.
 
-If your change reverses an existing ADR, say so in the PR and record the new decision with the `write-adr` skill:
+If your change reverses an existing ADR, say so in the PR and rewrite that ADR with the `write-adr` skill. Move the old choice to Alternatives Considered and give the reason:
 
 > _Reverses ADR-0007 (event-sourced orders) because…_
