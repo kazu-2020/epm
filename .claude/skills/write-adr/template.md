@@ -21,9 +21,12 @@
 
 ## Alternatives Considered
 
-### <案の名前>
+<details>
+<summary>案の名前: 不採用の理由を1文で</summary>
 
-<!-- 案の内容と、不採用の理由。 -->
+<!-- 案の内容と、不採用の理由の詳細。 -->
+
+</details>
 
 ## Consequences
 
